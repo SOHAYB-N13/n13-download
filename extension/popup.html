@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>TDM</title>
+  <style>
+    body { width: 360px; padding: 16px; font-family: Segoe UI, sans-serif; background: #1a1a2e; color: #eee; }
+    h2 { color: #00d4ff; font-size: 16px; }
+    input, button { width: 100%; margin: 8px 0; padding: 10px; border-radius: 6px; border: 1px solid #333; }
+    input { background: #111; color: #eee; }
+    button { background: #0f3460; color: #00d4ff; cursor: pointer; }
+    .status { margin-top: 8px; font-size: 12px; display: none; }
+    .ok { color: #0f8; }
+    .err { color: #f66; }
+  </style>
+</head>
+<body>
+  <h2>Terminal Download Manager</h2>
+  <input id="urlInput" placeholder="https://example.com/file.zip" autofocus>
+  <button id="downloadBtn">Download</button>
+  <div id="status" class="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

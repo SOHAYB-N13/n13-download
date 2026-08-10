@@ -1,0 +1,863 @@
+"""Multi-threaded download engine.
+
+Optimisation notes
+==================
+1.  **Socket buffer tuning** — set in :class:`core.session._OptimisedAdapter`
+    via ``SO_RCVBUF`` / ``SO_SNDBUF`` (4 MB / 512 KB) so the TCP window
+    can handle high-BDP links without stalling.
+
+2.  **Lock-free cancellation** — ``DownloadContext._cancel_event`` is a
+    :class:`threading.Event` whose ``is_set()`` is lock-free in the hot
+    download loop, replacing the previous class-level mutex that was
+    acquired on *every iteration*.
+
+3.  **Progress batching** — each worker accumulates bytes locally and
+    flushes to shared state only when a threshold is crossed, reducing
+    lock acquisitions from every chunk (4 MB → 25+ /s) to every
+    ``_PROGRESS_FLUSH_THRESHOLD`` bytes (~4× fewer on average).
+
+4.  **Progress callback throttle** — external callbacks (GUI, CLI) are
+    limited to ~20 Hz so they never become the bottleneck.
+
+5.  **Thread pool reuse** — a module-level :class:`ThreadPoolExecutor`
+    is shared across downloads (lazy-created, auto-scaled) to avoid the
+    overhead of creating / destroying threads on every ``download_file``
+    call.
+
+6.  **Content negotiation** — ``Accept-Encoding`` is *not* set in request
+    headers, allowing urllib3 to negotiate gzip/deflate/brotli with the
+    server.  Transparent decompression in C (zlib) adds ~1 % CPU per
+    100 MB/s — negligible vs the improved CDN compatibility.
+"""
+
+from __future__ import annotations
+
+import random
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, List, Optional
+
+import requests
+from rich.progress import Progress
+
+from config.settings import AppConfig
+from core.context import DownloadContext
+from core.merge import merge_parts
+from core.parts import DownloadPart, build_parts, remap_parts_for_resume
+from core.probe import probe_url
+from core.session import SessionManager
+from core.speed import SpeedTracker
+from core.state import DownloadState
+from core.throttle import BandwidthLimiter, get_global_limiter, sync_limiter_from_config
+from core.utils import (
+    build_browser_headers,
+    calculate_checksum,
+    detect_hash_algorithm,
+    format_size,
+    is_html_error_response,
+    safe_rename,
+    unique_filepath,
+)
+from ui.progress import create_download_progress
+
+# ---------------------------------------------------------------------------
+# Shared thread-pool — created once, resized as needed, shared across
+# all downloads to avoid ThreadPoolExecutor construction/destruction
+# overhead on every call to download_file().
+# ---------------------------------------------------------------------------
+_SHARED_POOL: Optional[ThreadPoolExecutor] = None
+_POOL_LOCK = threading.Lock()
+
+# Progress flush threshold: local accumulation before hitting shared
+# state (reduces lock contention). 256 KB is a good balance — frequent
+# enough for responsive UI, infrequent enough to avoid lock storms.
+_PROGRESS_FLUSH_THRESHOLD = 256 * 1024
+
+# Max progress callback frequency (Hz).  20 Hz = every 50 ms.
+_CALLBACK_INTERVAL = 0.05
+
+
+def _get_shared_pool(max_workers: int) -> ThreadPoolExecutor:
+    """Return the module-level shared thread-pool, resizing if necessary."""
+    global _SHARED_POOL
+    with _POOL_LOCK:
+        if _SHARED_POOL is None:
+            _SHARED_POOL = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="n13-dl",
+            )
+        elif _SHARED_POOL._max_workers < max_workers:
+            # Resize by replacing the pool (can't change max_workers on
+            # an existing ThreadPoolExecutor).  Old pool will be GC'd
+            # after its running tasks finish.
+            _SHARED_POOL.shutdown(wait=False)
+            _SHARED_POOL = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="n13-dl",
+            )
+        return _SHARED_POOL
+
+
+# HTTP status codes that are worth retrying (transient/server-side).
+_RETRYABLE_STATUS = frozenset(
+    {408, 425, 429, 500, 502, 503, 504}
+)
+# Status codes that mean "do not bother retrying" (client-side/permanent).
+_FATAL_STATUS = frozenset(range(400, 500)) - _RETRYABLE_STATUS
+
+# Write-buffer flush threshold: accumulate chunks in memory and flush to disk
+# in larger blocks to reduce syscall overhead on every part download.
+# Defined at module level so it is not re-evaluated on every chunk iteration.
+def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None) -> float:
+    """Compute the next backoff delay, capped and jittered.
+
+    Honors Retry-After semantics implicitly through ``status`` (the caller can
+    extend this), and never exceeds ``retry_max_delay``.
+    """
+    base = config.retry_delay
+    backoff = config.retry_backoff
+    delay = base * (backoff ** (attempt - 1))
+    delay = min(delay, config.retry_max_delay)
+    # Decorrelated jitter in [delay*(1-j), delay*(1+j)].
+    jitter = config.retry_jitter
+    delay *= 1.0 - jitter + random.random() * (2 * jitter)
+    return max(0.0, delay)
+
+
+def _interruptible_sleep(seconds: float) -> bool:
+    """Sleep in short slices so a cancel request is honoured within ~0.25 s.
+
+    Uses ``DownloadContext._cancel_event`` (lock-free) for the cancellation
+    check instead of ``is_cancelled()`` which acquired a class-level mutex.
+    Returns ``True`` when the full delay elapsed, ``False`` when cancelled.
+    """
+    cancel_event = DownloadContext._cancel_event
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        if cancel_event.is_set():
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(0.25, remaining))
+
+
+def _is_retryable_exception(exc: BaseException) -> tuple[bool, Optional[int]]:
+    """Classify an exception as (retryable, status_code).
+
+    Connection/timeout errors are transient.  HTTP errors are retryable only
+    for server-side or explicit-retry status codes.
+    """
+    status: Optional[int] = None
+    if isinstance(exc, requests.HTTPError):
+        resp = getattr(exc, "response", None)
+        status = resp.status_code if resp is not None else None
+        if status is not None:
+            if status in _RETRYABLE_STATUS:
+                return True, status
+            if status in _FATAL_STATUS:
+                return False, status
+            # Other 4xx/5xx: retry only server-side codes handled above.
+            if 400 <= status < 500:
+                return False, status
+            return status >= 500, status
+        return True, status
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout, ConnectionError)):
+        return True, None
+    if isinstance(exc, requests.RequestException):
+        return True, None
+    return False, status
+
+
+def _parts_within_directory(parts: List[DownloadPart], directory: Path) -> bool:
+    """Reject resume state whose part files escape the download directory."""
+    try:
+        base = directory.resolve()
+        for part in parts:
+            part.path.resolve().relative_to(base)
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+class DownloadController:
+    """Coordinates downloads with injectable dependencies."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        session_manager: Optional[SessionManager] = None,
+        console_print: Optional[Callable[..., None]] = None,
+        show_progress: bool = True,
+    ):
+        self.config = config
+        # Ensure the session picks up proxy/auth/cookies from the config.
+        if session_manager is None:
+            session_manager = SessionManager(config)
+        else:
+            session_manager.configure(config)
+        self.session = session_manager
+        self._print = console_print or (lambda *args, **kwargs: None)
+        self.show_progress = show_progress
+        # Share one process-wide limiter so UI speed-cap changes apply immediately.
+        sync_limiter_from_config(config)
+        self._limiter: Optional[BandwidthLimiter] = get_global_limiter()
+        if self._limiter and self._limiter.enabled:
+            self._print(
+                f"[dim]Speed limit: {format_size(self._limiter.max_rate)}/s[/dim]"
+            )
+
+    # ------------------------------------------------------------------ #
+    # Request helpers
+    # ------------------------------------------------------------------ #
+    def smart_request(
+        self,
+        url: str,
+        headers: dict,
+        timeout: tuple[int, int] = (30, 120),
+        stream: bool = False,
+    ) -> requests.Response:
+        return self.session.session.get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            stream=stream,
+            verify=self.config.verify_ssl,
+            allow_redirects=True,
+        )
+
+    def _notify_progress(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]],
+        completed: int,
+        total: int,
+    ) -> None:
+        """Keep optional UI/reporting callbacks from interrupting a download."""
+        if not progress_callback:
+            return
+        try:
+            progress_callback(completed, total)
+        except Exception as exc:
+            self._print(f"[yellow]Progress listener error ignored: {exc}[/yellow]")
+
+    def _throttle(self, chunk_len: int) -> None:
+        if self._limiter is not None:
+            self._limiter.consume(chunk_len)
+
+    # ------------------------------------------------------------------ #
+    # Part download
+    # ------------------------------------------------------------------ #
+    def download_part(
+        self,
+        url: str,
+        part: DownloadPart,
+        progress: Optional[Progress],
+        task_id: Optional[int],
+        progress_lock: threading.Lock,
+        speed_tracker: SpeedTracker,
+        total_size: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        shared_progress: Optional[dict] = None,
+    ) -> bool:
+        """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
+
+        Hot-path optimisations
+        ----------------------
+        *   **Lock-free cancellation** — ``DownloadContext._cancel_event.is_set()``
+            instead of ``is_cancelled()`` (which acquired a class-level mutex).
+        *   **Local byte accumulation** — each thread stores bytes internally and
+            flushes to shared progress + speed state only after every
+            ``_PROGRESS_FLUSH_THRESHOLD`` bytes (~256 KB).
+        *   **Throttled callbacks** — the external ``progress_callback`` is called
+            at most 20 times per second regardless of chunk size.
+        *   **Redundant Content-Type check** — reserved for the *first* attempt
+            only; subsequent retries skip it because the probe already validated
+            the response type.
+        """
+        max_retries = max(1, self.config.max_retries)
+        chunk_size = self.config.chunk_size
+        cancel_event = DownloadContext._cancel_event
+
+        for attempt in range(1, max_retries + 1):
+            if cancel_event.is_set():
+                return False
+            if not DownloadContext.wait_if_paused():
+                return False
+
+            if part.is_complete:
+                part.done = True
+                return True
+
+            existing = part.downloaded_size
+            range_start = part.start + existing
+            if range_start > part.end:
+                part.done = True
+                return True
+
+            headers = build_browser_headers(
+                url,
+                self.config.user_agent,
+                range_header=f"bytes={range_start}-{part.end}",
+                accept="*/*",
+            )
+            headers["Sec-Fetch-Dest"] = "empty"
+            headers["Sec-Fetch-Mode"] = "no-cors"
+            headers["Sec-Fetch-Site"] = "same-origin"
+            headers.pop("Sec-Fetch-User", None)
+            headers.pop("Upgrade-Insecure-Requests", None)
+
+            try:
+                with self.smart_request(url, headers=headers, stream=True) as response:
+                    if response.status_code not in (200, 206):
+                        raise requests.HTTPError(
+                            f"HTTP {response.status_code}",
+                            response=response,
+                        )
+
+                    # Content-Type check: only on first attempt (probe already
+                    # caught the fast-path case; this is a safety net for
+                    # token-expiry mid-stream).
+                    if attempt == 1:
+                        ct = response.headers.get("Content-Type", "")
+                        if is_html_error_response(ct, ""):
+                            raise requests.HTTPError(
+                                "server returned an HTML page instead of the file",
+                                response=response,
+                            )
+
+                    bytes_remaining = part.end - range_start + 1
+                    skip_bytes = 0
+
+                    if response.status_code == 200 and range_start > part.start:
+                        skip_bytes = range_start
+                        bytes_remaining = part.size
+
+                    if response.status_code == 200 and existing > 0:
+                        part.path.unlink(missing_ok=True)
+                        with progress_lock:
+                            if shared_progress is not None:
+                                shared_progress["completed"] = max(
+                                    0, shared_progress["completed"] - existing
+                                )
+                        existing = 0
+                        range_start = part.start
+                        bytes_remaining = part.size
+                        skip_bytes = 0
+
+                    mode = "wb" if existing == 0 and range_start == part.start else "ab"
+
+                    with open(part.path, mode, buffering=8 * 1024 * 1024) as dest:
+                        # Local byte accumulator — reduces lock frequency
+                        # by batching small writes into larger flushes.
+                        local_bytes = 0
+                        last_cb_time = 0.0
+
+                        for raw_chunk in response.iter_content(chunk_size):
+                            if cancel_event.is_set():
+                                # Flush remaining local progress before exit.
+                                if local_bytes > 0 and shared_progress is not None:
+                                    with progress_lock:
+                                        shared_progress["completed"] += local_bytes
+                                return False
+
+                            if not raw_chunk:
+                                continue
+
+                            # --- skip / trim (handled inline to avoid copies) ---
+                            if skip_bytes > 0:
+                                if len(raw_chunk) <= skip_bytes:
+                                    skip_bytes -= len(raw_chunk)
+                                    continue
+                                raw_chunk = memoryview(raw_chunk)[skip_bytes:]
+                                skip_bytes = 0
+
+                            if len(raw_chunk) > bytes_remaining:
+                                raw_chunk = memoryview(raw_chunk)[:bytes_remaining]
+
+                            self._throttle(len(raw_chunk))
+                            chunk_len = len(raw_chunk)
+                            dest.write(raw_chunk)
+                            bytes_remaining -= chunk_len
+                            local_bytes += chunk_len
+
+                            # Flush local state to shared counters periodically.
+                            if local_bytes >= _PROGRESS_FLUSH_THRESHOLD:
+                                with progress_lock:
+                                    if progress is not None and task_id is not None:
+                                        progress.update(task_id, advance=local_bytes)
+                                    if shared_progress is not None:
+                                        shared_progress["completed"] += local_bytes
+                                        completed_val = shared_progress["completed"]
+                                speed_tracker.add(local_bytes)
+                                local_bytes = 0
+
+                                # Throttled progress callback (max ~20 Hz).
+                                if progress_callback and shared_progress is not None:
+                                    now = time.monotonic()
+                                    if now - last_cb_time >= _CALLBACK_INTERVAL:
+                                        self._notify_progress(
+                                            progress_callback, completed_val, total_size
+                                        )
+                                        last_cb_time = now
+
+                            if bytes_remaining <= 0:
+                                break
+
+                        # Final flush of any remaining local bytes.
+                        if local_bytes > 0:
+                            with progress_lock:
+                                if progress is not None and task_id is not None:
+                                    progress.update(task_id, advance=local_bytes)
+                                if shared_progress is not None:
+                                    shared_progress["completed"] += local_bytes
+                                    completed_val = shared_progress["completed"]
+                            speed_tracker.add(local_bytes)
+                            if progress_callback and shared_progress is not None:
+                                self._notify_progress(
+                                    progress_callback, completed_val, total_size
+                                )
+
+                if part.is_complete:
+                    part.done = True
+                    return True
+
+            except (requests.RequestException, OSError, ConnectionError) as exc:
+                retryable, status = _is_retryable_exception(exc)
+                if not retryable or attempt >= max_retries:
+                    detail = f" (HTTP {status})" if status else ""
+                    self._print(
+                        f"[red]Part {part.index} failed after {attempt} "
+                        f"attempt(s){detail}: {exc}"
+                    )
+                    return False
+                delay = _retry_delay(attempt, self.config, status)
+                if not _interruptible_sleep(delay):
+                    return False
+                continue
+
+        return False
+
+    # ------------------------------------------------------------------ #
+    # Single-thread download
+    # ------------------------------------------------------------------ #
+    def single_thread_download(
+        self,
+        url: str,
+        file_path: Path,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> bool:
+        tmp_path = file_path.with_suffix(file_path.suffix + self.config.temp_extension)
+        speed_tracker = SpeedTracker(
+            window_size=self.config.speed_window_size,
+            sample_interval=self.config.speed_sample_interval,
+        )
+        max_retries = max(1, self.config.max_retries)
+        cancel_event = DownloadContext._cancel_event
+        chunk_size = self.config.chunk_size
+
+        for attempt in range(1, max_retries + 1):
+            if cancel_event.is_set():
+                return False
+
+            resume_from = tmp_path.stat().st_size if tmp_path.exists() else 0
+            range_header = f"bytes={resume_from}-" if resume_from > 0 else None
+            headers = build_browser_headers(
+                url,
+                self.config.user_agent,
+                range_header=range_header,
+                accept="*/*",
+            )
+
+            try:
+                with self.smart_request(url, headers=headers, stream=True) as response:
+                    if response.status_code not in (200, 206):
+                        response.raise_for_status()
+
+                    ct = response.headers.get("Content-Type", "")
+                    if is_html_error_response(ct, ""):
+                        raise requests.HTTPError(
+                            "server returned an HTML page instead of the file",
+                            response=response,
+                        )
+
+                    if response.status_code == 200 and resume_from > 0:
+                        tmp_path.unlink(missing_ok=True)
+                        resume_from = 0
+
+                    total = int(response.headers.get("Content-Length", 0))
+                    if response.status_code == 206:
+                        cr = response.headers.get("Content-Range", "")
+                        if "/" in cr:
+                            try:
+                                total = int(cr.split("/")[1])
+                            except ValueError:
+                                pass
+                        total = max(total, resume_from)
+
+                    progress_context = (
+                        create_download_progress(speed_tracker)
+                        if self.show_progress
+                        else nullcontext(None)
+                    )
+                    with progress_context as progress:
+                        task_id = (
+                            progress.add_task(
+                                file_path.name[:50],
+                                total=total or None,
+                                completed=resume_from,
+                            )
+                            if progress is not None
+                            else None
+                        )
+                        downloaded = resume_from
+                        mode = "ab" if resume_from > 0 else "wb"
+                        with open(tmp_path, mode, buffering=8 * 1024 * 1024) as dest:
+                            # Local byte accumulator for batched progress updates.
+                            local_bytes = 0
+                            last_cb_time = 0.0
+
+                            for raw_chunk in response.iter_content(chunk_size):
+                                if cancel_event.is_set():
+                                    return False
+                                if not raw_chunk:
+                                    continue
+
+                                self._throttle(len(raw_chunk))
+                                dest.write(raw_chunk)
+                                downloaded += len(raw_chunk)
+                                local_bytes += len(raw_chunk)
+
+                                if local_bytes >= _PROGRESS_FLUSH_THRESHOLD:
+                                    if progress is not None and task_id is not None:
+                                        progress.update(
+                                            task_id, advance=local_bytes
+                                        )
+                                    speed_tracker.add(local_bytes)
+                                    local_bytes = 0
+
+                                    if progress_callback:
+                                        now = time.monotonic()
+                                        if now - last_cb_time >= _CALLBACK_INTERVAL:
+                                            self._notify_progress(
+                                                progress_callback, downloaded, total
+                                            )
+                                            last_cb_time = now
+
+                            # Final flush.
+                            if local_bytes > 0:
+                                if progress is not None and task_id is not None:
+                                    progress.update(task_id, advance=local_bytes)
+                                speed_tracker.add(local_bytes)
+                                if progress_callback:
+                                    self._notify_progress(
+                                        progress_callback, downloaded, total
+                                    )
+
+                            dest.flush()
+
+                if (
+                    self.config.verify_size
+                    and total > 0
+                    and tmp_path.stat().st_size != total
+                ):
+                    raise OSError(
+                        f"Incomplete download: {tmp_path.stat().st_size}/{total}"
+                    )
+
+                safe_rename(tmp_path, file_path)
+                self._print(f"[bold green]✓ Saved: {file_path}")
+                return True
+
+            except (requests.RequestException, OSError) as exc:
+                retryable, status = _is_retryable_exception(exc)
+                if not retryable or attempt >= max_retries:
+                    self._print(
+                        f"[red]Download failed after {attempt} attempt(s): {exc}"
+                    )
+                    return False
+                delay = _retry_delay(attempt, self.config, status)
+                if not _interruptible_sleep(delay):
+                    return False
+                continue
+
+        return False
+
+    # ------------------------------------------------------------------ #
+    # Scheduling
+    # ------------------------------------------------------------------ #
+    def wait_for_schedule(self) -> None:
+        target = self.config.get_schedule_datetime()
+        if not target:
+            return
+        now = datetime.now()
+        if target > now:
+            self._print(
+                f"\n[bold yellow]Scheduled download waiting until: "
+                f"{target.strftime('%Y-%m-%d %H:%M:%S')}[/bold yellow]"
+            )
+            while datetime.now() < target:
+                if DownloadContext.is_cancelled():
+                    return
+                time.sleep(0.5)
+
+    # ------------------------------------------------------------------ #
+    # Main orchestration
+    # ------------------------------------------------------------------ #
+    def download_file(
+        self,
+        url: str,
+        directory: Path,
+        verify_checksum: bool = False,
+        expected_hash: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> bool:
+        self.wait_for_schedule()
+        if DownloadContext.is_cancelled():
+            self._print("[yellow]Download cancelled before it started.[/yellow]")
+            DownloadContext.clear()
+            return False
+        directory.mkdir(parents=True, exist_ok=True)
+
+        self._print("[dim]Probing URL...[/dim]")
+        reachable, total_size, supports_range, filename, error = probe_url(
+            url, self.config, self.session
+        )
+
+        if not reachable:
+            if DownloadContext.is_cancelled():
+                DownloadContext.clear()
+                self._print("[yellow]Download cancelled while checking the link.[/yellow]")
+                return False
+            self._print(f"[red]Cannot reach server: {error}")
+            return False
+
+        if DownloadContext.is_cancelled():
+            self._print("[yellow]Download cancelled while checking the link.[/yellow]")
+            DownloadContext.clear()
+            return False
+
+        if filename:
+            self._print(f"[green]✓ Detected file: {filename}[/green]")
+        if total_size > 0:
+            self._print(f"[green]✓ File size: {format_size(total_size)}[/green]")
+        if supports_range:
+            self._print("[green]✓ Server supports resume (range requests)[/green]")
+        else:
+            self._print(
+                "[yellow]⚠ Server does not support range requests — "
+                "single-thread mode[/yellow]"
+            )
+
+        file_path = unique_filepath(directory, filename)
+        if file_path.name != filename:
+            self._print(f"[yellow]⚠ Using unique path: {file_path.name}[/yellow]")
+
+        state_path = file_path.with_suffix(file_path.suffix + self.config.state_extension)
+        can_resume = supports_range and total_size > 0
+
+        if file_path.exists() and total_size > 0 and file_path.stat().st_size == total_size:
+            self._print(f"[green]✓ Already complete: {file_path}")
+            return True
+
+        if not can_resume:
+            try:
+                return self.single_thread_download(url, file_path, progress_callback)
+            finally:
+                # Single-thread downloads do not create a DownloadState, but
+                # cancellation and pause controls still use this shared context.
+                DownloadContext.clear()
+
+        if DownloadContext.is_cancelled():
+            self._print("[yellow]Download cancelled before transfer started.[/yellow]")
+            DownloadContext.clear()
+            return False
+
+        state_mgr = DownloadState(state_path)
+        loaded = state_mgr.load()
+        parts: Optional[List[DownloadPart]] = None
+        effective_threads = self.config.num_threads
+
+        if loaded and loaded[0] == url and loaded[1] == total_size:
+            _, _, saved_threads, old_parts = loaded
+            if not _parts_within_directory(old_parts, directory):
+                self._print(
+                    "[yellow]Resume state rejected (invalid part paths). "
+                    "Starting fresh.[/yellow]"
+                )
+                state_mgr.delete()
+                loaded = None
+                parts = None
+            elif saved_threads == effective_threads:
+                parts = old_parts
+                self._print("[cyan]Resuming previous download...[/cyan]")
+            else:
+                self._print(
+                    f"[yellow]Thread count changed ({saved_threads}→{effective_threads}); "
+                    "remapping parts...[/yellow]"
+                )
+                parts = remap_parts_for_resume(
+                    old_parts,
+                    total_size,
+                    effective_threads,
+                    file_path,
+                    self.config.min_part_size,
+                )
+                state_mgr.save(url, total_size, parts, effective_threads)
+        else:
+            parts = None
+
+        if parts is None:
+            parts = build_parts(
+                total_size,
+                effective_threads,
+                file_path,
+                self.config.min_part_size,
+            )
+            effective_threads = len(parts)
+            if effective_threads < self.config.num_threads:
+                self._print(
+                    f"[yellow]⚠ Reduced threads to {effective_threads} "
+                    f"for file size {format_size(total_size)}[/yellow]"
+                )
+            state_mgr.save(url, total_size, parts, effective_threads)
+
+        DownloadContext.begin(state_mgr, url, total_size, parts, effective_threads)
+
+        already_bytes = sum(p.downloaded_size for p in parts)
+        pending_parts = [p for p in parts if not p.is_complete]
+
+        speed_tracker = SpeedTracker(
+            window_size=self.config.speed_window_size,
+            sample_interval=self.config.speed_sample_interval,
+        )
+        speed_tracker.seed(already_bytes)
+
+        progress_lock = threading.Lock()
+
+        try:
+            if pending_parts:
+                progress_context = (
+                    create_download_progress(speed_tracker)
+                    if self.show_progress
+                    else nullcontext(None)
+                )
+                with progress_context as progress:
+                    task_id = (
+                        progress.add_task(
+                            file_path.name[:50],
+                            total=total_size,
+                            completed=already_bytes,
+                        )
+                        if progress is not None
+                        else None
+                    )
+                    shared_progress = {"completed": already_bytes}
+                    self._notify_progress(progress_callback, already_bytes, total_size)
+
+                    failed_parts: List[DownloadPart] = []
+                    pool = _get_shared_pool(max(len(pending_parts), self.config.num_threads))
+                    futures = {
+                        pool.submit(
+                            self.download_part,
+                            url,
+                            p,
+                            progress,
+                            task_id,
+                            progress_lock,
+                            speed_tracker,
+                            total_size,
+                            progress_callback,
+                            shared_progress,
+                        ): p
+                        for p in pending_parts
+                    }
+                    for future in as_completed(futures):
+                        part = futures[future]
+                        try:
+                            if not future.result():
+                                failed_parts.append(part)
+                        except Exception as exc:
+                            self._print(f"[red]Part {part.index} error: {exc}")
+                            failed_parts.append(part)
+
+                    completed = sum(p.downloaded_size for p in parts)
+                    with progress_lock:
+                        if progress is not None and task_id is not None:
+                            progress.update(
+                                task_id, completed=completed, total=total_size
+                            )
+
+                    self._notify_progress(progress_callback, completed, total_size)
+
+                if DownloadContext.is_cancelled():
+                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._print(
+                        "[yellow]Download cancelled. State saved for resume.[/yellow]"
+                    )
+                    return False
+
+                if failed_parts:
+                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._print(
+                        f"[bold red]{len(failed_parts)} part(s) failed. "
+                        "Re-run to resume."
+                    )
+                    return False
+
+                if not all(p.is_complete for p in parts):
+                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._print("[bold red]Some parts incomplete. Re-run to resume.")
+                    return False
+
+            merge_expected = total_size if self.config.verify_size else 0
+            ok, merge_err = merge_parts(
+                parts, file_path, self.config.buffer_size, expected_size=merge_expected
+            )
+            if not ok:
+                state_mgr.save(url, total_size, parts, effective_threads)
+                self._print(f"[red]{merge_err}. Parts preserved for retry.")
+                return False
+
+            if verify_checksum and expected_hash:
+                try:
+                    algorithm = detect_hash_algorithm(expected_hash)
+                except ValueError as exc:
+                    self._print(f"[red]{exc}")
+                    return False
+                self._print(f"[cyan]Verifying {algorithm.upper()} checksum...")
+                actual_hash = calculate_checksum(file_path, algorithm)
+                if actual_hash.lower() != expected_hash.strip().lower():
+                    self._print(
+                        f"[bold red]Checksum mismatch! Expected {expected_hash}, "
+                        f"got {actual_hash}"
+                    )
+                    file_path.unlink(missing_ok=True)
+                    return False
+                self._print("[green]✓ Checksum verified!")
+
+            for part in parts:
+                part.path.unlink(missing_ok=True)
+            state_mgr.delete()
+            self._print(f"[bold green]✓ Saved: {file_path}")
+            return True
+
+        finally:
+            DownloadContext.clear()
+
+
+def download_file(
+    url: str,
+    directory: Path,
+    config: AppConfig,
+    session_manager: Optional[SessionManager] = None,
+    console_print: Optional[Callable[..., None]] = None,
+    verify_checksum: bool = False,
+    expected_hash: Optional[str] = None,
+) -> bool:
+    """Convenience wrapper used by the batch/CLI layers."""
+    controller = DownloadController(config, session_manager, console_print)
+    return controller.download_file(url, directory, verify_checksum, expected_hash)

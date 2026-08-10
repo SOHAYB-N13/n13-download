@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+saved_links/
+gui_queue.json
+*.token.json
+.DS_Store
+Thumbs.db
