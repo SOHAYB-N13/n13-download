@@ -442,6 +442,8 @@ const App = {
         } else if (t.state === "Failed") {
           Components.toast("Download failed", `${Utils.fileName(t)}${t.error ? " — " + t.error : ""}`, "error");
           this._refreshHistory();
+        } else if (t.state === "Cancelled") {
+          Components.toast("Download cancelled", Utils.fileName(t), "info");
         }
       }
     } else if (evt.type === "log") {
@@ -451,8 +453,25 @@ const App = {
     } else if (evt.type === "browser_url") {
       Components.toast("Link captured", "Received from browser extension", "info");
       this.openNewDownload(evt.url);
+    } else if (evt.type === "clipboard_url") {
+      this._onClipboardLink(evt.url);
+    } else if (evt.type === "toast") {
+      Components.toast(evt.title || "Notice", evt.message || "", evt.kind || "info");
     } else if (evt.type === "window") {
       this._setMaxState(!!evt.maximized);
+    }
+  },
+
+  async _onClipboardLink(url) {
+    try {
+      const ok = await Components.linkPrompt(url);
+      if (ok) {
+        await this.openNewDownload(url);
+      } else {
+        Components.toast("Ignored", "Link not downloaded", "info", 1800);
+      }
+    } catch (e) {
+      API.logJs("clipboard link: " + String(e));
     }
   },
 
@@ -482,6 +501,18 @@ const App = {
       if (ok) API.removeDownload(id);
     },
     onOpenFolder(id) { API.openFolder(id); },
+    onOpenFile(id) { API.openFile(id); },
+    onRedownload(id) { API.redownload(id); },
+    onMove(id, delta) { API.moveTask(id, delta); },
+    async onCopyPath(task) {
+      const p = `${task.directory}\\${task.filename || Utils.fileName(task)}`;
+      try {
+        await navigator.clipboard.writeText(p);
+        Components.toast("Copied", "File path copied to clipboard", "info", 2200);
+      } catch {
+        Components.toast("Copy failed", "Clipboard is unavailable", "error");
+      }
+    },
     async onDeleteFile(id, name) {
       const ok = await Components.confirm({
         title: "Delete file",
@@ -544,11 +575,11 @@ const App = {
 
     if (filter !== "all") {
       const map = {
-        active: ["Downloading", "Stopping"],
+        active: ["Downloading", "Analyzing", "Starting", "Merging", "Verifying", "Stopping"],
         queued: ["Queued"],
         paused: ["Paused"],
         completed: ["Complete"],
-        failed: ["Failed", "Stopped"],
+        failed: ["Failed", "Cancelled", "Stopped"],
       };
       const states = map[filter] || [];
       list = list.filter((t) => states.includes(t.state));
@@ -670,7 +701,8 @@ const App = {
   },
 
   _updateBadge() {
-    const n = this._taskArray().filter((t) => t.state === "Downloading" || t.state === "Queued").length;
+    const activeStates = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying", "Queued"];
+    const n = this._taskArray().filter((t) => activeStates.includes(t.state)).length;
     const badge = Utils.$id("navBadge");
     badge.textContent = n;
     badge.hidden = n === 0;
@@ -681,11 +713,11 @@ const App = {
     const count = (states) => all.filter((t) => states.includes(t.state)).length;
     const set = (f, v) => { const el = Utils.$q(`#filterChips [data-filter="${f}"] .chip-n`); if (el) el.textContent = v; };
     set("all", all.length);
-    set("active", count(["Downloading", "Stopping"]));
+    set("active", count(["Downloading", "Analyzing", "Starting", "Merging", "Verifying", "Stopping"]));
     set("queued", count(["Queued"]));
     set("paused", count(["Paused"]));
     set("completed", count(["Complete"]));
-    set("failed", count(["Failed", "Stopped"]));
+    set("failed", count(["Failed", "Cancelled", "Stopped"]));
   },
 
   _showSkeletons() {
@@ -877,7 +909,7 @@ const App = {
       try {
         const id = await API.addDownload(
           url, el.dir.value.trim(), el.name.value.trim(),
-          el.checksum.value.trim(), el.autostart.checked);
+          el.checksum.value.trim(), el.autostart.checked, model.category);
         if (id) {
           this.state.highlightId = id;
           dlg.close();
@@ -1055,6 +1087,14 @@ const App = {
   },
 
   _bindHistoryPage() {
+    Utils.$qa("#historyFilterChips .chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        Utils.$qa("#historyFilterChips .chip").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        this.state.hFilter = chip.dataset.hfilter;
+        this._renderHistory();
+      });
+    });
     Utils.$id("btnClearHistory").addEventListener("click", async () => {
       const ok = await Components.confirm({
         title: "Clear history",
@@ -1070,13 +1110,44 @@ const App = {
     });
   },
 
+  _historyStatusClass(status) {
+    if (status === "Complete") return "complete";
+    if (status === "Cancelled") return "cancelled";
+    return "failed";
+  },
+
+  async _historyAction(action, h) {
+    if (action === "folder") { await API.openPath(h.directory); return; }
+    if (action === "file") {
+      const ok = await API.openFileFromHistory(h);
+      if (!ok) Components.toast("File not found", `${h.name} is no longer on disk`, "error");
+      return;
+    }
+    if (action === "copypath") {
+      try { await navigator.clipboard.writeText(`${h.directory}\\${h.name}`); Components.toast("Copied", "File path copied", "info", 2000); } catch {}
+      return;
+    }
+    if (action === "redownload") {
+      const id = await API.addDownload(h.url, h.directory, h.name, "", true);
+      if (id) { this.state.highlightId = id; Components.toast("Re-queued", h.name, "success"); this.navigate("downloads"); }
+      return;
+    }
+    if (action === "remove") {
+      await API.removeHistoryEntry(h.task_id);
+      this.state.history = this.state.history.filter((x) => x.task_id !== h.task_id);
+      this._renderHistory();
+    }
+  },
+
   _renderHistory() {
     const body = Utils.$id("historyBody");
     const empty = Utils.$id("historyEmpty");
     const table = Utils.$id("historyTable");
     const q = this.state.search;
+    const hf = this.state.hFilter || "all";
     let items = this.state.history;
     if (q) items = items.filter((h) => (h.name || "").toLowerCase().includes(q) || (h.url || "").toLowerCase().includes(q));
+    if (hf !== "all") items = items.filter((h) => (h.status || "") === hf);
 
     if (!items.length) {
       table.hidden = true;
@@ -1084,29 +1155,51 @@ const App = {
       empty.replaceChildren(Components.emptyState({
         icon: "history",
         title: this.state.history.length ? "Nothing matches" : "No history yet",
-        desc: this.state.history.length ? "Try a different search term." : "Completed and failed downloads are listed here.",
+        desc: this.state.history.length ? "Try a different filter or search term." : "Completed and failed downloads are listed here.",
       }));
       return;
     }
     empty.hidden = true;
     table.hidden = false;
-    body.innerHTML = items.slice(0, 300).map((h) => `
+    body.innerHTML = items.slice(0, 300).map((h) => {
+      const stCls = this._historyStatusClass(h.status);
+      const sizeTxt = h.size || "";
+      const metaBits = [];
+      if (h.duration) metaBits.push(`⏱ ${h.duration.toFixed ? h.duration.toFixed(0) : h.duration}s`);
+      if (h.avg_speed) metaBits.push(`~${Utils.formatSpeed(h.avg_speed)}`);
+      const meta = metaBits.length ? `<span class="h-meta">${metaBits.join(" · ")}</span>` : "";
+      const dir = h.directory || "";
+      const path = `${dir}\\${h.name || ""}`;
+      return `
       <tr>
         <td class="h-date">${Utils.formatDateTime(h.finished)}</td>
         <td class="h-name">
           <span class="h-ico" data-type="${Utils.fileType(h.name)}">${Utils.fileIcon(h.name, 15)}</span>
           <span class="h-name-t" title="${Utils.escapeHtml(h.name || "")}">${Utils.escapeHtml(h.name || "")}</span>
         </td>
-        <td class="h-size">${Utils.escapeHtml(h.size || "")}</td>
-        <td><span class="badge badge-${h.status === "Complete" ? "complete" : "failed"}"><i class="badge-dot"></i>${h.status === "Complete" ? "Completed" : "Failed"}</span></td>
+        <td class="h-size">${Utils.escapeHtml(sizeTxt)}${meta}</td>
+        <td class="h-cat"><span class="cat-pill">${Utils.escapeHtml(h.category || "General")}</span></td>
+        <td><span class="badge badge-${stCls}"><i class="badge-dot"></i>${Utils.statusLabel(h.status || "Failed")}</span></td>
         <td class="h-dir">
-          <span class="h-dir-t" title="${Utils.escapeHtml(h.directory || "")}">${Utils.escapeHtml(h.directory || "")}</span>
-          <button class="icon-btn h-open" data-dir="${Utils.escapeHtml(h.directory || "")}" data-tip="Open folder" aria-label="Open folder">${Utils.icon("folderOpen", 14)}</button>
+          <span class="h-dir-t" title="${Utils.escapeHtml(dir)}">${Utils.escapeHtml(dir || "")}</span>
         </td>
-      </tr>`).join("");
+        <td class="h-actions">
+          <button class="icon-btn btn-xs" data-hact="file" data-tip="Open file" aria-label="Open file">${Utils.icon("external", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="folder" data-tip="Open folder" aria-label="Open folder">${Utils.icon("folderOpen", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="copypath" data-tip="Copy path" aria-label="Copy path">${Utils.icon("copy", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="redownload" data-tip="Redownload" aria-label="Redownload">${Utils.icon("retry", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="remove" data-tip="Remove entry" aria-label="Remove from history">${Utils.icon("x", 13)}</button>
+        </td>
+      </tr>`;
+    }).join("");
 
-    Utils.$qa(".h-open", body).forEach((btn) =>
-      btn.addEventListener("click", () => API.openPath(btn.dataset.dir)));
+    Utils.$qa("[data-hact]", body).forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const tr = btn.closest("tr");
+        const idx = Array.from(body.children).indexOf(tr);
+        const h = items[idx];
+        if (h) this._historyAction(btn.dataset.hact, h);
+      }));
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1279,6 +1372,10 @@ const App = {
           { key: "download_dir", label: "Download folder", hint: "Default location for new files", type: "dir" },
           { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
           { key: "num_threads", label: "Connections per download", hint: "Parallel segments per file (higher = faster on good networks)", type: "range", min: 1, max: 64 },
+          { key: "language", label: "Language", hint: "Interface language", type: "select", options: [
+            { value: "en", label: "English" },
+            { value: "fa", label: "فارسی (Persian)" },
+          ] },
         ],
       },
       {
@@ -1293,6 +1390,36 @@ const App = {
         fields: [
           { key: "_limit_enabled", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
           { key: "max_speed_bps", label: "Speed limit", hint: "Applies to all downloads combined", type: "speed" },
+          { key: "_speed_presets", label: "Quick presets", hint: "256 KB/s · 512 KB/s · 1 MB/s · 2 MB/s · 5 MB/s · 10 MB/s", type: "speedpresets" },
+        ],
+      },
+      {
+        id: "scheduler", icon: "calendar", title: "Scheduler",
+        fields: [
+          { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
+          { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
+          { key: "schedule_stop_time", label: "Stop at", hint: "Queue pauses from this time (HH:MM)", type: "time" },
+          { key: "_night_cap_enabled", label: "Night speed limit", hint: "Slow downloads during the night window", type: "toggle", of: "night_speed_limit_bps" },
+          { key: "night_speed_limit_bps", label: "Night limit", hint: "Applied between night start and night end", type: "speed" },
+          { key: "night_start_time", label: "Night starts at", hint: "e.g. 23:00", type: "time" },
+          { key: "night_end_time", label: "Night ends at", hint: "e.g. 07:00", type: "time" },
+        ],
+      },
+      {
+        id: "startup", icon: "power", title: "Startup & clipboard",
+        fields: [
+          { key: "resume_on_startup", label: "Resume on startup", hint: "Automatically continue downloads that were interrupted", type: "toggle" },
+          { key: "start_minimized", label: "Start minimized", hint: "Launch the window minimized", type: "toggle" },
+          { key: "clipboard_monitor", label: "Clipboard monitoring", hint: "Offer to download URLs you copy", type: "toggle" },
+          { key: "clipboard_autostart", label: "Auto-download copied links", hint: "Start the download without asking (when monitoring is on)", type: "toggle" },
+        ],
+      },
+      {
+        id: "categories", icon: "folder", title: "Categories",
+        fields: [
+          { key: "auto_categorize", label: "Auto-detect category", hint: "Assign a category from the file type", type: "toggle" },
+          { key: "_category_dirs", label: "Category folders", hint: "Save each category to its own folder", type: "catdirs" },
+          { key: "_category_exts", label: "Custom extensions", hint: "Extra extensions per category (advanced)", type: "catexts" },
         ],
       },
       {
@@ -1333,8 +1460,12 @@ const App = {
       return;
     }
 
-    const limitEnabled = (s.max_speed_bps || 0) > 0;
-    const limitMbps = limitEnabled ? +(s.max_speed_bps / 1048576).toFixed(1) : 10;
+    const speedMbps = {};
+    ["max_speed_bps", "night_speed_limit_bps"].forEach((k) => {
+      const bps = s[k] || 0;
+      speedMbps[k] = bps > 0 ? +(bps / 1048576).toFixed(1) : 0;
+    });
+    const ctx = { speedMbps };
 
     container.innerHTML = this._settingsDef().map((sec) => `
       <section class="set-card" id="set-${sec.id}">
@@ -1344,7 +1475,7 @@ const App = {
           <span class="set-saved" data-saved="${sec.id}">${Utils.icon("check", 12)} Saved</span>
         </header>
         <div class="set-body">
-          ${sec.fields.map((f) => this._fieldHtml(f, s, { limitEnabled, limitMbps })).join("")}
+          ${sec.fields.map((f) => this._fieldHtml(f, s, ctx)).join("")}
         </div>
       </section>`).join("");
 
@@ -1370,8 +1501,8 @@ const App = {
           <output>${s[f.key]}</output>
         </div>`;
     } else if (f.type === "toggle") {
-      const checked = f.of ? ctx.limitEnabled : !!s[f.key];
-      ctl = `<span class="switch"><input type="checkbox" id="set-${f.key}" data-key="${f.key}" data-of="${f.of || ""}" ${checked ? "checked" : ""}><span class="switch-track"></span></span>`;
+      const enabled = f.of ? (ctx.speedMbps?.[f.of] > 0) : !!s[f.key];
+      ctl = `<span class="switch"><input type="checkbox" id="set-${f.key}" data-key="${f.key}" data-of="${f.of || ""}" ${enabled ? "checked" : ""}><span class="switch-track"></span></span>`;
     } else if (f.type === "text" || f.type === "password") {
       ctl = `<input class="input" type="${f.type}" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}" placeholder="${f.placeholder || ""}" spellcheck="false">`;
     } else if (f.type === "uatext") {
@@ -1381,11 +1512,39 @@ const App = {
       </div>`;
     } else if (f.type === "number") {
       ctl = `<input class="input input-num" type="number" id="set-${f.key}" data-key="${f.key}" value="${s[f.key]}" min="${f.min}" max="${f.max}">`;
+    } else if (f.type === "time") {
+      ctl = `<input class="input mono" type="time" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}">`;
+    } else if (f.type === "select") {
+      ctl = `<select class="input" id="set-${f.key}" data-key="${f.key}">
+        ${(f.options || []).map((o) => `<option value="${Utils.escapeHtml(o.value)}" ${String(s[f.key] || "") === o.value ? "selected" : ""}>${Utils.escapeHtml(o.label)}</option>`).join("")}
+      </select>`;
     } else if (f.type === "speed") {
-      ctl = `<div class="speed-wrap ${ctx.limitEnabled ? "" : "off"}" id="speedWrap">
-          <input type="range" id="speedSlider" min="0.5" max="100" step="0.5" value="${ctx.limitMbps}" aria-label="Speed limit in megabytes per second">
-          <div class="speed-val"><input class="input input-num" id="speedInput" type="number" min="0.5" max="100" step="0.5" value="${ctx.limitMbps}"><span>MB/s</span></div>
+      const mbps = (ctx.speedMbps?.[f.key] > 0) ? ctx.speedMbps[f.key] : 10;
+      const off = !(ctx.speedMbps?.[f.key] > 0);
+      ctl = `<div class="speed-wrap ${off ? "off" : ""}" id="speedwrap-${f.key}">
+          <input type="range" data-speed-key="${f.key}" min="0.5" max="100" step="0.5" value="${mbps}" aria-label="Speed limit in megabytes per second">
+          <div class="speed-val"><input class="input input-num" data-speed-in="${f.key}" type="number" min="0.5" max="100" step="0.5" value="${mbps}"><span>MB/s</span></div>
         </div>`;
+    } else if (f.type === "speedpresets") {
+      const presets = [256, 512, 1024, 2048, 5120, 10240].map((kb) => Math.round(kb * 1024));
+      ctl = `<div class="preset-row">${presets.map((bps) => `
+        <button class="chip" data-preset-bps="${bps}" data-tip="${(bps / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB/s">${Utils.formatSpeed(bps)}</button>`).join("")}
+        <button class="chip" data-preset-bps="0">Unlimited</button>
+      </div>`;
+    } else if (f.type === "catdirs") {
+      const cats = ["General", "Videos", "Music", "Images", "Documents", "Archives", "Programs", "Other"];
+      const dirs = s.category_dirs || {};
+      ctl = `<div class="catdirs">
+        ${cats.map((c) => `
+          <div class="catdir-row">
+            <span class="catdir-name">${c}</span>
+            <input class="input mono" data-catdir="${c}" value="${Utils.escapeHtml(dirs[c] || "")}" placeholder="Default folder">
+            <button class="icon-btn btn-xs" data-catdir-browse="${c}" data-tip="Browse" aria-label="Browse">${Utils.icon("folder", 13)}</button>
+          </div>`).join("")}
+      </div>`;
+    } else if (f.type === "catexts") {
+      const txt = JSON.stringify(s.category_extensions || {}, null, 1);
+      ctl = `<textarea class="input textarea mono" data-catexts rows="4" spellcheck="false" placeholder='{"Videos": ["mp4", "mkv"]}'>${Utils.escapeHtml(txt)}</textarea>`;
     } else if (f.type === "theme") {
       ctl = `<div class="seg" role="radiogroup" aria-label="Theme">
           <button class="seg-btn ${this.state.theme === "dark" ? "active" : ""}" data-theme="dark" role="radio" aria-checked="${this.state.theme === "dark"}">${Utils.icon("moon", 15)} Dark</button>
@@ -1457,13 +1616,16 @@ const App = {
     });
 
     // Toggles — listen for clicks on the .switch area and also the native change event.
+    // A toggle with `of` controls the enable/disable of a linked speed field.
     const handleToggle = (tg, checked) => {
       const key = tg.dataset.key;
-      if (key === "_limit_enabled") {
-        const wrap = Utils.$id("speedWrap");
+      const ofKey = tg.dataset.of;
+      if (ofKey) {
+        const wrap = Utils.$id(`speedwrap-${ofKey}`);
         if (wrap) wrap.classList.toggle("off", !checked);
-        const mbps = checked ? (+(Utils.$id("speedInput")?.value || 0) || 10) : 0;
-        scheduleSave({ max_speed_bps: Math.round(mbps * 1048576) }, secOf(tg));
+        const sl = Utils.$q(`input[data-speed-key="${ofKey}"]`, container);
+        const mbps = checked ? (+(sl?.value || 0) || 10) : 0;
+        scheduleSave({ [ofKey]: Math.round(mbps * 1048576) }, secOf(tg));
       } else {
         scheduleSave({ [key]: checked }, secOf(tg));
       }
@@ -1479,22 +1641,102 @@ const App = {
       inp.addEventListener("change", () => handleToggle(inp, inp.checked));
     });
 
-    // Speed slider + input pair (own debounce, saves directly).
-    const speedSlider = Utils.$id("speedSlider");
-    const speedInput = Utils.$id("speedInput");
-    if (speedSlider && speedInput) {
+    // Speed slider + input pairs (generic, per key).
+    const paintSpeed = (sl) => {
+      const r = +sl.min || 0, m = +sl.max || 1;
+      sl.style.setProperty("--fill", ((+sl.value - r) / (m - r)) * 100 + "%");
+    };
+    Utils.$qa("input[data-speed-key]", container).forEach((sl) => {
+      const key = sl.dataset.speedKey;
+      const input = Utils.$q(`input[data-speed-in="${key}"]`, container);
+      paintSpeed(sl);
       let st;
       const flush = (v) => {
         clearTimeout(st);
-        st = setTimeout(() => scheduleSave({ max_speed_bps: Math.round(v * 1048576) }, "bandwidth"), 320);
+        st = setTimeout(() => scheduleSave({ [key]: Math.round(v * 1048576) }, secOf(sl)), 320);
       };
-      speedSlider.addEventListener("input", () => { speedInput.value = speedSlider.value; paintSlider(speedSlider); flush(+speedSlider.value); });
-      speedInput.addEventListener("change", () => {
-        speedInput.value = Utils.clamp(+speedInput.value || 0.5, 0.5, 100);
-        speedSlider.value = speedInput.value;
-        flush(+speedInput.value);
+      sl.addEventListener("input", () => {
+        if (input) input.value = sl.value;
+        paintSpeed(sl);
+        flush(+sl.value);
       });
-    }
+      if (input) {
+        input.addEventListener("change", () => {
+          input.value = Utils.clamp(+input.value || 0.5, 0.5, 100);
+          sl.value = input.value;
+          flush(+input.value);
+        });
+      }
+    });
+
+    // Speed presets.
+    Utils.$qa("[data-preset-bps]", container).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const bps = +btn.dataset.presetBps;
+        const slider = Utils.$q('input[data-speed-key="max_speed_bps"]', container);
+        const wrap = Utils.$id("speedwrap-max_speed_bps");
+        if (wrap) wrap.classList.toggle("off", bps === 0);
+        if (slider) {
+          slider.value = bps > 0 ? (bps / 1048576).toFixed(1) : 10;
+          paintSpeed(slider);
+          const input = Utils.$q('input[data-speed-in="max_speed_bps"]', container);
+          if (input) input.value = slider.value;
+        }
+        scheduleSave({ max_speed_bps: bps }, "bandwidth");
+        Components.toast("Speed limit set", bps ? Utils.formatSpeed(bps) : "Unlimited", "info", 1800);
+      });
+    });
+
+    // Time inputs.
+    Utils.$qa('input[type="time"][data-key]', container).forEach((inp) => {
+      inp.addEventListener("change", () => {
+        scheduleSave({ [inp.dataset.key]: inp.value || null }, secOf(inp));
+      });
+    });
+
+    // Selects.
+    Utils.$qa('select[data-key]', container).forEach((sel) => {
+      sel.addEventListener("change", () => {
+        scheduleSave({ [sel.dataset.key]: sel.value }, secOf(sel));
+      });
+    });
+
+    // Category directory editor.
+    const catdirInputs = Utils.$qa("input[data-catdir]", container);
+    const saveCatDirs = () => {
+      const dirs = {};
+      catdirInputs.forEach((i) => {
+        const v = i.value.trim();
+        if (v) dirs[i.dataset.catdir] = v;
+      });
+      scheduleSave({ category_dirs: dirs }, "categories");
+    };
+    catdirInputs.forEach((i) => i.addEventListener("change", saveCatDirs));
+    Utils.$qa("[data-catdir-browse]", container).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const dir = await API.selectDirectory();
+        if (dir) {
+          const inp = Utils.$q(`input[data-catdir="${btn.dataset.catdirBrowse}"]`, container);
+          if (inp) { inp.value = dir; saveCatDirs(); }
+        }
+      });
+    });
+
+    // Category extensions editor (JSON textarea).
+    Utils.$qa("textarea[data-catexts]", container).forEach((ta) => {
+      ta.addEventListener("change", () => {
+        try {
+          const parsed = JSON.parse(ta.value || "{}");
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            scheduleSave({ category_extensions: parsed }, "categories");
+          } else {
+            Components.toast("Invalid JSON", "Category extensions must be an object", "error");
+          }
+        } catch {
+          Components.toast("Invalid JSON", "Check the category extensions syntax", "error");
+        }
+      });
+    });
 
     // Folder browse.
     Utils.$qa("[data-browse]", container).forEach((btn) => {

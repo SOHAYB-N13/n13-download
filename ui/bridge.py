@@ -33,4 +33,11 @@ def launch_app(config, session) -> None:
 
     api.set_window(_window)
 
-    webview.start(debug=False, gui="edgechromium")
+    def _on_startup() -> None:
+        if getattr(config, "start_minimized", False):
+            try:
+                _window.minimize()
+            except Exception:
+                pass
+
+    webview.start(_on_startup, debug=False, gui="edgechromium")

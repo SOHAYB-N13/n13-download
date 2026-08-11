@@ -33,12 +33,13 @@ const API = {
   async getDownload(id) { return this._call("get_download", id); },
   async getHistory() { return this._call("get_history"); },
   async clearHistory() { return this._call("clear_history"); },
+  async removeHistoryEntry(taskId) { return this._call("remove_history_entry", taskId); },
   async clearFinished() { return this._call("clear_finished"); },
 
   // ── Download actions ──────────────────────────────────────────────
 
-  async addDownload(url, directory, label, checksum, autostart) {
-    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false);
+  async addDownload(url, directory, label, checksum, autostart, category) {
+    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "");
   },
   async addBatch(urls, directory) { return this._call("add_batch", urls, directory); },
   async pauseDownload(id) { return this._call("pause_download", id); },
@@ -50,13 +51,22 @@ const API = {
   async resumeAll() { return this._call("resume_all"); },
   async startTask(id) { return this._call("start_task", id); },
   async openFolder(id) { return this._call("open_folder", id); },
+  async openFile(id) { return this._call("open_file", id); },
+  async openFileFromHistory(entry) { return this._call("open_file_from_history", entry); },
+  async redownload(id) { return this._call("redownload", id); },
   async openPath(path) { return this._call("open_path", path); },
   async deleteFile(taskId) { return this._call("delete_file", taskId); },
+  async moveTask(id, delta) { return this._call("move_task", id, delta); },
+  async setPriority(id, priority) { return this._call("set_priority", id, priority); },
+  async retryFailed() { return this._call("retry_failed"); },
+  async clearFailed() { return this._call("clear_failed"); },
+  async clearCompleted() { return this._call("clear_completed"); },
 
   // ── URL validation & probing ──────────────────────────────────────
 
   async validateUrl(url) { return this._call("validate_url", url); },
   async probeUrl(url) { return this._call("probe_url", url); },
+  async analyzeUrl(url) { return this._call("analyze_url", url); },
 
   // ── Settings ──────────────────────────────────────────────────────
 
@@ -81,6 +91,8 @@ const API = {
   async startLiveServer() { return this._call("start_live_server"); },
   async stopLiveServer() { return this._call("stop_live_server"); },
   async liveServerStatus() { return this._call("live_server_status"); },
+  async schedulerStatus() { return this._call("scheduler_status"); },
+  async clipboardStatus() { return this._call("clipboard_status"); },
   async createExtension() { return this._call("create_extension"); },
   async registerProtocol() { return this._call("register_protocol"); },
   async unregisterProtocol() { return this._call("unregister_protocol"); },

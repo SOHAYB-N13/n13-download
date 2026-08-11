@@ -9,5 +9,6 @@ build/
 saved_links/
 gui_queue.json
 *.token.json
+token.json
 .DS_Store
 Thumbs.db

@@ -1,16 +1,18 @@
 document.getElementById("downloadBtn").addEventListener("click", () => {
-  const url = document.getElementById("urlInput").value.trim();
   const status = document.getElementById("status");
-  if (!/^https?:\/\//i.test(url)) {
-    status.textContent = "Enter a valid http(s) URL";
+  const urls = document.getElementById("urlInput").value
+    .split("\n").map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+  if (!urls.length) {
+    status.textContent = "Enter at least one valid http(s) URL";
     status.className = "status err";
     status.style.display = "block";
     return;
   }
-  chrome.runtime.sendMessage({ action: "download", url }, (response) => {
+  const msg = urls.length === 1 ? { action: "download", url: urls[0] } : { action: "download_many", urls };
+  chrome.runtime.sendMessage(msg, (response) => {
     status.style.display = "block";
     if (response?.status === "sent") {
-      status.textContent = "Sent to TDM";
+      status.textContent = `Sent ${urls.length} link${urls.length === 1 ? "" : "s"} to TDM`;
       status.className = "status ok";
       document.getElementById("urlInput").value = "";
     } else {
@@ -21,5 +23,5 @@ document.getElementById("downloadBtn").addEventListener("click", () => {
 });
 
 document.getElementById("urlInput").addEventListener("keypress", (e) => {
-  if (e.key === "Enter") document.getElementById("downloadBtn").click();
+  if (e.key === "Enter" && !e.shiftKey) document.getElementById("downloadBtn").click();
 });

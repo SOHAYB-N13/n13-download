@@ -24,7 +24,12 @@ class DownloadContext:
 
     _lock = threading.Lock()
     _cancel_event = threading.Event()
+    # A fresh context is NOT paused.  ``threading.Event()`` starts *unset*, so
+    # it must be explicitly set here — otherwise the very first single-thread
+    # (non-Range) download in a process would block forever in
+    # ``wait_if_paused()``.
     _pause_blocker = threading.Event()
+    _pause_blocker.set()
     _state_mgr: Optional[DownloadState] = None
     _url: str = ""
     _total_size: int = 0

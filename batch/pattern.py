@@ -21,6 +21,7 @@ from core.probe import probe_url
 from core.session import SessionManager
 from core.utils import format_size, validate_url
 from batch.sources import get_saved_links_dir, import_urls_from_file, save_links_to_file
+from core.paths import user_data_dir as get_user_data_dir
 from ui.progress import create_batch_progress, create_scan_progress
 from ui.prompts import get_valid_directory
 
@@ -261,7 +262,7 @@ def batch_download_urls(
       • Current  — filename + byte bar + speed + ETA
     """
     state_path = batch_state_path or (
-        get_saved_links_dir(Path.cwd()) / "batch_resume.json"
+        get_saved_links_dir(get_user_data_dir()) / "batch_resume.json"
     )
     unique_urls = list(dict.fromkeys(urls))
     if not unique_urls:

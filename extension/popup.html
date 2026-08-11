@@ -4,19 +4,21 @@
   <meta charset="UTF-8">
   <title>TDM</title>
   <style>
-    body { width: 360px; padding: 16px; font-family: Segoe UI, sans-serif; background: #1a1a2e; color: #eee; }
-    h2 { color: #00d4ff; font-size: 16px; }
-    input, button { width: 100%; margin: 8px 0; padding: 10px; border-radius: 6px; border: 1px solid #333; }
-    input { background: #111; color: #eee; }
+    body { width: 380px; padding: 16px; font-family: Segoe UI, sans-serif; background: #1a1a2e; color: #eee; }
+    h2 { color: #00d4ff; font-size: 15px; margin: 0 0 10px; }
+    textarea, button { width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; border-radius: 6px; border: 1px solid #333; }
+    textarea { background: #111; color: #eee; font-family: Consolas, monospace; resize: vertical; }
     button { background: #0f3460; color: #00d4ff; cursor: pointer; }
-    .status { margin-top: 8px; font-size: 12px; display: none; }
+    .status { margin-top: 8px; font-size: 12px; display: none; word-break: break-all; }
     .ok { color: #0f8; }
     .err { color: #f66; }
+    .hint { font-size: 11px; color: #888; margin: 2px 0 4px; }
   </style>
 </head>
 <body>
   <h2>Terminal Download Manager</h2>
-  <input id="urlInput" placeholder="https://example.com/file.zip" autofocus>
+  <textarea id="urlInput" rows="5" placeholder="Paste one URL per line&#10;https://example.com/file1.zip&#10;https://example.com/file2.zip" autofocus></textarea>
+  <div class="hint">One per line — multiple links are sent as a batch.</div>
   <button id="downloadBtn">Download</button>
   <div id="status" class="status"></div>
   <script src="popup.js"></script>

@@ -53,6 +53,7 @@ from core.session import SessionManager
 from core.speed import SpeedTracker
 from core.state import DownloadState
 from core.throttle import BandwidthLimiter, get_global_limiter, sync_limiter_from_config
+from core.errors import friendly_error_message
 from core.utils import (
     build_browser_headers,
     calculate_checksum,
@@ -128,17 +129,19 @@ def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None) 
     return max(0.0, delay)
 
 
-def _interruptible_sleep(seconds: float) -> bool:
+def _interruptible_sleep(seconds: float, control=None) -> bool:
     """Sleep in short slices so a cancel request is honoured within ~0.25 s.
 
-    Uses ``DownloadContext._cancel_event`` (lock-free) for the cancellation
-    check instead of ``is_cancelled()`` which acquired a class-level mutex.
-    Returns ``True`` when the full delay elapsed, ``False`` when cancelled.
+    Checks both the process-global ``DownloadContext._cancel_event`` (for CLI
+    downloads) and the per-task ``control`` (for queue downloads).  Returns
+    ``True`` when the full delay elapsed, ``False`` when cancelled.
     """
     cancel_event = DownloadContext._cancel_event
     deadline = time.monotonic() + max(0.0, seconds)
     while True:
         if cancel_event.is_set():
+            return False
+        if control is not None and control.cancelled:
             return False
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -201,8 +204,21 @@ class DownloadController:
         else:
             session_manager.configure(config)
         self.session = session_manager
-        self._print = console_print or (lambda *args, **kwargs: None)
+        # A failing log/print callback must never fail the download itself, so
+        # every console_print call is guarded.  (Fixes e.g. a cp1252 console
+        # choking on the '✓' glyph in the success message.)
+        _raw_print = console_print or (lambda *args, **kwargs: None)
+
+        def _safe_print(*args, **kwargs) -> None:
+            try:
+                _raw_print(*args, **kwargs)
+            except Exception:
+                pass
+
+        self._print = _safe_print
         self.show_progress = show_progress
+        # Last failure, in user-friendly form (read by queue runners).
+        self.last_error: str = ""
         # Share one process-wide limiter so UI speed-cap changes apply immediately.
         sync_limiter_from_config(config)
         self._limiter: Optional[BandwidthLimiter] = get_global_limiter()
@@ -244,9 +260,59 @@ class DownloadController:
         except Exception as exc:
             self._print(f"[yellow]Progress listener error ignored: {exc}[/yellow]")
 
-    def _throttle(self, chunk_len: int) -> None:
-        if self._limiter is not None:
-            self._limiter.consume(chunk_len)
+    @staticmethod
+    def _notify_status(
+        status_callback: Optional[Callable[[str], None]], name: str
+    ) -> None:
+        """Report a phase transition (e.g. MERGING / VERIFYING) to the queue.
+
+        A failing callback must never interrupt the download, so errors are
+        swallowed.
+        """
+        if not status_callback:
+            return
+        try:
+            status_callback(name)
+        except Exception:
+            pass
+
+    def _throttle(self, chunk_len: int, control=None) -> None:
+        if self._limiter is None:
+            return
+
+        def _stop() -> bool:
+            # Abort the throttle sleep when paused or cancelled so pause and
+            # shutdown stay responsive even mid-throttle.
+            if DownloadContext._cancel_event.is_set():
+                return True
+            if control is not None:
+                return bool(control.paused or control.cancelled)
+            return False
+
+        self._limiter.consume(chunk_len, should_stop=_stop)
+
+    # ------------------------------------------------------------------ #
+    # Per-task control helpers
+    #
+    # When a caller passes a ``control`` (a ``TaskControl``-like object with
+    # ``cancelled`` / ``paused`` / ``wait_if_paused``), the download honours it
+    # instead of the process-global ``DownloadContext``, giving every task an
+    # isolated pause/cancel lifecycle.  With ``control=None`` the original
+    # global behaviour (CLI / TUI) is preserved unchanged.
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _ctl_cancelled(control) -> bool:
+        if control is not None:
+            return bool(control.cancelled)
+        return DownloadContext.is_cancelled()
+
+    @staticmethod
+    def _ctl_wait(control) -> bool:
+        """Block while paused; return False when cancelled."""
+        if control is not None:
+            control.wait_if_paused()
+            return not bool(control.cancelled)
+        return DownloadContext.wait_if_paused()
 
     # ------------------------------------------------------------------ #
     # Part download
@@ -262,6 +328,7 @@ class DownloadController:
         total_size: int,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         shared_progress: Optional[dict] = None,
+        control=None,
     ) -> bool:
         """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
 
@@ -283,9 +350,9 @@ class DownloadController:
         cancel_event = DownloadContext._cancel_event
 
         for attempt in range(1, max_retries + 1):
-            if cancel_event.is_set():
+            if cancel_event.is_set() or self._ctl_cancelled(control):
                 return False
-            if not DownloadContext.wait_if_paused():
+            if not self._ctl_wait(control):
                 return False
 
             if part.is_complete:
@@ -332,10 +399,10 @@ class DownloadController:
                     bytes_remaining = part.end - range_start + 1
                     skip_bytes = 0
 
-                    if response.status_code == 200 and range_start > part.start:
-                        skip_bytes = range_start
-                        bytes_remaining = part.size
-
+                    # The server ignored our Range header and returned the whole
+                    # body starting at byte 0 (a 200 to a ranged request).
+                    # Reset any partial data and recompute the skip AFTER all
+                    # state is finalised so every part lands on its own range.
                     if response.status_code == 200 and existing > 0:
                         part.path.unlink(missing_ok=True)
                         with progress_lock:
@@ -348,6 +415,12 @@ class DownloadController:
                         bytes_remaining = part.size
                         skip_bytes = 0
 
+                    if response.status_code == 200 and range_start > 0:
+                        # Skip the leading prefix of the full-body response so
+                        # this part writes exactly [range_start, end).
+                        skip_bytes = range_start
+                        bytes_remaining = part.size
+
                     mode = "wb" if existing == 0 and range_start == part.start else "ab"
 
                     with open(part.path, mode, buffering=8 * 1024 * 1024) as dest:
@@ -357,7 +430,17 @@ class DownloadController:
                         last_cb_time = 0.0
 
                         for raw_chunk in response.iter_content(chunk_size):
-                            if cancel_event.is_set():
+                            if cancel_event.is_set() or self._ctl_cancelled(control):
+                                # Flush remaining local progress before exit.
+                                if local_bytes > 0 and shared_progress is not None:
+                                    with progress_lock:
+                                        shared_progress["completed"] += local_bytes
+                                return False
+
+                            # Pause barrier #1: stop at this chunk boundary.
+                            # Blocks efficiently (event wait, no busy loop) until
+                            # the task is resumed or cancelled.
+                            if not self._ctl_wait(control):
                                 # Flush remaining local progress before exit.
                                 if local_bytes > 0 and shared_progress is not None:
                                     with progress_lock:
@@ -378,7 +461,20 @@ class DownloadController:
                             if len(raw_chunk) > bytes_remaining:
                                 raw_chunk = memoryview(raw_chunk)[:bytes_remaining]
 
-                            self._throttle(len(raw_chunk))
+                            self._throttle(len(raw_chunk), control)
+
+                            # Pause barrier #2: a pause that arrives while the
+                            # thread is inside the (sleeping) throttle must be
+                            # honoured BEFORE any bytes hit the disk, so the
+                            # transfer cannot keep writing megabytes while the
+                            # task reports PAUSED.
+                            if not self._ctl_wait(control):
+                                # Flush remaining local progress before exit.
+                                if local_bytes > 0 and shared_progress is not None:
+                                    with progress_lock:
+                                        shared_progress["completed"] += local_bytes
+                                return False
+
                             chunk_len = len(raw_chunk)
                             dest.write(raw_chunk)
                             bytes_remaining -= chunk_len
@@ -429,13 +525,14 @@ class DownloadController:
                 retryable, status = _is_retryable_exception(exc)
                 if not retryable or attempt >= max_retries:
                     detail = f" (HTTP {status})" if status else ""
+                    self.last_error = friendly_error_message(exc, status)
                     self._print(
                         f"[red]Part {part.index} failed after {attempt} "
                         f"attempt(s){detail}: {exc}"
                     )
                     return False
                 delay = _retry_delay(attempt, self.config, status)
-                if not _interruptible_sleep(delay):
+                if not _interruptible_sleep(delay, control):
                     return False
                 continue
 
@@ -449,6 +546,7 @@ class DownloadController:
         url: str,
         file_path: Path,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        control=None,
     ) -> bool:
         tmp_path = file_path.with_suffix(file_path.suffix + self.config.temp_extension)
         speed_tracker = SpeedTracker(
@@ -460,7 +558,9 @@ class DownloadController:
         chunk_size = self.config.chunk_size
 
         for attempt in range(1, max_retries + 1):
-            if cancel_event.is_set():
+            if cancel_event.is_set() or self._ctl_cancelled(control):
+                return False
+            if not self._ctl_wait(control):
                 return False
 
             resume_from = tmp_path.stat().st_size if tmp_path.exists() else 0
@@ -521,12 +621,22 @@ class DownloadController:
                             last_cb_time = 0.0
 
                             for raw_chunk in response.iter_content(chunk_size):
-                                if cancel_event.is_set():
+                                if cancel_event.is_set() or self._ctl_cancelled(control):
+                                    return False
+                                # Pause barrier #1: stop promptly at this chunk
+                                # boundary (event wait, no busy loop).
+                                if not self._ctl_wait(control):
                                     return False
                                 if not raw_chunk:
                                     continue
 
-                                self._throttle(len(raw_chunk))
+                                self._throttle(len(raw_chunk), control)
+
+                                # Pause barrier #2: honour a pause that arrives
+                                # during the throttle sleep before writing.
+                                if not self._ctl_wait(control):
+                                    return False
+
                                 dest.write(raw_chunk)
                                 downloaded += len(raw_chunk)
                                 local_bytes += len(raw_chunk)
@@ -575,12 +685,13 @@ class DownloadController:
             except (requests.RequestException, OSError) as exc:
                 retryable, status = _is_retryable_exception(exc)
                 if not retryable or attempt >= max_retries:
+                    self.last_error = friendly_error_message(exc, status)
                     self._print(
                         f"[red]Download failed after {attempt} attempt(s): {exc}"
                     )
                     return False
                 delay = _retry_delay(attempt, self.config, status)
-                if not _interruptible_sleep(delay):
+                if not _interruptible_sleep(delay, control):
                     return False
                 continue
 
@@ -589,7 +700,7 @@ class DownloadController:
     # ------------------------------------------------------------------ #
     # Scheduling
     # ------------------------------------------------------------------ #
-    def wait_for_schedule(self) -> None:
+    def wait_for_schedule(self, control=None) -> None:
         target = self.config.get_schedule_datetime()
         if not target:
             return
@@ -600,7 +711,7 @@ class DownloadController:
                 f"{target.strftime('%Y-%m-%d %H:%M:%S')}[/bold yellow]"
             )
             while datetime.now() < target:
-                if DownloadContext.is_cancelled():
+                if self._ctl_cancelled(control):
                     return
                 time.sleep(0.5)
 
@@ -614,30 +725,46 @@ class DownloadController:
         verify_checksum: bool = False,
         expected_hash: Optional[str] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        control=None,
+        pre_analysis=None,
+        status_callback: Optional[Callable[[str], None]] = None,
+        path_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
-        self.wait_for_schedule()
-        if DownloadContext.is_cancelled():
+        self.wait_for_schedule(control)
+        if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled before it started.[/yellow]")
             DownloadContext.clear()
             return False
         directory.mkdir(parents=True, exist_ok=True)
 
-        self._print("[dim]Probing URL...[/dim]")
-        reachable, total_size, supports_range, filename, error = probe_url(
-            url, self.config, self.session
-        )
+        # Use a fresh pre-analysis (ANALYZING step) when available to avoid a
+        # second network probe; otherwise probe here as before.
+        if pre_analysis is not None and getattr(pre_analysis, "ok", False):
+            reachable = True
+            total_size = int(pre_analysis.total_size or 0)
+            supports_range = bool(pre_analysis.supports_range)
+            filename = getattr(pre_analysis, "filename", "") or ""
+            error = ""
+        else:
+            self._print("[dim]Probing URL...[/dim]")
+            reachable, total_size, supports_range, filename, error = probe_url(
+                url, self.config, self.session
+            )
 
         if not reachable:
-            if DownloadContext.is_cancelled():
+            if self._ctl_cancelled(control):
                 DownloadContext.clear()
                 self._print("[yellow]Download cancelled while checking the link.[/yellow]")
+                self.last_error = "Cancelled"
                 return False
+            self.last_error = error or "Cannot reach server"
             self._print(f"[red]Cannot reach server: {error}")
             return False
 
-        if DownloadContext.is_cancelled():
+        if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled while checking the link.[/yellow]")
             DownloadContext.clear()
+            self.last_error = "Cancelled"
             return False
 
         if filename:
@@ -655,6 +782,7 @@ class DownloadController:
         file_path = unique_filepath(directory, filename)
         if file_path.name != filename:
             self._print(f"[yellow]⚠ Using unique path: {file_path.name}[/yellow]")
+        self._notify_status(path_callback, str(file_path))
 
         state_path = file_path.with_suffix(file_path.suffix + self.config.state_extension)
         can_resume = supports_range and total_size > 0
@@ -663,17 +791,22 @@ class DownloadController:
             self._print(f"[green]✓ Already complete: {file_path}")
             return True
 
+        self._notify_status(status_callback, "DOWNLOADING")
+
         if not can_resume:
             try:
-                return self.single_thread_download(url, file_path, progress_callback)
+                return self.single_thread_download(
+                    url, file_path, progress_callback, control=control
+                )
             finally:
                 # Single-thread downloads do not create a DownloadState, but
                 # cancellation and pause controls still use this shared context.
                 DownloadContext.clear()
 
-        if DownloadContext.is_cancelled():
+        if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled before transfer started.[/yellow]")
             DownloadContext.clear()
+            self.last_error = "Cancelled"
             return False
 
         state_mgr = DownloadState(state_path)
@@ -725,6 +858,7 @@ class DownloadController:
                 )
             state_mgr.save(url, total_size, parts, effective_threads)
 
+        self._notify_status(status_callback, "DOWNLOADING")
         DownloadContext.begin(state_mgr, url, total_size, parts, effective_threads)
 
         already_bytes = sum(p.downloaded_size for p in parts)
@@ -772,6 +906,7 @@ class DownloadController:
                             total_size,
                             progress_callback,
                             shared_progress,
+                            control,
                         ): p
                         for p in pending_parts
                     }
@@ -793,8 +928,9 @@ class DownloadController:
 
                     self._notify_progress(progress_callback, completed, total_size)
 
-                if DownloadContext.is_cancelled():
+                if self._ctl_cancelled(control):
                     state_mgr.save(url, total_size, parts, effective_threads)
+                    self.last_error = "Cancelled"
                     self._print(
                         "[yellow]Download cancelled. State saved for resume.[/yellow]"
                     )
@@ -802,6 +938,10 @@ class DownloadController:
 
                 if failed_parts:
                     state_mgr.save(url, total_size, parts, effective_threads)
+                    self.last_error = (
+                        self.last_error
+                        or f"{len(failed_parts)} part(s) failed — will resume on retry"
+                    )
                     self._print(
                         f"[bold red]{len(failed_parts)} part(s) failed. "
                         "Re-run to resume."
@@ -810,27 +950,33 @@ class DownloadController:
 
                 if not all(p.is_complete for p in parts):
                     state_mgr.save(url, total_size, parts, effective_threads)
+                    self.last_error = self.last_error or "Some parts incomplete — will resume on retry"
                     self._print("[bold red]Some parts incomplete. Re-run to resume.")
                     return False
 
+            self._notify_status(status_callback, "MERGING")
             merge_expected = total_size if self.config.verify_size else 0
             ok, merge_err = merge_parts(
                 parts, file_path, self.config.buffer_size, expected_size=merge_expected
             )
             if not ok:
                 state_mgr.save(url, total_size, parts, effective_threads)
+                self.last_error = merge_err
                 self._print(f"[red]{merge_err}. Parts preserved for retry.")
                 return False
 
             if verify_checksum and expected_hash:
+                self._notify_status(status_callback, "VERIFYING")
                 try:
                     algorithm = detect_hash_algorithm(expected_hash)
                 except ValueError as exc:
+                    self.last_error = str(exc)
                     self._print(f"[red]{exc}")
                     return False
                 self._print(f"[cyan]Verifying {algorithm.upper()} checksum...")
                 actual_hash = calculate_checksum(file_path, algorithm)
                 if actual_hash.lower() != expected_hash.strip().lower():
+                    self.last_error = "Checksum mismatch — downloaded file is corrupted"
                     self._print(
                         f"[bold red]Checksum mismatch! Expected {expected_hash}, "
                         f"got {actual_hash}"
@@ -857,7 +1003,13 @@ def download_file(
     console_print: Optional[Callable[..., None]] = None,
     verify_checksum: bool = False,
     expected_hash: Optional[str] = None,
+    control=None,
+    pre_analysis=None,
+    path_callback: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Convenience wrapper used by the batch/CLI layers."""
     controller = DownloadController(config, session_manager, console_print)
-    return controller.download_file(url, directory, verify_checksum, expected_hash)
+    return controller.download_file(
+        url, directory, verify_checksum, expected_hash, control=control,
+        pre_analysis=pre_analysis, path_callback=path_callback,
+    )

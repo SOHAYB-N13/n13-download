@@ -121,6 +121,26 @@ const Components = {
     });
   },
 
+  // ── Clipboard link prompt ─────────────────────────────────────────
+
+  async linkPrompt(url) {
+    return new Promise((resolve) => {
+      const dlg = this.showModal(`
+        <div class="confirm-body">
+          <span class="confirm-ico accent">${Utils.icon("download", 22)}</span>
+          <p class="confirm-msg">Download link detected</p>
+          <p class="confirm-sub mono" style="word-break:break-all">${Utils.escapeHtml(url)}</p>
+        </div>`, { title: "Clipboard", width: 460, onClose: () => resolve(false) });
+
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="cpIgnore">${Utils.icon("x", 14)} Ignore</button>
+        <button class="btn btn-primary" id="cpDownload">${Utils.icon("download", 14)} Download</button>`);
+      dlg.qs("#cpIgnore").addEventListener("click", () => { resolve(false); dlg.close(); });
+      dlg.qs("#cpDownload").addEventListener("click", () => { resolve(true); dlg.close(); });
+      dlg.qs("#cpDownload").focus();
+    });
+  },
+
   // ── Context menu ──────────────────────────────────────────────────
 
   showContextMenu(items, x, y) {
@@ -167,19 +187,26 @@ const Components = {
     const s = task.state;
     const name = Utils.fileName(task);
     const items = [];
+    const active = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
     if (s === "Downloading") items.push({ label: "Pause", icon: "pause", action: () => cb.onPause(task.id) });
     if (s === "Paused") items.push({ label: "Resume", icon: "play", action: () => cb.onResume(task.id) });
     if (s === "Queued") items.push({ label: "Start now", icon: "play", action: () => cb.onStart(task.id) });
-    if (s === "Downloading" || s === "Paused" || s === "Queued")
+    if (active.includes(s) || s === "Paused" || s === "Queued")
       items.push({ label: "Cancel", icon: "xCircle", action: () => cb.onCancel(task.id) });
-    if (s === "Failed" || s === "Stopped")
+    if (s === "Failed" || s === "Cancelled" || s === "Stopped")
       items.push({ label: "Retry", icon: "retry", action: () => cb.onRetry(task.id) });
     if (items.length) items.push({ separator: true });
     items.push({ label: "Copy URL", icon: "copy", action: () => cb.onCopyUrl(task.url) });
     if (s === "Complete") {
+      items.push({ label: "Open file", icon: "external", action: () => cb.onOpenFile(task.id) });
       items.push({ label: "Open folder", icon: "folderOpen", action: () => cb.onOpenFolder(task.id) });
+      items.push({ label: "Copy path", icon: "copy", action: () => cb.onCopyPath(task) });
+      items.push({ label: "Redownload", icon: "retry", action: () => cb.onRedownload(task.id) });
       items.push({ label: "Delete file", icon: "trash", danger: true, action: () => cb.onDeleteFile(task.id, name) });
     }
+    items.push({ separator: true });
+    items.push({ label: "Move up", icon: "arrowUp", action: () => cb.onMove(task.id, -1) });
+    items.push({ label: "Move down", icon: "arrowDown", action: () => cb.onMove(task.id, 1) });
     items.push({ separator: true });
     items.push({ label: "Remove from list", icon: "x", danger: true, action: () => cb.onRemove(task.id) });
     return items;
@@ -187,6 +214,7 @@ const Components = {
 
   _rowActions(task) {
     const s = task.state;
+    const active = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
     let html = "";
     if (s === "Downloading")
       html += `<button class="icon-btn" data-act="pause" data-tip="Pause" aria-label="Pause download">${Utils.icon("pause", 15)}</button>`;
@@ -194,10 +222,12 @@ const Components = {
       html += `<button class="icon-btn accent" data-act="resume" data-tip="Resume" aria-label="Resume download">${Utils.icon("play", 15)}</button>`;
     if (s === "Queued")
       html += `<button class="icon-btn accent" data-act="start" data-tip="Start now" aria-label="Start download now">${Utils.icon("play", 15)}</button>`;
-    if (s === "Failed" || s === "Stopped")
+    if (s === "Failed" || s === "Cancelled" || s === "Stopped")
       html += `<button class="icon-btn accent" data-act="retry" data-tip="Retry" aria-label="Retry download">${Utils.icon("retry", 15)}</button>`;
-    if (s === "Downloading" || s === "Paused" || s === "Queued")
+    if (active.includes(s) || s === "Paused" || s === "Queued")
       html += `<button class="icon-btn" data-act="cancel" data-tip="Cancel" aria-label="Cancel download">${Utils.icon("x", 15)}</button>`;
+    if (s === "Complete")
+      html += `<button class="icon-btn" data-act="openfile" data-tip="Open file" aria-label="Open file">${Utils.icon("external", 15)}</button>`;
     if (s === "Complete")
       html += `<button class="icon-btn" data-act="folder" data-tip="Open folder" aria-label="Open containing folder">${Utils.icon("folderOpen", 15)}</button>`;
     html += `<button class="icon-btn" data-act="more" data-tip="More actions" aria-label="More actions">${Utils.icon("more", 15)}</button>`;
@@ -259,6 +289,7 @@ const Components = {
       else if (act === "start") cb.onStart(task.id);
       else if (act === "cancel") cb.onCancel(task.id);
       else if (act === "retry") cb.onRetry(task.id);
+      else if (act === "openfile") cb.onOpenFile(task.id);
       else if (act === "folder") cb.onOpenFolder(task.id);
       else if (act === "more") {
         const r = btn.getBoundingClientRect();

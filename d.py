@@ -141,9 +141,36 @@ def main() -> None:
         console.print(f"[green]Extension ready at {ext}[/green]")
         sys.exit(0)
 
+    # ---- Single instance guard for the real running modes -----------------
+    # A second launch must not become a competing instance (which could write
+    # the same .part files / task DB).  If it carries a URL, try to hand it to
+    # the running instance's local relay instead.
+    from core.single_instance import (
+        acquire_single_instance,
+        forward_url,
+        release_single_instance,
+    )
+    from config.loader import config_dir
+
+    if not acquire_single_instance(config_dir()):
+        if args.url:
+            url = normalize_url(args.url)
+            if forward_url(config.live_server_port, config.live_server_token, url):
+                console.print("[green]Sent to the running N13 instance.[/green]")
+                sys.exit(0)
+        console.print("[yellow]N13 is already running. This instance will not start.[/yellow]")
+        sys.exit(1)
+
+    try:
+        _run(config, args, session)
+    finally:
+        release_single_instance()
+        session.close()
+
+
+def _run(config: AppConfig, args: argparse.Namespace, session: SessionManager) -> None:
     if args.gui:
         launch_app(config, session)
-        session.close()
         return
 
     if args.url_file:
@@ -173,6 +200,7 @@ def main() -> None:
         if args.from_browser:
             console.print(f"[cyan]Browser download: {args.url}[/cyan]\n")
 
+
         controller = DownloadController(config, session, console.print)
         download_dir = Path(args.dir) if args.dir else Path(config.download_dir)
         success = controller.download_file(
@@ -185,7 +213,8 @@ def main() -> None:
         sys.exit(0 if success else 1)
 
     try:
-        interactive_mode(config, session, ROOT)
+        from core.paths import user_data_dir
+        interactive_mode(config, session, user_data_dir())
     except (KeyboardInterrupt, EOFError):
         # Prompts from optional flows (file import, browser setup, etc.) may
         # raise outside the menu loop.  Treat them as a normal clean exit.

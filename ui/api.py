@@ -7,8 +7,6 @@ import logging
 import os
 import queue
 import subprocess
-import threading
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -48,17 +46,96 @@ class Api:
         self._bw_history: List[float] = []
         self._net_baseline: Optional[tuple[int, int]] = None
         self._net_baseline_time: float = 0.0
+        self._shutdown_done: bool = False
 
-        data_dir = Path(__file__).resolve().parent.parent / "saved_links"
+        from core.paths import data_dir, migrate_legacy_saved_links
+
+        # Migrate any legacy project-relative saved_links/ into the per-user
+        # data directory (idempotent, originals preserved).
+        project_root = Path(__file__).resolve().parent.parent
+        migrate_legacy_saved_links(project_root)
+
         runner = LegacyDownloadRunner(config, session, log=self._log)
-        self._manager = TaskManager(runner, data_dir, max_concurrent=getattr(config, "max_concurrent", 3))
+        self._manager = TaskManager(
+            runner,
+            data_dir(),
+            max_concurrent=getattr(config, "max_concurrent", 3),
+            config=config,
+        )
         self._manager.subscribe(self._on_task_event)
+
+        # Scheduler: queue window gating + night speed override.
+        from core.scheduler import Scheduler
+        self._scheduler = Scheduler(
+            config,
+            on_gate=self._manager.set_scheduler_gate,
+            on_speed=self._apply_scheduled_speed,
+            logger=log,
+        )
+        self._scheduler.start()
+
+        # Optional clipboard monitor (off by default).
+        self._clipboard = None
+        self._sync_clipboard_monitor()
+
+        # Auto-start the loopback relay so browser integration is ready and a
+        # second launch can forward URLs to this instance.  Best-effort: a
+        # busy port simply means forwarding falls back to a friendly message.
+        if getattr(config, "auto_start_server", True):
+            try:
+                self.start_live_server()
+            except Exception:
+                pass
+
+    def _sync_clipboard_monitor(self) -> None:
+        """Start/stop the clipboard monitor to match the config."""
+        try:
+            enabled = bool(getattr(self._config, "clipboard_monitor", False))
+            if enabled and self._clipboard is None:
+                from core.clipboard import ClipboardMonitor
+                self._clipboard = ClipboardMonitor(
+                    self._on_clipboard_url, logger=log
+                )
+                self._clipboard.start()
+            elif not enabled and self._clipboard is not None:
+                self._clipboard.stop()
+                self._clipboard = None
+        except Exception:
+            self._clipboard = None
+
+    def _on_clipboard_url(self, url: str) -> None:
+        """A downloadable URL was copied while monitoring is on."""
+        url = normalize_url(url)
+        if not validate_url(url):
+            return
+        if getattr(self._config, "clipboard_autostart", False):
+            try:
+                self.add_download(url)
+                self._event_queue.put_nowait({"type": "toast",
+                                              "title": "Download started",
+                                              "message": url[:80]})
+            except Exception:
+                pass
+        else:
+            self._event_queue.put_nowait({"type": "clipboard_url", "url": url})
+
+    def _apply_scheduled_speed(self, bps: int) -> None:
+        """Apply a scheduler-chosen bandwidth cap without mutating config."""
+        try:
+            from core.throttle import set_schedule_override, sync_limiter_from_config
+            set_schedule_override(bps)
+            sync_limiter_from_config(self._config)
+        except Exception:
+            pass
 
     def set_window(self, window) -> None:
         self._window = window
         try:
             window.events.maximized += self._on_win_maximized
             window.events.restored += self._on_win_restored
+            # Fires before the window closes (title-bar X, Alt+F4, OS close).
+            # Cleanup happens BEFORE the window is destroyed.
+            window.events.closing += self._on_closing
         except Exception:
             pass
 
@@ -102,19 +179,50 @@ class Api:
     def clear_history(self) -> None:
         self._manager.clear_history()
 
+    def remove_history_entry(self, task_id: str) -> None:
+        self._manager.remove_history(task_id)
+
     def get_download(self, task_id: str) -> Optional[Dict[str, Any]]:
         snap = self._manager.get(task_id)
         return snap.to_dict() if snap else None
 
     # ── Download actions ──────────────────────────────────────────
 
-    def add_download(self, url: str, directory: str = "", label: str = "", checksum: str = "", autostart: bool = True) -> str:
-        directory = directory or self._config.download_dir
-        request = DownloadRequest(url=url, directory=directory, checksum=checksum, label=label)
+    def _category_for_hint(self, hint: str, content_type: str = "") -> str:
+        """Auto-detect a category from a filename/URL hint when enabled."""
+        from core.analyzer import detect_category
+        if not getattr(self._config, "auto_categorize", True):
+            return "General"
+        ext_map = getattr(self._config, "category_extensions", None) or {}
+        return detect_category(hint, content_type, ext_map=ext_map)
+
+    def _resolve_directory(self, directory: str, category: str, hint: str) -> str:
+        """Pick the destination: explicit dir, else per-category override."""
+        if directory:
+            return directory
+        base = self._config.download_dir
+        cat = category or self._category_for_hint(hint)
+        return self._config.resolve_category_dir(cat, base) or base
+
+    def add_download(self, url: str, directory: str = "", label: str = "",
+                     checksum: str = "", autostart: bool = True,
+                     category: str = "") -> str:
+        hint = label or url
+        cat = category or self._category_for_hint(hint)
+        resolved = self._resolve_directory(directory, cat, hint)
+        request = DownloadRequest(
+            url=url, directory=resolved, checksum=checksum, label=label, category=cat,
+        )
         return self._manager.add(request, autostart=autostart)
 
     def add_batch(self, urls: List[str], directory: str) -> int:
-        requests = [DownloadRequest(url=u, directory=directory) for u in urls if u.strip()]
+        requests = []
+        for u in urls:
+            if not u.strip():
+                continue
+            cat = self._category_for_hint(u)
+            resolved = self._resolve_directory(directory, cat, u)
+            requests.append(DownloadRequest(url=u, directory=resolved, category=cat))
         if not requests:
             return 0
         self._manager.add_many(requests, autostart=False)
@@ -139,6 +247,21 @@ class Api:
     def clear_finished(self) -> None:
         self._manager.clear_finished()
 
+    def clear_failed(self) -> int:
+        return self._manager.clear_failed()
+
+    def clear_completed(self) -> int:
+        return self._manager.clear_completed()
+
+    def retry_failed(self) -> int:
+        return self._manager.retry_failed()
+
+    def move_task(self, task_id: str, delta: int) -> None:
+        self._manager.move_task(task_id, int(delta))
+
+    def set_priority(self, task_id: str, priority: int) -> None:
+        self._manager.set_priority(task_id, int(priority))
+
     def pause_all(self) -> None:
         self._manager.pause_all()
 
@@ -153,6 +276,25 @@ class Api:
         if snap and os.path.isdir(snap.request.directory):
             subprocess.Popen(["explorer", snap.request.directory])
 
+    def open_file(self, task_id: str) -> bool:
+        """Open the downloaded file with its default application."""
+        snap = self._manager.get(task_id)
+        if not snap:
+            return False
+        name = snap.filename or snap.name
+        path = os.path.join(snap.request.directory, name)
+        try:
+            if os.path.isfile(path):
+                os.startfile(path)  # type: ignore[attr-defined]
+                return True
+            return False
+        except OSError:
+            return False
+
+    def redownload(self, task_id: str) -> None:
+        """Re-queue a task (works for failed/cancelled/completed)."""
+        self._manager.retry_task(task_id)
+
     def open_path(self, path: str) -> bool:
         """Open an arbitrary directory in Explorer (history page)."""
         try:
@@ -160,6 +302,19 @@ class Api:
                 subprocess.Popen(["explorer", path])
                 return True
         except Exception:
+            pass
+        return False
+
+    def open_file_from_history(self, entry: Dict[str, Any]) -> bool:
+        """Open a history entry's file with its default application."""
+        try:
+            name = (entry or {}).get("name") or ""
+            directory = (entry or {}).get("directory") or ""
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                os.startfile(path)  # type: ignore[attr-defined]
+                return True
+        except OSError:
             pass
         return False
 
@@ -183,9 +338,7 @@ class Api:
         snap = self._manager.get(task_id)
         if not snap:
             return False
-        import os
-        from core.utils import filename_from_url
-        name = snap.request.label or filename_from_url(snap.request.url)
+        name = snap.filename or snap.name
         if not name:
             return False
         file_path = os.path.join(snap.request.directory, name)
@@ -227,6 +380,21 @@ class Api:
             "normalized": url,
         }
 
+    def analyze_url(self, url: str) -> Dict[str, Any]:
+        """Full pre-download analysis (filename, size, server, media detection)."""
+        from core.analyzer import analyze_url as _analyze
+        url = normalize_url(url or "")
+        if not validate_url(url):
+            return {"ok": False, "error": "Enter a valid http(s) URL"}
+        try:
+            a = _analyze(url, self._config, self._session, timeout=12)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        result = a.to_dict()
+        result["normalized"] = url
+        result["size_display"] = human_size(a.total_size) if a.total_size else ""
+        return result
+
     # ── Settings ──────────────────────────────────────────────────
 
     def get_settings(self) -> Dict[str, Any]:
@@ -235,8 +403,8 @@ class Api:
         for k, v in d.items():
             if isinstance(v, (str, int, float, bool)) or v is None:
                 result[k] = v
-            elif isinstance(v, (list, tuple)):
-                result[k] = list(v)
+            elif isinstance(v, (list, tuple, dict)):
+                result[k] = v
             else:
                 result[k] = str(v)
         return result
@@ -251,6 +419,8 @@ class Api:
                     setattr(self._config, k, int(v))
                 elif isinstance(current, float):
                     setattr(self._config, k, float(v))
+                elif isinstance(current, (dict, list)):
+                    setattr(self._config, k, v)
                 else:
                     setattr(self._config, k, v)
         save_config(self._config)
@@ -260,6 +430,7 @@ class Api:
             pass
         from core.throttle import sync_limiter_from_config
         sync_limiter_from_config(self._config)
+        self._sync_clipboard_monitor()
         if "max_concurrent" in settings:
             try:
                 self._manager.set_max_concurrent(int(self._config.max_concurrent))
@@ -318,11 +489,8 @@ class Api:
             pass
 
     def window_close(self) -> None:
-        if self._window:
-            try:
-                self._window.destroy()
-            except Exception:
-                pass
+        """Frameless X button: run the full safe shutdown, then destroy."""
+        self.shutdown()
 
     def window_set_bounds(self, x: int, y: int, width: int, height: int) -> None:
         """Move + resize from the JS frameless border-drag handler."""
@@ -425,6 +593,30 @@ class Api:
             "token": self._config.live_server_token[:12] + "...",
         }
 
+    def scheduler_status(self) -> Dict[str, Any]:
+        """Scheduler state (enabled, current gate, active speed cap)."""
+        try:
+            from core.throttle import get_global_limiter
+            limiter = get_global_limiter()
+            speed = limiter.max_rate if limiter else 0
+        except Exception:
+            speed = 0
+        return {
+            "enabled": bool(getattr(self._config, "scheduler_enabled", False)),
+            "start_time": self._config.schedule_start_time,
+            "stop_time": self._config.schedule_stop_time,
+            "night_cap_bps": int(getattr(self._config, "night_speed_limit_bps", 0) or 0),
+            "night_start": self._config.night_start_time,
+            "night_end": self._config.night_end_time,
+            "current_speed_bps": speed,
+        }
+
+    def clipboard_status(self) -> Dict[str, Any]:
+        return {
+            "monitoring": bool(getattr(self._config, "clipboard_monitor", False)),
+            "autostart": bool(getattr(self._config, "clipboard_autostart", False)),
+        }
+
     def create_extension(self) -> str:
         from browser.protocol import create_chrome_extension
         ext_dir = create_chrome_extension()
@@ -445,10 +637,17 @@ class Api:
         from browser.protocol import unregister_protocol
         return unregister_protocol()
 
-    def _browser_callback(self, url: str) -> bool:
+    def _browser_callback(self, url: str, autostart: bool = False) -> bool:
         url = normalize_url(url)
         if validate_url(url):
-            self._event_queue.put_nowait({"type": "browser_url", "url": url})
+            if autostart:
+                # Single-instance forwarding: add directly to the queue.
+                self.add_download(url)
+                self._event_queue.put_nowait({"type": "toast",
+                                              "title": "Download added",
+                                              "message": url[:80]})
+            else:
+                self._event_queue.put_nowait({"type": "browser_url", "url": url})
         return True
 
     # ── Version ───────────────────────────────────────────────────
@@ -461,13 +660,54 @@ class Api:
             return "2.0.0"
 
     # ── Shutdown ──────────────────────────────────────────────────
+    # One authoritative shutdown path.  It is idempotent and thread-safe, and
+    # is invoked by BOTH the frameless X button (window_close) and the
+    # pywebview ``closing`` event (covers the OS title bar close / Alt+F4).
 
     def shutdown(self) -> None:
-        from core.context import DownloadContext
-        DownloadContext.request_cancel()
-        self._manager.shutdown(cancel=True, wait=True, timeout=2.5)
+        """Full safe shutdown: stop transfers, persist, cleanup, destroy window."""
+        self._cleanup()
+        if self._window:
+            try:
+                self._window.destroy()
+            except Exception:
+                pass
+
+    def _on_closing(self) -> None:
+        """pywebview ``closing`` event: cleanup only; the window closes itself."""
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Idempotent, thread-safe teardown shared by both close paths."""
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        try:
+            if getattr(self, "_scheduler", None) is not None:
+                self._scheduler.stop()
+        except Exception:
+            pass
+        # Graceful exit: pause transfers, persist their resumable state, then
+        # cancel the paused workers so the process can terminate promptly.
+        try:
+            self._manager.prepare_for_exit()
+        except Exception:
+            pass
         self.stop_live_server()
-        save_config(self._config)
+        if getattr(self, "_clipboard", None) is not None:
+            try:
+                self._clipboard.stop()
+            except Exception:
+                pass
+            self._clipboard = None
+        try:
+            save_config(self._config)
+        except Exception:
+            pass
+        try:
+            self._manager.close()
+        except Exception:
+            pass
         try:
             self._session.close()
         except Exception:

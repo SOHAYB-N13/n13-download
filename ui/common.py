@@ -1,49 +1,31 @@
 """Shared state management, persistence, and formatting for N13 UI layers.
 
-Race-condition fixes and improvements in this rewrite
-=====================================================
-1.  _worker() decrement of _active is now guarded in a finally block so a
-    crashed runner can never leave the active counter stuck at a high value
-    (which would permanently block new downloads from starting).
+This is the queue layer for both the TUI and the GUI.  It now sits on top of
+:class:`core.task.DownloadTask` (a strict state machine) and persists every
+transition to :class:`core.store.TaskStore` (SQLite), replacing the old
+``gui_queue.json``/``gui_history.json`` pair.
 
-2.  cancel_task() for QUEUED tasks now transitions directly to STOPPED in one
-    atomic block — no window where the task could be picked up by _start_next()
-    between the state read and the state write.
-
-3.  retry_task() rebuilds TaskControl and resets SpeedMeter inside the lock
-    before releasing it, so no worker can observe a half-reset record.
-
-4.  remove_task() for an ACTIVE task: sets the removed flag and calls
-    cancel_task() under a single logical sequence; the worker's finally block
-    handles the "removed" event emission, eliminating the double-emit race.
-
-5.  update_progress() now coalesces rapid updates: it only emits an event when
-    at least 120 ms have elapsed or the download is 100% complete, preventing
-    event floods that caused Tkinter queue back-pressure.
-
-6.  set_max_concurrent() clamps to [1, 20] and immediately calls _start_next()
-    so raising the limit mid-session unblocks waiting tasks without any delay.
-
-7.  _save_queue_locked() uses a non-blocking try/except so a full disk or
-    permission error never crashes the manager thread.
-
-8.  History is capped at 500 entries (up from 200) and persisted atomically.
-
-9.  SpeedMeter.update() is now monotonic-safe: it ignores backward jumps in
-    completed byte count (can happen on cancel+resume).
-
-10. TaskSnapshot.to_dict() added for convenient serialisation by the GUI.
+Design invariants
+=================
+1. A task has exactly one ``DownloadTask.status`` — no scattered boolean flags.
+2. Every state change is validated against the state-machine transition table;
+   the worker thread uses ``force_status`` *only* when recording a terminal
+   outcome, never for normal progression.
+3. Pause/cancel is per-task (``core.control.TaskControl``) — the old process
+   global ``DownloadContext`` is no longer shared between concurrent tasks.
+4. All persistence writes are best-effort (a disk-full / permission error must
+   never crash a worker or the manager thread).
 """
+
 from __future__ import annotations
 
-import enum
 import json
 import logging
 import os
 import queue as _queue_module
+import re
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +34,21 @@ from urllib.parse import unquote, urlparse
 
 from rich.console import Console
 
+from core.control import TaskCancelled, TaskControl
+from core.store import TaskStore
+from core.task import (
+    ACTIVE_STATES,
+    TERMINAL_STATES,
+    DownloadTask,
+    TaskStatus,
+    TransitionError,
+    is_terminal,
+    normalize_status,
+)
+
+# Re-export for callers that reference the legacy name (ui.api etc.).
+TaskState = TaskStatus
+
 
 # ---------------------------------------------------------------------------
 # Console helpers
@@ -59,16 +56,28 @@ from rich.console import Console
 
 _con: Optional[Console] = None
 
+
 def _get_console() -> Console:
     global _con
     if _con is None:
         _con = Console()
     return _con
 
-def _ok(msg: str)   -> None: _get_console().print(f"  [bold green]✔[/bold green]  {msg}")
-def _warn(msg: str) -> None: _get_console().print(f"  [bold yellow]⚠[/bold yellow]  {msg}")
-def _err(msg: str)  -> None: _get_console().print(f"  [bold red]✖[/bold red]  {msg}")
-def _info(msg: str) -> None: _get_console().print(f"  [dim]ℹ[/dim]  {msg}")
+
+def _ok(msg: str) -> None:
+    _get_console().print(f"  [bold green]✔[/bold green]  {msg}")
+
+
+def _warn(msg: str) -> None:
+    _get_console().print(f"  [bold yellow]⚠[/bold yellow]  {msg}")
+
+
+def _err(msg: str) -> None:
+    _get_console().print(f"  [bold red]✖[/bold red]  {msg}")
+
+
+def _info(msg: str) -> None:
+    _get_console().print(f"  [dim]ℹ[/dim]  {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +110,21 @@ def _as_int(value: object, default: int = 0) -> int:
         return int(value)  # type: ignore[arg-type]
     except Exception:
         return default
+
+
+def name_from_url(url: str, label: str = "") -> str:
+    """Best-effort file name from a URL (used when no server filename yet)."""
+    if label:
+        return label
+    try:
+        path = unquote(urlparse(url).path or "")
+        name = Path(path).name
+        if name:
+            return name
+    except Exception:
+        pass
+    netloc = urlparse(url).netloc
+    return netloc if netloc else url
 
 
 # ---------------------------------------------------------------------------
@@ -146,35 +170,8 @@ def setup_logging(
 
 
 # ---------------------------------------------------------------------------
-# Task model
+# Task model (UI-facing snapshot)
 # ---------------------------------------------------------------------------
-
-class TaskState(str, enum.Enum):
-    QUEUED      = "Queued"
-    DOWNLOADING = "Downloading"
-    PAUSED      = "Paused"
-    STOPPING    = "Stopping"
-    STOPPED     = "Stopped"
-    FAILED      = "Failed"
-    COMPLETED   = "Complete"
-
-
-TERMINAL_STATES: frozenset[TaskState] = frozenset({
-    TaskState.STOPPED,
-    TaskState.FAILED,
-    TaskState.COMPLETED,
-})
-
-ACTIVE_STATES: frozenset[TaskState] = frozenset({
-    TaskState.DOWNLOADING,
-    TaskState.PAUSED,
-    TaskState.STOPPING,
-})
-
-
-class TaskCancelled(Exception):
-    """Raised by runners when a task is cancelled."""
-
 
 @dataclass(frozen=True)
 class DownloadRequest:
@@ -182,24 +179,20 @@ class DownloadRequest:
     directory: str
     checksum: str = ""
     label: str = ""
+    category: str = "General"
+    priority: int = 5
+    speed_limit_bps: int = 0
 
     @property
     def name(self) -> str:
-        if self.label:
-            return self.label
-        path = unquote(urlparse(self.url).path or "")
-        name = Path(path).name
-        if name:
-            return name
-        netloc = urlparse(self.url).netloc
-        return netloc if netloc else self.url
+        return name_from_url(self.url, self.label)
 
 
 @dataclass
 class TaskSnapshot:
     id: str
     request: DownloadRequest
-    state: TaskState
+    state: TaskStatus
     completed: int = 0
     total: int = 0
     speed_bps: float = 0.0
@@ -207,6 +200,17 @@ class TaskSnapshot:
     error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    # Extended task metadata.
+    priority: int = 5
+    retry_count: int = 0
+    connections: int = 1
+    content_type: str = ""
+    server: str = ""
+    supports_range: bool = False
+    category: str = "General"
+    average_speed: float = 0.0
+    filename: str = ""
+    started_at: Optional[float] = None
 
     @property
     def name(self) -> str:
@@ -233,114 +237,17 @@ class TaskSnapshot:
             "error": self.error,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
+            "priority": self.priority,
+            "retry_count": self.retry_count,
+            "connections": self.connections,
+            "content_type": self.content_type,
+            "server": self.server,
+            "supports_range": bool(self.supports_range),
+            "category": self.category,
+            "average_speed": self.average_speed,
+            "filename": self.filename,
+            "started_at": self.started_at,
         }
-
-
-class TaskControl:
-    """Cooperative pause/cancel signalling passed to download runners."""
-
-    def __init__(self) -> None:
-        self._pause = threading.Event()
-        self._cancel = threading.Event()
-
-    def pause(self) -> None:
-        self._pause.set()
-
-    def resume(self) -> None:
-        self._pause.clear()
-
-    def cancel(self) -> None:
-        self._cancel.set()
-        self._pause.clear()   # unblock any waiting pause
-
-    @property
-    def paused(self) -> bool:
-        return self._pause.is_set()
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancel.is_set()
-
-    def wait_if_paused(self, timeout: float = 0.2) -> None:
-        while self._pause.is_set() and not self._cancel.is_set():
-            time.sleep(timeout)
-
-    def raise_if_cancelled(self) -> None:
-        if self._cancel.is_set():
-            raise TaskCancelled()
-
-
-# ---------------------------------------------------------------------------
-# Speed meter
-# ---------------------------------------------------------------------------
-
-class SpeedMeter:
-    """Exponentially-weighted moving-average speed with stale decay."""
-
-    def __init__(self, alpha: float = 0.35, stale_after: float = 2.0) -> None:
-        self._alpha = alpha
-        self._stale_after = stale_after
-        self._lock = threading.Lock()
-        self.reset()
-
-    def reset(self) -> None:
-        with self._lock:
-            self._last_bytes: Optional[int] = None
-            self._last_time: Optional[float] = None
-            self._speed: float = 0.0
-            self._last_update: float = 0.0
-
-    def update(self, completed: int, now: Optional[float] = None) -> float:
-        """Record *completed* total bytes; return smoothed speed (B/s)."""
-        now = now or time.monotonic()
-        completed = max(0, int(completed))
-
-        with self._lock:
-            if self._last_bytes is None:
-                self._last_bytes = completed
-                self._last_time = now
-                self._speed = 0.0
-                self._last_update = now
-                return 0.0
-
-            # Ignore backward jumps (cancel+resume can reset completed to 0).
-            if completed < self._last_bytes:
-                self._last_bytes = completed
-                self._last_time = now
-                self._speed = 0.0
-                self._last_update = now
-                return 0.0
-
-            elapsed = now - (self._last_time or now)
-            if elapsed < 0.05:
-                self._last_update = now
-                return self._speed
-
-            delta = completed - self._last_bytes
-            instant = max(0.0, delta / elapsed)
-
-            if self._speed <= 0.0:
-                self._speed = instant
-            else:
-                self._speed = self._alpha * instant + (1.0 - self._alpha) * self._speed
-
-            self._last_bytes = completed
-            self._last_time = now
-            self._last_update = now
-            return self._speed
-
-    @property
-    def speed(self) -> float:
-        with self._lock:
-            if self._last_update and (time.monotonic() - self._last_update > self._stale_after):
-                return 0.0
-            return self._speed
-
-    def eta(self, completed: int, total: int) -> Optional[float]:
-        spd = self.speed
-        if total > 0 and total > completed and spd > 1.0:
-            return max(0.0, (total - completed) / spd)
-        return None
 
 
 ProgressCallback = Callable[[int, int], None]
@@ -348,13 +255,22 @@ TaskListener = Callable[[str, "TaskSnapshot"], None]
 
 
 class DownloadRunner(Protocol):
-    def run(
+    """Runners that execute one task's analyze + transfer phases."""
+
+    def analyze(self, task_id: str, request: DownloadRequest, control: TaskControl) -> Any:
+        ...  # pragma: no cover
+
+    def download(
         self,
         task_id: str,
         request: DownloadRequest,
+        analysis: Any,
         progress: ProgressCallback,
         control: TaskControl,
-    ) -> bool: ...
+        status_callback: Optional[Callable[[str], None]] = None,
+        path_callback: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        ...  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -363,19 +279,18 @@ class DownloadRunner(Protocol):
 
 @dataclass
 class _TaskRecord:
-    id: str
-    request: DownloadRequest
-    state: TaskState = TaskState.QUEUED
-    completed: int = 0
-    total: int = 0
-    error: str = ""
-    created_at: float = field(default_factory=time.time)
-    finished_at: Optional[float] = None
+    task: DownloadTask
     control: TaskControl = field(default_factory=TaskControl)
-    speed: SpeedMeter = field(default_factory=SpeedMeter)
     removed: bool = False
     last_emit: float = 0.0
     thread: Optional[threading.Thread] = None
+    # Set during app shutdown so the worker finalize preserves the persisted
+    # resumable state instead of marking the task CANCELLED.
+    shutting_down: bool = False
+
+    @property
+    def id(self) -> str:
+        return self.task.id
 
 
 # ---------------------------------------------------------------------------
@@ -393,8 +308,7 @@ class TaskManager:
     Events: added | started | progress | updated | finished | removed
     """
 
-    _HISTORY_LIMIT = 500
-    _PROGRESS_EMIT_INTERVAL = 0.12   # seconds between progress events
+    _PROGRESS_EMIT_INTERVAL = 0.12  # seconds between progress events
 
     def __init__(
         self,
@@ -402,26 +316,36 @@ class TaskManager:
         storage_dir: Path,
         max_concurrent: int = 1,
         logger: Optional[logging.Logger] = None,
+        config=None,
     ) -> None:
         self._runner = runner
+        self._config = config
         self._storage_dir = Path(storage_dir)
         self._storage_dir.mkdir(parents=True, exist_ok=True)
-        self._queue_file   = self._storage_dir / "gui_queue.json"
+        self._store = TaskStore(self._storage_dir / "downloads.db")
+        # Legacy JSON files, used only as a one-time migration source.
+        self._queue_file = self._storage_dir / "gui_queue.json"
         self._history_file = self._storage_dir / "gui_history.json"
 
         self._max_concurrent = max(1, int(max_concurrent))
         self._logger = logger or logging.getLogger("n13")
 
-        self._lock      = threading.RLock()
-        self._tasks:    Dict[str, _TaskRecord] = {}
-        self._order:    List[str] = []
+        self._lock = threading.RLock()
+        self._tasks: Dict[str, _TaskRecord] = {}
+        self._order: List[str] = []
         self._listeners: Set[TaskListener] = set()
-        self._active    = 0
-        self._closed    = False
+        self._active = 0
+        self._closed = False
         self._global_pause = False
+        self._scheduler_gate = False
 
         self.history: List[Dict[str, Any]] = self._load_history()
         self._restore_queue()
+        # Crash recovery: validate partial files and requeue unfinished tasks.
+        self.recover_unfinished()
+        # Optionally continue restored downloads immediately.
+        if config is not None and bool(getattr(config, "resume_on_startup", False)):
+            self._start_next()
 
     # ------------------------------------------------------------------
     # Observer
@@ -429,14 +353,13 @@ class TaskManager:
 
     def subscribe(self, listener: TaskListener) -> Callable[[], None]:
         self._listeners.add(listener)
+
         def _unsub() -> None:
             self._listeners.discard(listener)
+
         return _unsub
 
     def _emit(self, event: str, snapshot: TaskSnapshot) -> None:
-        # Snapshot the listener set before iterating — a listener is permitted
-        # to call unsubscribe() inside its callback without causing a
-        # RuntimeError from set modification during iteration.
         for fn in list(self._listeners):
             try:
                 fn(event, snapshot)
@@ -447,19 +370,41 @@ class TaskManager:
     # Snapshot helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _request_for(task: DownloadTask) -> DownloadRequest:
+        return DownloadRequest(
+            url=task.url,
+            directory=task.directory,
+            checksum=task.checksum,
+            label=task.label,
+            category=task.category,
+            priority=task.priority,
+            speed_limit_bps=task.speed_limit_bps,
+        )
+
     def _snap(self, rec: _TaskRecord) -> TaskSnapshot:
-        """Build a snapshot from a record. Caller must hold self._lock."""
+        t = rec.task
         return TaskSnapshot(
-            id=rec.id,
-            request=rec.request,
-            state=rec.state,
-            completed=rec.completed,
-            total=rec.total,
-            speed_bps=rec.speed.speed,
-            eta_seconds=rec.speed.eta(rec.completed, rec.total),
-            error=rec.error,
-            created_at=rec.created_at,
-            finished_at=rec.finished_at,
+            id=t.id,
+            request=self._request_for(t),
+            state=t.status,
+            completed=t.downloaded_size,
+            total=t.total_size,
+            speed_bps=t.current_speed,
+            eta_seconds=t.eta_seconds,
+            error=t.error,
+            created_at=t.created_at,
+            finished_at=t.completed_at,
+            priority=t.priority,
+            retry_count=t.retry_count,
+            connections=t.connections,
+            content_type=t.content_type,
+            server=t.server,
+            supports_range=t.supports_range,
+            category=t.category,
+            average_speed=t.average_speed,
+            filename=t.filename,
+            started_at=t.started_at,
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -483,12 +428,15 @@ class TaskManager:
         wanted = set(task_ids) if task_ids is not None else None
         states = set(ACTIVE_STATES)
         if include_queued:
-            states.add(TaskState.QUEUED)
+            states.add(TaskStatus.QUEUED)
         with self._lock:
-            for rec in self._tasks.values():
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if not rec:
+                    continue
                 if wanted is not None and rec.id not in wanted:
                     continue
-                if rec.state in states:
+                if rec.task.status in states:
                     return True
         return False
 
@@ -505,18 +453,31 @@ class TaskManager:
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             if not allow_duplicate:
-                for rec in self._tasks.values():
+                for tid in self._order:
+                    rec = self._tasks.get(tid)
                     if (
-                        rec.request.url == request.url
-                        and rec.request.directory == request.directory
-                        and rec.state not in TERMINAL_STATES
+                        rec is not None
+                        and rec.task.url == request.url
+                        and rec.task.directory == request.directory
+                        and not is_terminal(rec.task.status)
                     ):
                         return rec.id
-            task_id = uuid.uuid4().hex[:10]
-            rec = _TaskRecord(id=task_id, request=request)
+            task = DownloadTask(
+                url=request.url,
+                directory=request.directory,
+                checksum=request.checksum,
+                label=request.label,
+                category=self._resolve_category(request),
+                priority=request.priority,
+                speed_limit_bps=request.speed_limit_bps,
+                filename=request.label,
+                autostart=autostart,
+            )
+            task_id = task.id
+            rec = _TaskRecord(task=task)
             self._tasks[task_id] = rec
             self._order.append(task_id)
-            self._save_queue_locked()
+            self._save_task_locked(rec)
             events.append(("added", self._snap(rec)))
 
         for ev, sn in events:
@@ -524,6 +485,27 @@ class TaskManager:
         if autostart:
             self._start_next()
         return task_id
+
+    def _detect_category(self, request: DownloadRequest) -> str:
+        """Auto-assign a category from the request when enabled."""
+        if self._config is None or not getattr(self._config, "auto_categorize", True):
+            return "General"
+        from core.analyzer import detect_category
+
+        hint = request.label or name_from_url(request.url)
+        ext_map = getattr(self._config, "category_extensions", None) or {}
+        return detect_category(hint, "", ext_map=ext_map)
+
+    def _resolve_category(self, request: DownloadRequest) -> str:
+        """Category for a new task.
+
+        ``"General"`` is the *unset* default (the Add dialog passes the real
+        category explicitly when it knows one), so an unset category falls back
+        to auto-detection when ``auto_categorize`` is enabled.
+        """
+        if request.category and request.category != "General":
+            return request.category
+        return self._detect_category(request)
 
     def add_many(
         self,
@@ -537,21 +519,17 @@ class TaskManager:
         self._start_next()
 
     def start_task(self, task_id: str) -> None:
-        """Start a specific QUEUED task (no-op for other states).
-
-        The task is moved to the front of the queue so "Start now" on a card
-        really starts THAT task next, not whatever happens to be oldest.
-        """
+        """Start a specific QUEUED task (no-op for other states)."""
         with self._lock:
             rec = self._tasks.get(task_id)
-            if not rec or rec.state != TaskState.QUEUED:
+            if not rec or rec.task.status != TaskStatus.QUEUED:
                 return
             try:
                 self._order.remove(task_id)
             except ValueError:
                 pass
             self._order.insert(0, task_id)
-            self._save_queue_locked()
+            self._save_order_locked()
         self._start_next()
 
     @property
@@ -560,48 +538,131 @@ class TaskManager:
             return self._max_concurrent
 
     def set_max_concurrent(self, value: int) -> None:
-        """Change the concurrent download limit and immediately unblock queued tasks."""
         with self._lock:
             self._max_concurrent = max(1, min(20, int(value)))
         self._start_next()
+
+    # ── Priority / ordering ──────────────────────────────────────────
+
+    def set_priority(self, task_id: str, priority: int) -> None:
+        """Set a task's priority (0 = highest, 10 = lowest)."""
+        event: Optional[tuple[str, TaskSnapshot]] = None
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            if rec:
+                rec.task.priority = max(0, min(10, int(priority)))
+                self._save_task_locked(rec)
+                event = ("updated", self._snap(rec))
+        if event:
+            self._emit(*event)
+
+    def move_task(self, task_id: str, delta: int) -> None:
+        """Move a task up (-1) or down (+1) in the queue order."""
+        with self._lock:
+            try:
+                idx = self._order.index(task_id)
+            except ValueError:
+                return
+            new_idx = max(0, min(len(self._order) - 1, idx + delta))
+            if new_idx == idx:
+                return
+            self._order.pop(idx)
+            self._order.insert(new_idx, task_id)
+            self._save_order_locked()
+
+    def retry_failed(self) -> int:
+        """Re-queue every failed/cancelled task; returns how many."""
+        with self._lock:
+            ids = [
+                tid
+                for tid in self._order
+                if self._tasks.get(tid) is not None
+                and self._tasks[tid].task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED)
+            ]
+        for tid in ids:
+            self.retry_task(tid)
+        return len(ids)
+
+    def clear_failed(self) -> int:
+        """Remove failed/cancelled tasks from the list; returns count removed."""
+        return self._clear_states([TaskStatus.FAILED, TaskStatus.CANCELLED])
+
+    def clear_completed(self) -> int:
+        """Remove completed tasks from the list; returns count removed."""
+        return self._clear_states([TaskStatus.COMPLETED])
+
+    def _clear_states(self, states: Iterable[TaskStatus]) -> int:
+        wanted = set(states)
+        events: List[tuple[str, TaskSnapshot]] = []
+        with self._lock:
+            for tid in list(self._order):
+                rec = self._tasks.get(tid)
+                if rec and rec.task.status in wanted:
+                    events.append(("removed", self._snap(rec)))
+                    self._remove_record_locked(tid)
+            self._save_order_locked()
+        for ev, sn in events:
+            self._emit(ev, sn)
+        return len(events)
+
+    # ── Pause / resume / cancel / retry / remove ─────────────────────
 
     def pause_task(self, task_id: str) -> None:
         event: Optional[tuple[str, TaskSnapshot]] = None
         with self._lock:
             rec = self._tasks.get(task_id)
-            if rec and rec.state == TaskState.DOWNLOADING:
+            if rec and rec.task.status in ACTIVE_STATES:
                 rec.control.pause()
-                rec.state = TaskState.PAUSED
-                self._save_queue_locked()
+                if rec.task.status == TaskStatus.DOWNLOADING:
+                    try:
+                        rec.task.transition(TaskStatus.PAUSED)
+                    except TransitionError:
+                        pass
+                self._save_task_locked(rec)
                 event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
 
+    def set_scheduler_gate(self, on: bool) -> None:
+        """Temporarily block new downloads from starting (scheduler window)."""
+        with self._lock:
+            self._scheduler_gate = bool(on)
+        if not on:
+            self._start_next()
+
     def pause_all(self) -> None:
-        """Pause active downloads and block newly queued tasks from starting."""
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             self._global_pause = True
-            for rec in self._tasks.values():
-                if rec.state == TaskState.DOWNLOADING:
-                    rec.control.pause()
-                    rec.state = TaskState.PAUSED
-                    events.append(("updated", self._snap(rec)))
-            self._save_queue_locked()
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if not rec or rec.task.status not in ACTIVE_STATES:
+                    continue
+                rec.control.pause()
+                if rec.task.status == TaskStatus.DOWNLOADING:
+                    try:
+                        rec.task.transition(TaskStatus.PAUSED)
+                    except TransitionError:
+                        pass
+                events.append(("updated", self._snap(rec)))
+            self._save_order_locked()
         for ev, sn in events:
             self._emit(ev, sn)
 
     def resume_all(self) -> None:
-        """Resume paused downloads and allow the queue to drain again."""
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             self._global_pause = False
-            for rec in self._tasks.values():
-                if rec.state == TaskState.PAUSED:
-                    rec.control.resume()
-                    rec.state = TaskState.DOWNLOADING
-                    events.append(("updated", self._snap(rec)))
-            self._save_queue_locked()
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if not rec or rec.task.status != TaskStatus.PAUSED:
+                    continue
+                rec.control.resume()
+                try:
+                    rec.task.transition(TaskStatus.DOWNLOADING)
+                except TransitionError:
+                    pass
+                events.append(("updated", self._snap(rec)))
         for ev, sn in events:
             self._emit(ev, sn)
         self._start_next()
@@ -610,12 +671,16 @@ class TaskManager:
         event: Optional[tuple[str, TaskSnapshot]] = None
         with self._lock:
             rec = self._tasks.get(task_id)
-            if rec and rec.state == TaskState.PAUSED:
+            if rec:
                 self._global_pause = False
                 rec.control.resume()
-                rec.state = TaskState.DOWNLOADING
-                self._save_queue_locked()
-                event = ("updated", self._snap(rec))
+                if rec.task.status == TaskStatus.PAUSED:
+                    try:
+                        rec.task.transition(TaskStatus.DOWNLOADING)
+                    except TransitionError:
+                        pass
+                    self._save_task_locked(rec)
+                    event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
         self._start_next()
@@ -627,35 +692,42 @@ class TaskManager:
             rec = self._tasks.get(task_id)
             if not rec:
                 return
-            if rec.state == TaskState.QUEUED:
-                # Atomic: no window for _start_next() to pick it up.
-                rec.state = TaskState.STOPPED
-                rec.error = "Cancelled"
-                rec.finished_at = time.time()
-                self._save_queue_locked()
+            if rec.task.status == TaskStatus.QUEUED:
+                rec.task.force_status(TaskStatus.CANCELLED, error="Cancelled")
+                rec.task.completed_at = time.time()
+                self._save_task_locked(rec)
                 event = ("finished", self._snap(rec))
-            elif rec.state in (TaskState.DOWNLOADING, TaskState.PAUSED):
+            elif rec.task.status in ACTIVE_STATES:
                 rec.control.cancel()
-                rec.state = TaskState.STOPPING
-                self._save_queue_locked()
+                rec.task.force_status(TaskStatus.CANCELLED, error="Cancelled")
+                self._save_task_locked(rec)
                 event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
 
     def retry_task(self, task_id: str) -> None:
+        # If the previous worker is still unwinding (e.g. it was just
+        # cancelled), wait for it to release its part-file handles before a new
+        # worker reopens them.
+        thread = None
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            if rec and rec.task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
+                thread = rec.thread
+        if thread and thread.is_alive():
+            thread.join(timeout=8.0)
+
         event: Optional[tuple[str, TaskSnapshot]] = None
         with self._lock:
             rec = self._tasks.get(task_id)
-            if rec and rec.state in TERMINAL_STATES:
-                # Reset everything inside the lock before releasing.
-                rec.state = TaskState.QUEUED
-                rec.error = ""
-                rec.finished_at = None
-                rec.removed = False
+            if rec and rec.task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
+                rec.task.retry_count = (rec.task.retry_count or 0) + 1
+                rec.task.requeue(reason="")
+                rec.task.current_speed = 0.0
+                rec.task.average_speed = 0.0
+                rec.task.eta_seconds = None
                 rec.control = TaskControl()
-                rec.speed.reset()
-                rec.completed = 0
-                self._save_queue_locked()
+                self._save_task_locked(rec)
                 event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
@@ -667,30 +739,24 @@ class TaskManager:
             rec = self._tasks.get(task_id)
             if not rec:
                 return
-            if rec.state in ACTIVE_STATES:
-                # Mark for removal; worker's finally block emits "removed".
+            if rec.task.status in ACTIVE_STATES:
                 rec.removed = True
-                # Signal the control so the worker stops promptly.
                 rec.control.cancel()
                 return
-            # Non-active: remove immediately.
             snap = self._snap(rec)
             self._remove_record_locked(task_id)
-            self._save_queue_locked()
+            self._save_order_locked()
 
         self._emit("removed", snap)
+        # Wait for a just-finished worker to release its file handles, then
+        # remove the temporary artifacts owned by this incomplete task (never
+        # the completed/final file).
+        if rec.thread and rec.thread.is_alive():
+            rec.thread.join(timeout=8.0)
+        self._cleanup_task_files(rec.task)
 
     def clear_finished(self) -> None:
-        events: List[tuple[str, TaskSnapshot]] = []
-        with self._lock:
-            for tid in list(self._order):
-                rec = self._tasks.get(tid)
-                if rec and rec.state in TERMINAL_STATES:
-                    events.append(("removed", self._snap(rec)))
-                    self._remove_record_locked(tid)
-            self._save_queue_locked()
-        for ev, sn in events:
-            self._emit(ev, sn)
+        self._clear_states(TERMINAL_STATES)
 
     def shutdown(self, cancel: bool = True, wait: bool = False, timeout: float = 3.0) -> None:
         with self._lock:
@@ -706,29 +772,91 @@ class TaskManager:
                 if t and t.is_alive():
                     t.join(max(0.0, deadline - time.time()))
 
+    def prepare_for_exit(self, timeout: float = 2.0) -> None:
+        """Graceful app-exit: stop transfers promptly WITHOUT losing resume state.
+
+        Sequence:
+        1. Stop accepting new downloads (``_closed``).
+        2. Mark every active task ``shutting_down`` and **pause** its control so
+           the chunk loops stop writing at the next chunk boundary.
+        3. Briefly wait for workers to reach the pause barrier.
+        4. **Cancel** the controls so any thread blocked on the pause barrier
+           unblocks and exits — this is what lets the process terminate quickly
+           (non-daemon engine pool threads are joined at interpreter shutdown).
+        5. Wait for workers to finalise, then persist once more.
+
+        The ``shutting_down`` flag makes the worker finalize preserve the
+        persisted DOWNLOADING/PAUSED state instead of marking the task
+        CANCELLED, so the next launch restores it to the queue and resumes from
+        the saved partial data.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            ids = list(self._tasks.keys())
+            threads = [r.thread for r in self._tasks.values() if r.thread]
+            for tid in ids:
+                rec = self._tasks.get(tid)
+                if rec and rec.task.status in ACTIVE_STATES:
+                    rec.shutting_down = True
+                    rec.control.pause()
+
+        # Give workers a brief window to reach the pause barrier so the part
+        # files are not left mid-write.
+        deadline = time.time() + timeout
+        for t in threads:
+            if t and t.is_alive():
+                t.join(min(0.25, max(0.0, deadline - time.time())))
+
+        # Cancel so any thread blocked on the pause barrier unblocks and exits.
+        # (Pause alone would leave the non-daemon engine pool threads blocked
+        # forever and the process would hang on exit.)
+        with self._lock:
+            for tid in ids:
+                rec = self._tasks.get(tid)
+                if rec:
+                    rec.control.cancel()
+
+        # Wait for workers to finish their (shutdown-aware) finalize.
+        deadline = time.time() + timeout
+        for t in threads:
+            if t and t.is_alive():
+                t.join(max(0.0, deadline - time.time()))
+
+        with self._lock:
+            for tid in ids:
+                rec = self._tasks.get(tid)
+                if rec:
+                    self._save_task_locked(rec)
+
+    def close(self) -> None:
+        """Flush and close the underlying database."""
+        try:
+            self._store.close()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Progress callback (called from worker threads)
     # ------------------------------------------------------------------
 
     def update_progress(self, task_id: str, completed: int, total: int) -> None:
-        """Coalesced progress update — emits event at most every 120 ms."""
-        event: Optional[tuple[str, TaskSnapshot]] = None
+        """Coalesced progress update — emits an event at most every 120 ms."""
+        snap: Optional[TaskSnapshot] = None
         with self._lock:
             rec = self._tasks.get(task_id)
             if not rec or rec.removed:
                 return
-            rec.completed = max(0, int(completed))
-            rec.total     = max(0, int(total))
-            rec.speed.update(rec.completed)
-
-            now   = time.monotonic()
-            done  = rec.total > 0 and rec.completed >= rec.total
+            rec.task.total_size = max(0, int(total))
+            rec.task.update_speed(completed)
+            now = time.monotonic()
+            done = rec.task.total_size > 0 and rec.task.downloaded_size >= rec.task.total_size
             if done or (now - rec.last_emit >= self._PROGRESS_EMIT_INTERVAL):
                 rec.last_emit = now
-                event = ("progress", self._snap(rec))
-
-        if event:
-            self._emit(*event)
+                snap = self._snap(rec)
+        if snap:
+            self._emit("progress", snap)
 
     # ------------------------------------------------------------------
     # Worker management
@@ -737,7 +865,7 @@ class TaskManager:
     def _start_next(self) -> None:
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
-            if self._closed or self._global_pause:
+            if self._closed or self._global_pause or self._scheduler_gate:
                 return
             while self._active < self._max_concurrent:
                 rec = next(
@@ -745,17 +873,19 @@ class TaskManager:
                         self._tasks[tid]
                         for tid in self._order
                         if tid in self._tasks
-                        and self._tasks[tid].state == TaskState.QUEUED
+                        and self._tasks[tid].task.status == TaskStatus.QUEUED
                     ),
                     None,
                 )
                 if rec is None:
                     break
-                rec.state    = TaskState.DOWNLOADING
-                rec.control  = TaskControl()
-                rec.speed.reset()
-                rec.error    = ""
-                rec.finished_at = None
+                try:
+                    rec.task.transition(TaskStatus.ANALYZING)
+                except TransitionError:
+                    continue
+                rec.control = TaskControl()
+                rec.task.error = ""
+                rec.task.completed_at = None
                 self._active += 1
                 t = threading.Thread(
                     target=self._worker,
@@ -765,6 +895,7 @@ class TaskManager:
                 )
                 rec.thread = t
                 t.start()
+                self._save_task_locked(rec)
                 events.append(("started", self._snap(rec)))
 
         for ev, sn in events:
@@ -773,91 +904,445 @@ class TaskManager:
     def _worker(self, task_id: str) -> None:
         with self._lock:
             rec = self._tasks.get(task_id)
-            request = rec.request if rec else None
+            task = rec.task if rec else None
             control = rec.control if rec else None
+            request = self._request_for(task) if task else None
 
-        if rec is None or request is None or control is None:
+        if rec is None or task is None or control is None or request is None:
             with self._lock:
                 self._active = max(0, self._active - 1)
             self._start_next()
             return
 
-        ok        = False
+        ok = False
         cancelled = False
-        error     = ""
+        error = ""
+        analysis = None
 
+        # ---- ANALYZING -----------------------------------------------
         try:
-            ok = self._runner.run(
-                task_id,
-                request,
-                lambda c, t: self.update_progress(task_id, c, t),
-                control,
-            )
+            analysis = self._runner.analyze(task.id, request, control)
         except TaskCancelled:
             cancelled = True
         except Exception as exc:
             error = str(exc)
-            self._logger.exception("Worker thread raised")
-        finally:
-            # Decrement active count unconditionally to prevent counter leaks.
-            events: List[tuple[str, TaskSnapshot]] = []
-            with self._lock:
-                self._active = max(0, self._active - 1)
-                rec = self._tasks.get(task_id)
-                if rec is not None:
+            self._logger.debug("analyze failed: %s", exc)
+
+        # ---- STARTING → transfer -------------------------------------
+        if not cancelled and not control.cancelled:
+            self._apply_analysis(rec, analysis)
+            if self._transition_record(rec, TaskStatus.STARTING):
+                try:
+                    ok = bool(
+                        self._runner.download(
+                            task.id,
+                            request,
+                            analysis,
+                            lambda c, t: self.update_progress(task_id, c, t),
+                            control,
+                            self._task_status_cb(task_id),
+                            self._task_path_cb(task_id),
+                        )
+                    )
+                except TaskCancelled:
+                    cancelled = True
+                except Exception as exc:
+                    error = str(exc)
+                    self._logger.exception("Worker thread raised")
+            else:
+                cancelled = True
+        else:
+            cancelled = True
+
+        # ---- Finalize ------------------------------------------------
+        events: List[tuple[str, TaskSnapshot]] = []
+        with self._lock:
+            self._active = max(0, self._active - 1)
+            rec = self._tasks.get(task_id)
+            # Guard against a retry race: if this task was re-queued and a new
+            # worker was spawned while we were finishing, ``rec.control`` is no
+            # longer *our* control object.  Never let the old worker clobber the
+            # newer worker's state.
+            if rec is not None and rec.control is not control:
+                rec = None
+            if rec is not None:
+                t = rec.task
+                if rec.shutting_down:
+                    # App is exiting: keep the persisted resumable state (the
+                    # task is still DOWNLOADING/PAUSED in the store so it is
+                    # restored to the queue on the next launch). Do not emit a
+                    # terminal event — the UI is closing.
+                    self._save_task_locked(rec)
+                else:
                     stopped = rec.removed or rec.control.cancelled or cancelled
                     if stopped:
-                        rec.state      = TaskState.STOPPED
-                        rec.error      = rec.error or error or "Cancelled"
-                        rec.finished_at = time.time()
+                        t.force_status(TaskStatus.CANCELLED, error=t.error or error or "Cancelled")
+                        t.completed_at = time.time()
                     elif ok:
-                        rec.state      = TaskState.COMPLETED
-                        rec.error      = ""
-                        # Always sync completed to total on success.
-                        # When total == 0 (server did not send Content-Length),
-                        # keep the actual bytes-written value from the runner
-                        # rather than zeroing it out.
-                        if rec.total > 0:
-                            rec.completed = rec.total
-                        rec.finished_at = time.time()
-                        self._add_history_locked(rec)
+                        t.force_status(TaskStatus.COMPLETED, error="")
+                        if t.total_size > 0:
+                            t.downloaded_size = t.total_size
+                        t.completed_at = time.time()
+                        # Final average speed for history (wall-time average).
+                        elapsed = t.elapsed_seconds
+                        if elapsed > 0.05 and t.downloaded_size > 0:
+                            t.average_speed = t.downloaded_size / elapsed
+                        t.current_speed = 0.0
+                        t.eta_seconds = None
+                        self._add_history_locked(rec, t)
                     else:
-                        rec.state      = TaskState.FAILED
-                        rec.error      = rec.error or error or "Download failed"
-                        rec.finished_at = time.time()
-                        self._add_history_locked(rec)
+                        runner_error = getattr(self._runner, "last_error", "") or ""
+                        t.force_status(
+                            TaskStatus.FAILED,
+                            error=t.error or error or runner_error or "Download failed",
+                        )
+                        t.completed_at = time.time()
+                        self._add_history_locked(rec, t)
 
-                    self._save_queue_locked()
+                    self._save_task_locked(rec)
 
                     if rec.removed:
+                        # Removing an active task: the worker has now stopped,
+                        # so it is safe to delete the temporary files it owns.
+                        if rec.task.status != TaskStatus.COMPLETED:
+                            self._cleanup_task_files(rec.task)
                         snap = self._snap(rec)
                         self._remove_record_locked(task_id)
                         events.append(("removed", snap))
                     else:
                         events.append(("finished", self._snap(rec)))
 
-            for ev, sn in events:
-                self._emit(ev, sn)
+        for ev, sn in events:
+            self._emit(ev, sn)
 
-            self._start_next()
+        self._start_next()
 
     # ------------------------------------------------------------------
-    # Persistence helpers
+    # Temporary-file cleanup
     # ------------------------------------------------------------------
+
+    _TEMP_ARTIFACT_RE = re.compile(
+        r"\.(part\d+|repart-[0-9a-f]+-\d+|tmp|merging|dlstate)$", re.IGNORECASE
+    )
+
+    def _cleanup_task_files(self, task: DownloadTask) -> List[str]:
+        """Delete temporary artifacts owned by an incomplete task.
+
+        Never touches the completed/final file.  Scoped to the exact task by
+        matching against the task's resolved destination path, so it cannot
+        remove files belonging to another task.
+
+        Returns the list of paths that could not be removed (already logged).
+        """
+        if task.status == TaskStatus.COMPLETED:
+            return []
+        base = None
+        if task.resolved_path:
+            base = Path(task.resolved_path)
+        elif task.filename or task.label:
+            base = Path(task.directory) / (task.filename or task.label)
+        if base is None or not base.parent.is_dir():
+            return []
+        try:
+            match_re = re.compile(r"^" + re.escape(base.name) + r"\.(part\d+|repart-[0-9a-f]+-\d+|tmp|merging|dlstate)$", re.IGNORECASE)
+        except re.error:
+            return []
+        failures: List[str] = []
+        for entry in base.parent.iterdir():
+            if not entry.is_file() or not match_re.match(entry.name):
+                continue
+            try:
+                entry.unlink()
+            except OSError as exc:
+                failures.append(str(entry))
+                self._logger.warning(
+                    "Could not remove temporary file %s: %s", entry, exc
+                )
+        return failures
+
+    # ------------------------------------------------------------------
+    # State transition helpers
+    # ------------------------------------------------------------------
+
+    def _transition_record(self, rec: _TaskRecord, status: TaskStatus, error: Optional[str] = None) -> bool:
+        """Validate a transition, persist, and emit an ``updated`` event."""
+        snap: Optional[TaskSnapshot] = None
+        with self._lock:
+            if rec is None or rec.removed:
+                return False
+            try:
+                rec.task.transition(status, error=error)
+            except TransitionError:
+                return False
+            self._save_task_locked(rec)
+            snap = self._snap(rec)
+        if snap:
+            self._emit("updated", snap)
+        return True
+
+    def _task_status_cb(self, task_id: str) -> Callable[[str], None]:
+        def _cb(name: str) -> None:
+            status = normalize_status(name)
+            if status not in TaskStatus:
+                return
+            with self._lock:
+                rec = self._tasks.get(task_id)
+                if rec is None or rec.removed:
+                    return
+                try:
+                    rec.task.transition(status)
+                except TransitionError:
+                    return
+                self._save_task_locked(rec)
+                snap = self._snap(rec)
+            if snap:
+                self._emit("updated", snap)
+        return _cb
+
+    def _task_path_cb(self, task_id: str) -> Callable[[str], None]:
+        """Record the engine's resolved destination path so temp-file cleanup
+        later knows exactly which files this task owns."""
+
+        def _cb(path: str) -> None:
+            with self._lock:
+                rec = self._tasks.get(task_id)
+                if rec is None or rec.removed:
+                    return
+                if rec.task.resolved_path != path:
+                    rec.task.resolved_path = path
+                    self._save_task_locked(rec)
+
+        return _cb
+
+    def _apply_analysis(self, rec: _TaskRecord, analysis) -> None:
+        """Fold analyzer results into the task record (filename, size, etc.)."""
+        if analysis is None or not getattr(analysis, "ok", False):
+            return
+        with self._lock:
+            t = rec.task
+            if getattr(analysis, "filename", None):
+                t.filename = analysis.filename
+            if getattr(analysis, "total_size", 0):
+                t.total_size = int(analysis.total_size or 0)
+            t.supports_range = bool(getattr(analysis, "supports_range", False))
+            if getattr(analysis, "content_type", None):
+                t.content_type = analysis.content_type
+            if getattr(analysis, "server", None):
+                t.server = analysis.server
+            if getattr(analysis, "etag", None):
+                t.etag = analysis.etag
+            if getattr(analysis, "last_modified", None):
+                t.last_modified = analysis.last_modified
+            if t.category == "General" or not t.category:
+                from core.analyzer import detect_category
+                ext_map = None
+                if self._config is not None:
+                    ext_map = getattr(self._config, "category_extensions", None) or None
+                t.category = detect_category(t.filename, t.content_type, ext_map=ext_map)
+            if self._config is not None and t.connections <= 1 and t.supports_range:
+                t.connections = max(1, int(getattr(self._config, "num_threads", 1) or 1))
+            self._save_task_locked(rec)
+
+    # ------------------------------------------------------------------
+    # Persistence (SQLite + one-time legacy migration)
+    # ------------------------------------------------------------------
+
+    def _save_task_locked(self, rec: _TaskRecord) -> None:
+        """Persist one task. Errors are swallowed (must not crash workers)."""
+        try:
+            self._store.save_task(rec.task.to_dict())
+        except Exception:
+            self._logger.warning("Could not persist task %s", rec.task.id, exc_info=True)
+
+    def _save_order_locked(self) -> None:
+        try:
+            self._store.save_order(self._order)
+        except Exception:
+            pass
+
+    def _restore_queue(self) -> None:
+        rows = self._store.list_tasks()
+        if not rows:
+            # One-time migration from the legacy JSON queue file.
+            self._migrate_legacy_queue()
+            rows = self._store.list_tasks()
+
+        with self._lock:
+            for row in rows:
+                try:
+                    task = DownloadTask.from_dict(row)
+                except Exception:
+                    continue
+                if not task.id or not task.url or not task.directory:
+                    continue
+                if task.status == TaskStatus.COMPLETED:
+                    continue
+                # Interrupted mid-flight tasks go back to the queue.
+                if task.status in ACTIVE_STATES:
+                    task.force_status(TaskStatus.QUEUED)
+                    task.error = "Restored after restart"
+                self._tasks[task.id] = _TaskRecord(task=task)
+                self._order.append(task.id)
+
+            # Apply persisted explicit ordering (move up/down) when available.
+            saved_order = self._store.load_order()
+            if saved_order:
+                by_id = {t: i for i, t in enumerate(self._order)}
+                ordered = [t for t in saved_order if t in by_id]
+                for tid in self._order:
+                    if tid not in ordered:
+                        ordered.append(tid)
+                self._order = ordered
+            else:
+                # Stable default: priority (higher first) then creation time.
+                self._order.sort(
+                    key=lambda tid: (self._tasks[tid].task.priority, self._tasks[tid].task.created_at)
+                )
+            self._save_order_locked()
+
+    def _migrate_legacy_queue(self) -> None:
+        if not self._queue_file.exists():
+            return
+        items = self._load_json(self._queue_file, [])
+        if isinstance(items, list):
+            self._store.import_legacy_queue(items)
+        try:
+            self._queue_file.rename(self._queue_file.with_suffix(".json.imported"))
+        except OSError:
+            pass
+
+    def _load_history(self) -> List[Dict[str, Any]]:
+        history = self._store.list_history(500)
+        if not history and self._history_file.exists():
+            entries = self._load_json(self._history_file, [])
+            if isinstance(entries, list):
+                self._store.import_legacy_history(entries)
+                history = self._store.list_history(500)
+        return history
+
+    def _add_history_locked(self, rec: _TaskRecord, task: DownloadTask) -> None:
+        entry = {
+            "task_id": task.id,
+            "url": task.url,
+            "directory": task.directory,
+            "name": task.filename or task.label or name_from_url(task.url),
+            "category": task.category or "General",
+            "size_bytes": int(task.downloaded_size or task.total_size or 0),
+            "status": task.status.value,
+            "duration": round(task.elapsed_seconds, 1),
+            "avg_speed": round(task.average_speed, 1),
+            "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            self._store.add_history(entry)
+        except Exception:
+            self._logger.warning("Could not write history", exc_info=True)
+        self.history = self._store.list_history(500)
+
+    def clear_history(self) -> None:
+        with self._lock:
+            self.history = []
+            try:
+                self._store.clear_history()
+            except Exception:
+                pass
+
+    def remove_history(self, task_id: str) -> None:
+        """Remove a single history entry by task id."""
+        with self._lock:
+            try:
+                self._store.delete_history(task_id)
+            except Exception:
+                pass
+            self.history = self._store.list_history(500)
+
+    def clear_completed_failed_history(self) -> None:
+        with self._lock:
+            try:
+                self._store.clear_finished_history()
+            except Exception:
+                pass
+            self.history = self._store.list_history(500)
+
+    # ------------------------------------------------------------------
+    # Crash recovery
+    # ------------------------------------------------------------------
+
+    def recover_unfinished(self) -> int:
+        """Validate restored tasks and requeue resumable ones.
+
+        Runs once at startup.  Returns the number of tasks re-queued for
+        download.  Tasks whose destination directory no longer exists are kept
+        queued with a warning (the engine re-creates the folder).  A file that
+        was fully merged but whose task was interrupted before it could be
+        marked complete (crash between merge and rename) is detected here and
+        recorded as completed.
+
+        Segment-level validation (part file sizes, path containment) is done by
+        the engine itself when a restored task starts — duplicating that logic
+        here would create a second, divergent download engine.
+        """
+        requeued = 0
+        completed_ids: List[str] = []
+        with self._lock:
+            for tid in list(self._order):
+                rec = self._tasks.get(tid)
+                if not rec:
+                    continue
+                task = rec.task
+                if task.status != TaskStatus.QUEUED:
+                    continue
+                directory = Path(task.directory)
+                if not directory.is_dir():
+                    task.error = "Destination folder not found — will be re-created"
+                    self._save_task_locked(rec)
+                    requeued += 1
+                    continue
+                # Crash between merge and rename: the file exists and matches
+                # the expected size, but the task never reached COMPLETED.
+                if task.filename:
+                    final = directory / task.filename
+                    try:
+                        if (
+                            task.total_size > 0
+                            and final.is_file()
+                            and final.stat().st_size == task.total_size
+                        ):
+                            task.downloaded_size = task.total_size
+                            task.force_status(TaskStatus.COMPLETED, error="")
+                            task.completed_at = time.time()
+                            self._save_task_locked(rec)
+                            self._add_history_locked(rec, task)
+                            completed_ids.append(tid)
+                            continue
+                    except OSError:
+                        pass
+                task.error = "Restored after restart"
+                self._save_task_locked(rec)
+                requeued += 1
+        if completed_ids:
+            for tid in completed_ids:
+                self.remove_task(tid)
+        return requeued
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _remove_record_locked(self, task_id: str) -> None:
+        self._tasks.pop(task_id, None)
+        try:
+            self._order.remove(task_id)
+        except ValueError:
+            pass
+        try:
+            self._store.delete_task(task_id)
+        except Exception:
+            pass
 
     @staticmethod
     def _write_json_atomic(path: Path, data: Any) -> None:
-        """Write *data* to *path* atomically with fsync.
-
-        Steps:
-        1. Serialise to a temp sibling file.
-        2. fsync the file data so the OS flushes kernel buffers to disk.
-        3. os.replace() for an atomic rename (POSIX) / rename (Windows NTFS).
-
-        This guarantees that a process crash or sudden power loss never leaves
-        a half-written or empty JSON file; the old file is always kept until
-        the new one is fully durable.
-        """
+        """Atomically write JSON (kept for backward compatibility)."""
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         serialised = json.dumps(data, indent=2, ensure_ascii=False)
@@ -868,9 +1353,6 @@ class TaskManager:
                 try:
                     os.fsync(f.fileno())
                 except OSError:
-                    # fsync may not be supported on all file-systems (e.g. some
-                    # network mounts).  That's acceptable — the rename is still
-                    # better than a direct overwrite.
                     pass
             os.replace(tmp, path)
         except BaseException:
@@ -886,127 +1368,3 @@ class TaskManager:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return default
-
-    def _save_queue_locked(self) -> None:
-        """Persist non-completed tasks. Errors are swallowed (must not crash worker)."""
-        items = []
-        for tid in self._order:
-            rec = self._tasks.get(tid)
-            if not rec or rec.state == TaskState.COMPLETED or rec.removed:
-                continue
-            items.append({
-                "id":        rec.id,
-                "url":       rec.request.url,
-                "directory": rec.request.directory,
-                "checksum":  rec.request.checksum,
-                "label":     rec.request.label,
-                "state":     rec.state.value,
-                "completed": rec.completed,
-                "total":     rec.total,
-                "error":     rec.error,
-                "created_at":  rec.created_at,
-                "finished_at": rec.finished_at,
-            })
-        try:
-            self._write_json_atomic(self._queue_file, items)
-        except OSError:
-            pass   # disk full or permissions — non-fatal
-
-    def _restore_queue(self) -> None:
-        data = self._load_json(self._queue_file, [])
-        if not isinstance(data, list):
-            return
-        with self._lock:
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                url       = str(item.get("url", "")).strip()
-                directory = str(item.get("directory", "")).strip()
-                if not url or not directory:
-                    continue
-                try:
-                    state = TaskState(str(item.get("state", TaskState.QUEUED.value)))
-                except ValueError:
-                    state = TaskState.QUEUED
-                if state == TaskState.COMPLETED:
-                    continue
-                if state in (TaskState.DOWNLOADING, TaskState.PAUSED, TaskState.STOPPING):
-                    state = TaskState.QUEUED
-                task_id = str(item.get("id") or uuid.uuid4().hex[:10])
-                if task_id in self._tasks:
-                    task_id = uuid.uuid4().hex[:10]
-                req = DownloadRequest(
-                    url=url,
-                    directory=directory,
-                    checksum=str(item.get("checksum", "") or ""),
-                    label=str(item.get("label", "") or ""),
-                )
-                rec = _TaskRecord(
-                    id=task_id,
-                    request=req,
-                    state=state,
-                    completed=_as_int(item.get("completed"), 0),
-                    total=_as_int(item.get("total"), 0),
-                    error=str(item.get("error", "") or ""),
-                    created_at=float(item.get("created_at") or time.time()),
-                    finished_at=item.get("finished_at"),
-                )
-                self._tasks[task_id] = rec
-                self._order.append(task_id)
-
-    def _load_history(self) -> List[Dict[str, Any]]:
-        data = self._load_json(self._history_file, [])
-        return data if isinstance(data, list) else []
-
-    def _add_history_locked(self, rec: _TaskRecord) -> None:
-        entry = {
-            "url":        rec.request.url,
-            "directory":  rec.request.directory,
-            "name":       rec.request.name,
-            "checksum":   rec.request.checksum,
-            "size":       human_size(rec.completed or rec.total),
-            "size_bytes": int(rec.completed or rec.total or 0),
-            "status":     rec.state.value,
-            "finished":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        self.history.insert(0, entry)
-        self.history = self.history[: self._HISTORY_LIMIT]
-        try:
-            self._write_json_atomic(self._history_file, self.history)
-        except OSError:
-            pass
-
-    def clear_history(self) -> None:
-        with self._lock:
-            self.history = []
-            try:
-                self._write_json_atomic(self._history_file, [])
-            except OSError:
-                pass
-
-    def clear_completed_failed_history(self) -> None:
-        bad = frozenset({
-            TaskState.COMPLETED.value,
-            TaskState.FAILED.value,
-            TaskState.STOPPED.value,
-        })
-        with self._lock:
-            self.history = [
-                e for e in self.history
-                if str(e.get("status", TaskState.COMPLETED.value)) not in bad
-            ]
-            try:
-                self._write_json_atomic(self._history_file, self.history)
-            except OSError:
-                pass
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _remove_record_locked(self, task_id: str) -> None:
-        self._tasks.pop(task_id, None)
-        try:
-            self._order.remove(task_id)
-        except ValueError:
-            pass

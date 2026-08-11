@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def _default_download_dir() -> str:
@@ -69,6 +69,36 @@ class AppConfig:
     # --- Scheduling --------------------------------------------------------
     schedule_time: Optional[str] = None
 
+    # --- Startup / session behaviour ---------------------------------------
+    # Automatically continue unfinished downloads that were restored from the
+    # persistent store when the application starts.
+    resume_on_startup: bool = False
+    start_minimized: bool = False
+
+    # --- Scheduler (queue-wide start/stop windows + night speed cap) --------
+    scheduler_enabled: bool = False
+    schedule_start_time: Optional[str] = None      # "HH:MM" — pause until
+    schedule_stop_time: Optional[str] = None       # "HH:MM" — pause from
+    night_speed_limit_bps: int = 0                 # cap during the night window
+    night_start_time: Optional[str] = "23:00"
+    night_end_time: Optional[str] = "07:00"
+
+    # --- Categories ---------------------------------------------------------
+    # Per-category destination directory overrides (category -> path).
+    category_dirs: Dict[str, str] = field(default_factory=dict)
+    # Automatically assign a category from the file extension / content type.
+    auto_categorize: bool = True
+    # Optional custom category -> extension list (overrides the built-ins).
+    # e.g. {"Videos": ["mkv", "mp4", "mov"]}
+    category_extensions: Dict[str, List[str]] = field(default_factory=dict)
+
+    # --- Clipboard monitoring ----------------------------------------------
+    clipboard_monitor: bool = False
+    clipboard_autostart: bool = False              # auto-download detected links
+
+    # --- Language / UI ------------------------------------------------------
+    language: str = "en"
+
     # --- Networking identity ----------------------------------------------
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -99,6 +129,9 @@ class AppConfig:
     live_server_port: int = 6868
     live_server_token: str = ""
     live_server_host: str = "127.0.0.1"          # bind address
+    # Auto-start the loopback relay when the GUI launches.  This keeps browser
+    # integration ready and lets a second launch forward URLs to this instance.
+    auto_start_server: bool = True
 
     # --- Checksum / integrity ---------------------------------------------
     # When True, verify that the written file matches Content-Length even when
@@ -186,6 +219,19 @@ class AppConfig:
             return datetime.fromisoformat(self.schedule_time)
         except ValueError:
             return None
+
+    def resolve_category_dir(self, category: Optional[str], base_dir: str) -> str:
+        """Return the per-category destination directory override, if any.
+
+        Falls back to *base_dir* when the category has no configured override
+        (or the category is empty/General).  The returned directory is *not*
+        created here — the download engine creates it on demand.
+        """
+        cat = (category or "").strip()
+        overrides = self.category_dirs or {}
+        if cat and cat != "General" and overrides.get(cat):
+            return overrides[cat]
+        return base_dir or ""
 
     def set_schedule_datetime(self, value: Optional[datetime]) -> None:
         self.schedule_time = value.isoformat() if value else None

@@ -77,24 +77,36 @@ const Utils = {
   statusClass(state) {
     return {
       "Downloading": "downloading",
+      "Analyzing": "analyzing",
+      "Starting": "starting",
+      "Merging": "merging",
+      "Verifying": "verifying",
       "Paused": "paused",
       "Queued": "queued",
       "Complete": "complete",
       "Failed": "failed",
+      "Cancelled": "cancelled",
       "Stopped": "stopped",
       "Stopping": "stopping",
+      "Removed": "removed",
     }[state] || "queued";
   },
 
   statusLabel(state) {
     return {
       "Downloading": "Downloading",
+      "Analyzing": "Analyzing",
+      "Starting": "Starting",
+      "Merging": "Merging",
+      "Verifying": "Verifying",
       "Paused": "Paused",
       "Queued": "Queued",
       "Complete": "Completed",
       "Failed": "Failed",
+      "Cancelled": "Cancelled",
       "Stopped": "Stopped",
       "Stopping": "Stopping",
+      "Removed": "Removed",
     }[state] || state;
   },
 
@@ -119,7 +131,7 @@ const Utils = {
   categoryFor(name) {
     const t = this.fileType(name);
     return {
-      archive: "Compressed", video: "Videos", audio: "Music",
+      archive: "Archives", video: "Videos", audio: "Music",
       image: "Images", document: "Documents", app: "Programs",
       disc: "Programs", file: "General",
     }[t] || "General";

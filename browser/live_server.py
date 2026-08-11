@@ -54,7 +54,7 @@ class LiveServer:
         self,
         config: AppConfig,
         session: SessionManager,
-        download_callback: Optional[Callable[[str], None]] = None,
+        download_callback: Optional[Callable[[str, bool], bool]] = None,
     ):
         self.config = config
         self.session = session
@@ -179,7 +179,7 @@ class LiveServer:
                     return
 
                 parsed = urlparse(self.path)
-                if parsed.path not in ("/download", "/queue"):
+                if parsed.path not in ("/download", "/queue", "/download_many"):
                     self.send_response(HTTPStatus.NOT_FOUND)
                     self._cors_headers()
                     self.end_headers()
@@ -205,38 +205,72 @@ class LiveServer:
                         )
                         return
                     data = json.loads(raw.decode("utf-8"))
-                    url = (data.get("url") or "").strip()
-                    if not url:
-                        server._send_json(
-                            self, HTTPStatus.BAD_REQUEST, {"error": "Missing url"}
-                        )
-                        return
-
-                    ok, err = validate_download_url(
-                        url, block_private=server.config.block_private_urls
-                    )
-                    if not ok:
-                        server._send_json(
-                            self, HTTPStatus.BAD_REQUEST, {"error": err}
-                        )
-                        return
-
-                    server.download_queue.put(url)
-                    server._inc_stat("queued")
-                    server._send_json(
-                        self,
-                        HTTPStatus.OK,
-                        {
-                            "status": "queued",
-                            "position": server.download_queue.qsize(),
-                        },
-                    )
                 except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                     server._send_json(
                         self, HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON"}
                     )
+                    return
+
+                if parsed.path == "/download_many":
+                    # Batch endpoint: {"urls": ["https://...", ...]}
+                    urls = data.get("urls") if isinstance(data.get("urls"), list) else []
+                    autostart = bool(data.get("autostart", False))
+                    accepted, rejected = server._validate_and_queue(urls, autostart=autostart)
+                    server._send_json(
+                        self,
+                        HTTPStatus.OK,
+                        {"status": "queued", "accepted": accepted, "rejected": rejected},
+                    )
+                    return
+
+                url = (data.get("url") or "").strip()
+                if not url:
+                    server._send_json(
+                        self, HTTPStatus.BAD_REQUEST, {"error": "Missing url"}
+                    )
+                    return
+                autostart = bool(data.get("autostart", False))
+                accepted, _rejected = server._validate_and_queue([url], autostart=autostart)
+                if accepted != 1:
+                    server._send_json(
+                        self, HTTPStatus.BAD_REQUEST, {"error": "Invalid URL"}
+                    )
+                    return
+                server._send_json(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "status": "queued",
+                        "position": server.download_queue.qsize(),
+                    },
+                )
 
         return Handler
+
+    def _validate_and_queue(self, urls, autostart: bool = False) -> tuple:
+        """Validate + queue a list of URLs.
+
+        Returns ``(accepted_count, rejected_count)``.  Invalid URLs are counted
+        as rejected and skipped; SSRF validation runs on every URL.
+        """
+        accepted = 0
+        rejected = 0
+        seen = set()
+        for raw in urls:
+            url = str(raw or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            ok, err = validate_download_url(
+                url, block_private=self.config.block_private_urls
+            )
+            if not ok:
+                rejected += 1
+                continue
+            self.download_queue.put((url, autostart))
+            self._inc_stat("queued")
+            accepted += 1
+        return accepted, rejected
 
     # ------------------------------------------------------------------ #
     # Worker
@@ -261,14 +295,16 @@ class LiveServer:
 
         while not self.stop_event.is_set():
             try:
-                url = self.download_queue.get(timeout=0.5)
+                item = self.download_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            # Queue items are (url, autostart) tuples.
+            url, autostart = item if isinstance(item, tuple) else (item, False)
 
             console.print(f"\n[bold yellow]Received: {url}[/bold yellow]")
             if self.download_callback:
                 try:
-                    delegated = bool(self.download_callback(url))
+                    delegated = bool(self.download_callback(url, autostart=autostart))
                 except Exception as exc:  # callback must not break the worker
                     console.print(f"[red]Download callback error: {exc}[/red]")
                     delegated = False

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 
 class BandwidthLimiter:
@@ -43,11 +43,15 @@ class BandwidthLimiter:
             self._burst = self._max_rate or self._burst
             self._tokens = min(self._tokens, float(self._burst)) if self._burst else self._tokens
 
-    def consume(self, amount: int) -> None:
+    def consume(self, amount: int, should_stop: "Optional[Callable[[], bool]]" = None) -> None:
         """Block until ``amount`` bytes are allowed under the cap.
 
         No-op when the limiter is disabled, so the hot download loop pays only
         a single attribute read in the common unlimited case.
+
+        ``should_stop`` (optional) is polled during the sleep so a pause/cancel
+        request can abort the wait promptly — otherwise a long throttle sleep
+        would delay cancellation and app shutdown.
 
         Algorithm
         ---------
@@ -55,7 +59,7 @@ class BandwidthLimiter:
         2. Deduct as many tokens as available; record how many bytes still
            need to be waited for (``deficit``).
         3. Release the lock *before* sleeping so other threads can refill.
-        4. Sleep only when there is an actual deficit (> 0).
+        4. Sleep in short slices only when there is an actual deficit (> 0).
         """
         if not self._max_rate or amount <= 0:
             return
@@ -74,7 +78,15 @@ class BandwidthLimiter:
         # Sleep outside the lock so other threads can progress concurrently.
         # Re-check _max_rate in case update_limit() raced after lock release.
         if deficit > 0 and self._max_rate:
-            time.sleep(deficit / self._max_rate)
+            remaining = deficit / self._max_rate
+            deadline = time.monotonic() + remaining
+            while True:
+                if should_stop is not None and should_stop():
+                    return
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                time.sleep(min(0.1, left))
 
     def _refill_locked(self) -> None:
         now = time.monotonic()
@@ -98,15 +110,33 @@ def make_limiter(config) -> Optional[BandwidthLimiter]:
 _global_limiter: Optional[BandwidthLimiter] = None
 _global_limiter_lock = threading.Lock()
 
+# Optional override applied by the scheduler (night speed cap).  ``None`` means
+# "use the configured max_speed_bps"; any integer temporarily replaces it
+# without mutating the user's setting.
+_scheduled_override: Optional[int] = None
+
+
+def set_schedule_override(bps: Optional[int]) -> None:
+    """Set/clear the scheduler's temporary bandwidth cap.
+
+    Pass ``None`` to clear the override and fall back to ``max_speed_bps``.
+    """
+    global _scheduled_override
+    _scheduled_override = None if bps is None else max(0, int(bps))
+
 
 def sync_limiter_from_config(config) -> None:
     """Update (or create) the global limiter from the current config.
 
     Called by LegacyDownloadRunner before each download so that settings
     changes made in the UI take effect immediately without restarting.
+    The scheduler override, when active, takes precedence over the configured
+    cap so the night-speed rule survives per-download re-syncs.
     """
     global _global_limiter
     cap = getattr(config, "max_speed_bps", 0) or 0
+    if _scheduled_override is not None:
+        cap = _scheduled_override
     with _global_limiter_lock:
         if cap <= 0:
             _global_limiter = None

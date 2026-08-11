@@ -42,6 +42,11 @@ Two interfaces are included:
 | ⏱️ Speed controls | Throttle bandwidth, pause/resume tasks |
 | 🔌 Shutdown after | Optional auto shutdown when the queue finishes |
 | 💾 Persistent config | Settings saved to `~/.config/terminal-download-manager/` |
+| 🗓️ Scheduler | Start / stop time windows and a night-time speed cap |
+| 📋 Clipboard monitor | Opt-in: auto-captures URLs copied to the clipboard |
+| 🗄️ SQLite task store | Crash-safe, persistent queue & download history |
+| 🔬 URL analyzer | Inspects a link first (name, size, type, range support) |
+| 🚦 Single instance | A second launch forwards the URL to the running instance |
 
 ### 🚀 Install & run from source
 
@@ -134,6 +139,11 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 | ⏱️ کنترل سرعت | محدودسازی پهنای باند و توقف/ادامه وظایف |
 | 🔌 خاموش‌شدن خودکار | خاموش کردن سیستم پس از پایان صف دانلود |
 | 💾 ذخیره تنظیمات | ذخیره تنظیمات در `~/.config/terminal-download-manager/` |
+| 🗓️ زمان‌بندی | پنجره‌های شروع/توقف و سقف سرعت در ساعات شب |
+| 📋 مانیتور کلیپ‌بورد | اختیاری: دریافت خودکار لینک‌های کپی‌شده |
+| 🗄️ پایگاه داده SQLite | ذخیره امن و پایدار صف و تاریخچه دانلود |
+| 🔬 تحلیل لینک | بررسی پیش از دانلود (نام، حجم، نوع، پشتیبانی Range) |
+| 🚦 تک‌نمونه‌ای | اجرای دوم، لینک را به نمونه در حال اجرا می‌دهد |
 
 ### 🚀 نصب و اجرا از سورس
 

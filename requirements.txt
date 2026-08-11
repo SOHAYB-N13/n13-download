@@ -4,6 +4,11 @@ urllib3>=2.0
 rich>=13.0
 colorama>=0.4
 pywebview>=5.0
+pyfiglet>=0.8
+
+# Optional: system stats on the dashboard (CPU/RAM/disk).
+# The app works without it (those readouts show em-dashes).
+psutil>=5.9
 
 # Optional: import cookies from a live browser profile.
 # The core engine still works without it.

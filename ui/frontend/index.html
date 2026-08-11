@@ -283,6 +283,12 @@ try {
       <!-- ── History ───────────────────────────────────────────────── -->
       <section class="page" id="page-history" aria-label="History">
         <div class="page-actions">
+          <div class="chips" id="historyFilterChips" role="tablist" aria-label="Filter history">
+            <button class="chip active" data-hfilter="all">All</button>
+            <button class="chip" data-hfilter="Complete">Completed</button>
+            <button class="chip" data-hfilter="Failed">Failed</button>
+            <button class="chip" data-hfilter="Cancelled">Cancelled</button>
+          </div>
           <button class="btn btn-ghost" id="btnClearHistory">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9 6.5v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M19 6.5 18.1 19a2 2 0 0 1-2 1.9H7.9a2 2 0 0 1-2-1.9L5 6.5"/></svg>
             Clear history
@@ -291,7 +297,7 @@ try {
         <div class="table-card">
           <table class="table" id="historyTable">
             <thead>
-              <tr><th class="h-date">Date</th><th>File</th><th class="h-size">Size</th><th>Status</th><th class="h-dir">Location</th></tr>
+              <tr><th class="h-date">Date</th><th>File</th><th class="h-size">Size</th><th class="h-cat">Category</th><th>Status</th><th class="h-dir">Location</th><th class="h-actions" aria-hidden="true"></th></tr>
             </thead>
             <tbody id="historyBody"></tbody>
           </table>

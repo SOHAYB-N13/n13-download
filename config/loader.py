@@ -16,13 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import AppConfig, DEFAULT_CONFIG
-
-
-def config_dir() -> Path:
-    """Directory holding the persistent config (created lazily)."""
-    base = Path.home() / ".config" / "terminal-download-manager"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+from core.paths import config_dir, migrate_legacy_config
 
 
 def config_path() -> Path:
@@ -73,6 +67,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
     authentication token on the next browser-integration run, so the token is
     always regenerated when missing.
     """
+    migrate_legacy_config()
     cfg_path = path or config_path()
     if not cfg_path.exists():
         cfg = DEFAULT_CONFIG.copy()

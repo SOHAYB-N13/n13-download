@@ -1955,3 +1955,46 @@ body.resizing * { cursor: inherit; }
   .stats-grid { gap: 18px; }
   .settings-wrap { max-width: 980px; }
 }
+
+
+/* ── Phase I additions ─────────────────────────────────────────────────── */
+
+/* New lifecycle statuses reuse the active/paused look. */
+.badge-analyzing, .badge-starting, .badge-merging, .badge-verifying {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.badge-analyzing .badge-dot, .badge-starting .badge-dot,
+.badge-merging .badge-dot, .badge-verifying .badge-dot { animation: blink 1.2s ease-in-out infinite; }
+.badge-cancelled { color: var(--text-2); background: var(--bg-active); }
+.badge-removed { color: var(--text-3); background: transparent; }
+
+/* History: category pill, meta, actions column */
+.h-cat { width: 96px; }
+.cat-pill {
+  display: inline-block;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: var(--text-2);
+  background: var(--bg-active);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.h-meta { display: block; font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.h-actions { width: 120px; text-align: right; white-space: nowrap; }
+.h-actions .icon-btn { margin-left: 2px; }
+
+/* Settings: category directory editor */
+.catdirs { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.catdir-row { display: flex; align-items: center; gap: 8px; }
+.catdir-name { flex: none; width: 92px; font-size: 12.5px; color: var(--text-2); }
+.catdir-row .input { flex: 1; }
+
+/* Settings: speed presets */
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset-row .chip { font-variant-numeric: tabular-nums; }
+
+/* Modal: clipboard link prompt subtext */
+.confirm-sub { margin-top: 6px; font-size: 12px; color: var(--text-2); max-height: 90px; overflow: auto; }
+.confirm-ico.accent { color: var(--accent); background: var(--accent-soft); }
