@@ -38,8 +38,11 @@ const API = {
 
   // ── Download actions ──────────────────────────────────────────────
 
-  async addDownload(url, directory, label, checksum, autostart, category) {
-    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "");
+  async addDownload(url, directory, label, checksum, autostart, category, allowDuplicate, resolveConflict) {
+    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "", !!allowDuplicate, resolveConflict || "");
+  },
+  async checkDuplicate(url, directory, filename) {
+    return this._call("check_duplicate", url, directory || "", filename || "");
   },
   async addBatch(urls, directory) { return this._call("add_batch", urls, directory); },
   async pauseDownload(id) { return this._call("pause_download", id); },
@@ -53,6 +56,7 @@ const API = {
   async openFolder(id) { return this._call("open_folder", id); },
   async openFile(id) { return this._call("open_file", id); },
   async openFileFromHistory(entry) { return this._call("open_file_from_history", entry); },
+  async openFileAt(path) { return this._call("open_file_at", path); },
   async redownload(id) { return this._call("redownload", id); },
   async openPath(path) { return this._call("open_path", path); },
   async deleteFile(taskId) { return this._call("delete_file", taskId); },
@@ -85,6 +89,7 @@ const API = {
 
   async getStats() { return this._call("get_stats"); },
   async getSystemStats() { return this._call("get_system_stats"); },
+  async getAnalytics() { return this._call("get_analytics"); },
 
   // ── Browser integration ───────────────────────────────────────────
 
@@ -96,6 +101,16 @@ const API = {
   async createExtension() { return this._call("create_extension"); },
   async registerProtocol() { return this._call("register_protocol"); },
   async unregisterProtocol() { return this._call("unregister_protocol"); },
+
+  // ── Download rules ─────────────────────────────────────────────────
+
+  async getRules() { return this._call("get_rules"); },
+  async addRule(rule) { return this._call("add_rule", rule); },
+  async updateRule(id, fields) { return this._call("update_rule", id, fields); },
+  async deleteRule(id) { return this._call("delete_rule", id); },
+  async duplicateRule(id) { return this._call("duplicate_rule", id); },
+  async reorderRules(ids) { return this._call("reorder_rules", ids); },
+  async testRule(url) { return this._call("test_rule", url); },
 
   // ── Pattern scan ──────────────────────────────────────────────────
 

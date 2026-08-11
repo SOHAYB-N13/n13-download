@@ -53,6 +53,26 @@ class AppConfig:
     smart_max_connections: int = 8               # ceiling for Smart mode
     smart_adaptive: bool = True                  # adaptive ramp in Smart mode
 
+    # --- Duplicate downloads -------------------------------------------------
+    # How to handle a download whose URL / destination already exists:
+    #   "ask"    — show a conflict dialog (interactive) / auto-rename (batch)
+    #   "allow"  — always allow duplicates
+    #   "rename" — always auto-rename the new file (unique name)
+    #   "replace" — delete the existing destination file and re-download
+    duplicate_policy: str = "ask"
+
+    # --- Download rules ------------------------------------------------------
+    # Automatic rules (core/rules.py) configure new downloads; off = disabled.
+    rules_enabled: bool = True
+
+    # --- Desktop notifications ------------------------------------------------
+    # Balloon notifications via the system tray (event-driven, never per-progress).
+    notifications_enabled: bool = True
+    notify_completed: bool = True
+    notify_failed: bool = True
+    notify_started: bool = False
+    notify_batch: bool = True
+
     # --- Retry strategy ----------------------------------------------------
     max_retries: int = 15
     retry_delay: float = 3.0                     # base delay between attempts
@@ -82,6 +102,9 @@ class AppConfig:
     # persistent store when the application starts.
     resume_on_startup: bool = False
     start_minimized: bool = False
+    # Minimize / close go to the system tray instead of the taskbar / exit.
+    minimize_to_tray: bool = True
+    close_to_tray: bool = False
 
     # --- Scheduler (queue-wide start/stop windows + night speed cap) --------
     scheduler_enabled: bool = False
@@ -216,6 +239,17 @@ class AppConfig:
             instance.connection_mode = "smart"
         instance.smart_max_connections = max(1, min(64, int(instance.smart_max_connections or 8)))
         instance.smart_adaptive = bool(getattr(instance, "smart_adaptive", True))
+        instance.duplicate_policy = str(instance.duplicate_policy or "ask")
+        if instance.duplicate_policy not in ("ask", "allow", "rename", "replace"):
+            instance.duplicate_policy = "ask"
+        instance.rules_enabled = bool(getattr(instance, "rules_enabled", True))
+        instance.minimize_to_tray = bool(getattr(instance, "minimize_to_tray", True))
+        instance.close_to_tray = bool(getattr(instance, "close_to_tray", False))
+        instance.notifications_enabled = bool(getattr(instance, "notifications_enabled", True))
+        instance.notify_completed = bool(getattr(instance, "notify_completed", True))
+        instance.notify_failed = bool(getattr(instance, "notify_failed", True))
+        instance.notify_started = bool(getattr(instance, "notify_started", False))
+        instance.notify_batch = bool(getattr(instance, "notify_batch", True))
 
         return instance
 

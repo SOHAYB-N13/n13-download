@@ -78,8 +78,18 @@ class LegacyDownloadRunner:
             raise TaskCancelled()
         self._prepare()
 
+        # Per-task connection override (set by download rules).  A copy of the
+        # config lets a rule switch this one download to Smart/Manual without
+        # touching the global settings.
+        cfg = self._config
+        if request.connection_mode:
+            cfg = self._config.copy()
+            cfg.connection_mode = request.connection_mode
+            if request.connection_mode == "manual" and request.num_threads:
+                cfg.num_threads = max(1, int(request.num_threads))
+
         controller = DownloadController(
-            self._config,
+            cfg,
             self._session,
             self._log,
             show_progress=False,

@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS history (
     status      TEXT NOT NULL DEFAULT '',
     duration    REAL NOT NULL DEFAULT 0,
     avg_speed   REAL NOT NULL DEFAULT 0,
+    connection_mode TEXT NOT NULL DEFAULT '',
     finished    TEXT NOT NULL DEFAULT ''
 );
 
@@ -142,6 +143,15 @@ class TaskStore:
             self._conn.executescript(_SCHEMA)
             self._conn.execute("PRAGMA user_version=%d" % _SCHEMA_VERSION)
             self._conn.commit()
+            # Lightweight migration for existing databases created before the
+            # connection_mode column existed.
+            try:
+                cols = [r[1] for r in self._conn.execute("PRAGMA table_info(history)")]
+                if "connection_mode" not in cols:
+                    self._conn.execute("ALTER TABLE history ADD COLUMN connection_mode TEXT NOT NULL DEFAULT ''")
+                    self._conn.commit()
+            except sqlite3.Error:
+                pass
 
     def _recover_from_corruption(self, original: BaseException) -> "sqlite3.Connection":
         """Quarantine the corrupt database and start a fresh one.
@@ -372,8 +382,8 @@ class TaskStore:
                 """
                 INSERT INTO history (
                     task_id, name, url, directory, category, size_bytes,
-                    status, duration, avg_speed, finished
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    status, duration, avg_speed, connection_mode, finished
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     entry.get("task_id", ""),
@@ -385,6 +395,7 @@ class TaskStore:
                     entry.get("status", ""),
                     float(entry.get("duration", 0) or 0),
                     float(entry.get("avg_speed", 0) or 0),
+                    entry.get("connection_mode", "") or "",
                     entry.get("finished", ""),
                 ),
             )
@@ -413,6 +424,7 @@ class TaskStore:
                     "status": r.get("status", ""),
                     "duration": float(r.get("duration", 0) or 0),
                     "avg_speed": float(r.get("avg_speed", 0) or 0),
+                    "connection_mode": r.get("connection_mode", "") or "",
                     "finished": r.get("finished", ""),
                 }
             )

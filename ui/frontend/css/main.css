@@ -2002,3 +2002,34 @@ body.resizing * { cursor: inherit; }
 
 /* Smart Download connection indicator */
 .dl-smart { color: var(--accent); font-size: 11px; margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+
+/* Download Rules manager */
+.rules-manager { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.rule-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); }
+.rule-main { flex: 1; min-width: 0; }
+.rule-name { font-weight: 600; font-size: 13px; }
+.rule-sub { font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rule-pri { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.rule-ops { display: flex; gap: 2px; }
+.rules-actions { display: flex; gap: 8px; margin-top: 8px; }
+.rule-edit .re-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.rule-edit .re-conds, .rule-edit .re-actions { margin-top: 14px; }
+.rule-edit .re-conds-head, .rule-edit .re-actions-head { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.re-cond-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.re-cond-row select { width: 160px; flex: none; }
+.re-cond-row input { flex: 1; }
+.re-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+
+/* Analytics panel (History page) */
+.analytics { margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
+.an-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.an-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-2); }
+.an-val { font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.an-lbl { font-size: 11px; color: var(--text-2); }
+.an-rows { display: flex; flex-direction: column; gap: 6px; }
+.an-row { display: flex; align-items: center; gap: 10px; }
+.an-row .an-lbl { width: 84px; flex: none; }
+.an-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+.an-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-active); border: 1px solid var(--border); color: var(--text-2); }

@@ -182,6 +182,8 @@ class DownloadRequest:
     category: str = "General"
     priority: int = 5
     speed_limit_bps: int = 0
+    connection_mode: str = ""      # "" | "smart" | "manual" (rule override)
+    num_threads: int = 0           # used when connection_mode == "manual"
 
     @property
     def name(self) -> str:
@@ -212,6 +214,8 @@ class TaskSnapshot:
     filename: str = ""
     started_at: Optional[float] = None
     smart_status: str = ""
+    connection_mode: str = ""
+    num_threads: int = 0
 
     @property
     def name(self) -> str:
@@ -249,6 +253,8 @@ class TaskSnapshot:
             "filename": self.filename,
             "started_at": self.started_at,
             "smart_status": self.smart_status,
+            "connection_mode": self.connection_mode,
+            "num_threads": self.num_threads,
         }
 
 
@@ -383,6 +389,8 @@ class TaskManager:
             category=task.category,
             priority=task.priority,
             speed_limit_bps=task.speed_limit_bps,
+            connection_mode=task.connection_mode,
+            num_threads=task.num_threads,
         )
 
     def _snap(self, rec: _TaskRecord) -> TaskSnapshot:
@@ -409,6 +417,8 @@ class TaskManager:
             filename=t.filename,
             started_at=t.started_at,
             smart_status=t.smart_status,
+            connection_mode=t.connection_mode,
+            num_threads=t.num_threads,
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -476,6 +486,8 @@ class TaskManager:
                 speed_limit_bps=request.speed_limit_bps,
                 filename=request.label,
                 autostart=autostart,
+                connection_mode=request.connection_mode,
+                num_threads=request.num_threads,
             )
             task_id = task.id
             rec = _TaskRecord(task=task)
@@ -489,6 +501,69 @@ class TaskManager:
         if autostart:
             self._start_next()
         return task_id
+
+    def check_duplicate(
+        self,
+        url: str,
+        directory: str,
+        filename: str = "",
+    ) -> Dict[str, Any]:
+        """Detect a potential duplicate for a download about to be added.
+
+        Detection levels (cheap, metadata-first — never downloads a file):
+        1. Same normalized URL already queued/downloading/paused in this session.
+        2. Same URL present in History.
+        3. A file already exists at the destination path.
+
+        Returns a plain dict consumed by the UI.  ``reason`` is ``""`` when no
+        conflict is found.
+        """
+        url = (url or "").strip()
+        result: Dict[str, Any] = {
+            "has_active": False,
+            "active_task_id": "",
+            "in_history": False,
+            "history_count": 0,
+            "file_exists": False,
+            "file_path": "",
+            "reason": "",
+        }
+        if not url:
+            return result
+
+        # Level 1 — same URL active in this session (queued/downloading/paused).
+        with self._lock:
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if (
+                    rec is not None
+                    and rec.task.url == url
+                    and not is_terminal(rec.task.status)
+                ):
+                    result["has_active"] = True
+                    result["active_task_id"] = rec.id
+                    result["reason"] = "same_url"
+                    return result
+
+        # Level 2 — same URL in history.
+        for h in self.history:
+            if h.get("url") == url:
+                result["in_history"] = True
+                result["history_count"] += 1
+                result["reason"] = result["reason"] or "in_history"
+
+        # Level 3 — file already exists at the destination.
+        if filename:
+            try:
+                p = Path(directory or "") / filename
+                if p.is_file():
+                    result["file_exists"] = True
+                    result["file_path"] = str(p)
+                    result["reason"] = result["reason"] or "file_exists"
+            except OSError:
+                pass
+
+        return result
 
     def _detect_category(self, request: DownloadRequest) -> str:
         """Auto-assign a category from the request when enabled."""
@@ -1243,6 +1318,9 @@ class TaskManager:
         return history
 
     def _add_history_locked(self, rec: _TaskRecord, task: DownloadTask) -> None:
+        mode = task.connection_mode or ""
+        if not mode and self._config is not None:
+            mode = getattr(self._config, "connection_mode", "") or ""
         entry = {
             "task_id": task.id,
             "url": task.url,
@@ -1253,6 +1331,7 @@ class TaskManager:
             "status": task.status.value,
             "duration": round(task.elapsed_seconds, 1),
             "avg_speed": round(task.average_speed, 1),
+            "connection_mode": mode,
             "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         try:

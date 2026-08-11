@@ -180,6 +180,9 @@ class DownloadTask:
     category: str = "General"
     autostart: bool = True
     speed_limit_bps: int = 0
+    # Per-task connection override set by download rules ("" = inherit config).
+    connection_mode: str = ""
+    num_threads: int = 0
     # The resolved destination file path (after unique-name handling) once the
     # engine has computed it.  Used to scope temporary-artifact cleanup to the
     # exact files this task owns.

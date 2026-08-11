@@ -390,17 +390,46 @@ const App = {
       if (!depth) overlay.classList.remove("open");
     });
     window.addEventListener("dragover", (e) => e.preventDefault());
-    window.addEventListener("drop", (e) => {
+    window.addEventListener("drop", async (e) => {
       e.preventDefault();
       depth = 0;
       overlay.classList.remove("open");
-      const url = (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "").trim();
-      if (url && /^https?:\/\//i.test(url)) this.openNewDownload(url.split("\n")[0]);
+      const urls = await this._extractDroppedUrls(e.dataTransfer);
+      if (!urls.length) return;
+      if (urls.length === 1) {
+        this.openNewDownload(urls[0]);
+      } else {
+        const dir = (this.state.settings && this.state.settings.download_dir) || "";
+        const n = await API.addBatch(urls, dir);
+        Components.toast("Batch added", `${n} downloads queued`, "success");
+        this.navigate("downloads");
+      }
     });
 
     window.addEventListener("error", (e) => {
       API.logJs(`${e.message} @ ${e.filename}:${e.lineno}`);
     });
+  },
+
+  async _extractDroppedUrls(dt) {
+    const extract = (text) => (text.match(/https?:\/\/[^\s"'<>]+/g) || []).filter(Boolean);
+    let urls = [];
+    const uriList = (dt.getData("text/uri-list") || "").trim();
+    if (uriList) {
+      urls = uriList.split("\n").map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l));
+    }
+    const text = (dt.getData("text/plain") || "").trim();
+    if (!urls.length && text) urls = extract(text);
+    // Local text files containing URLs (e.g. a .txt/.csv/.url dropped from Explorer).
+    if (!urls.length && (dt.files && dt.files.length)) {
+      const tf = Array.from(dt.files).find((f) => /\.(txt|csv|list|url)$/i.test(f.name));
+      if (tf) {
+        try {
+          urls = extract(await tf.text());
+        } catch (e) { API.logJs("drop file read: " + String(e)); }
+      }
+    }
+    return [...new Set(urls)];
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -455,6 +484,8 @@ const App = {
       this.openNewDownload(evt.url);
     } else if (evt.type === "clipboard_url") {
       this._onClipboardLink(evt.url);
+    } else if (evt.type === "navigate") {
+      this.navigate(evt.page || "dashboard");
     } else if (evt.type === "toast") {
       Components.toast(evt.title || "Notice", evt.message || "", evt.kind || "info");
     } else if (evt.type === "window") {
@@ -904,16 +935,17 @@ const App = {
     dlg.qs("#ndCancel").addEventListener("click", () => dlg.close());
     el.go.addEventListener("click", async () => {
       const url = (model.normalized || el.url.value).trim();
+      const dir = el.dir.value.trim();
+      const name = el.name.value.trim();
       el.go.disabled = true;
       el.go.classList.add("busy");
       try {
-        const id = await API.addDownload(
-          url, el.dir.value.trim(), el.name.value.trim(),
-          el.checksum.value.trim(), el.autostart.checked, model.category);
+        const id = await this._addDownloadResolvingConflict(
+          url, dir, name, el.checksum.value.trim(), el.autostart.checked, model.category);
         if (id) {
           this.state.highlightId = id;
           dlg.close();
-          Components.toast("Download added", el.name.value.trim() || Utils.fileName({ url }), "success");
+          Components.toast("Download added", name || Utils.fileName({ url }), "success");
           if (this.state.page !== "downloads") this.navigate("downloads");
         } else {
           setValid(false, "Could not add this download");
@@ -942,6 +974,39 @@ const App = {
       Components.toast("Could not open dialog", String(e), "error");
       API.logJs("openNewDownload: " + String(e));
     }
+  },
+
+  async _addDownloadResolvingConflict(url, directory, name, checksum, autostart, category) {
+    const policy = (this.state.settings && this.state.settings.duplicate_policy) || "ask";
+    let conflict = null;
+    try { conflict = await API.checkDuplicate(url, directory, name); } catch (e) {}
+    const hasConflict = conflict && (conflict.reason || conflict.has_active);
+    if (!hasConflict) {
+      return API.addDownload(url, directory, name, checksum, autostart, category);
+    }
+    if (policy === "allow") return API.addDownload(url, directory, name, checksum, autostart, category, true);
+    if (policy === "replace") return API.addDownload(url, directory, name, checksum, autostart, category, false, "replace");
+    if (policy === "rename") return API.addDownload(url, directory, name, checksum, autostart, category);
+    // "ask" — show the conflict dialog.
+    const choice = await Components.conflictPrompt({
+      reason: conflict.reason || (conflict.has_active ? "same_url" : ""),
+      filePath: conflict.file_path, name,
+    });
+    if (choice === "cancel") return "";
+    if (choice === "open_task") {
+      this.navigate("downloads");
+      this.state.highlightId = conflict.active_task_id;
+      this.state.listSig = "";
+      this._renderDownloads(true);
+      return "";
+    }
+    if (choice === "open") {
+      API.openFileAt(conflict.file_path);
+      return "";
+    }
+    if (choice === "replace") return API.addDownload(url, directory, name, checksum, autostart, category, false, "replace");
+    if (choice === "again") return API.addDownload(url, directory, name, checksum, autostart, category, true);
+    return API.addDownload(url, directory, name, checksum, autostart, category);
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1128,7 +1193,9 @@ const App = {
       return;
     }
     if (action === "redownload") {
-      const id = await API.addDownload(h.url, h.directory, h.name, "", true);
+      // Smart re-download: check the destination / existing file first and
+      // offer conflict handling instead of blindly creating a new task.
+      const id = await this._addDownloadResolvingConflict(h.url, h.directory, h.name, "", true, "");
       if (id) { this.state.highlightId = id; Components.toast("Re-queued", h.name, "success"); this.navigate("downloads"); }
       return;
     }
@@ -1143,6 +1210,7 @@ const App = {
     const body = Utils.$id("historyBody");
     const empty = Utils.$id("historyEmpty");
     const table = Utils.$id("historyTable");
+    this._renderHistoryStats();
     const q = this.state.search;
     const hf = this.state.hFilter || "all";
     let items = this.state.history;
@@ -1200,6 +1268,48 @@ const App = {
         const h = items[idx];
         if (h) this._historyAction(btn.dataset.hact, h);
       }));
+  },
+
+  async _renderHistoryStats() {
+    const box = Utils.$id("historyStats");
+    if (!box) return;
+    const a = await API.getAnalytics();
+    if (!a || !a.total_downloads) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    box.hidden = false;
+    const fmtDur = (s) => {
+      if (!s) return "0s";
+      s = Math.round(s);
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+      return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+    };
+    const cards = [
+      ["Downloads", String(a.total_downloads)],
+      ["Completed", String(a.completed)],
+      ["Failed", String(a.failed)],
+      ["Cancelled", String(a.cancelled)],
+      ["Data", a.total_bytes_display],
+      ["Avg speed", Utils.formatSpeed(a.avg_speed)],
+      ["Peak speed", Utils.formatSpeed(a.peak_speed)],
+      ["Time", fmtDur(a.total_duration)],
+    ];
+    const catList = Object.entries(a.by_category || {}).slice(0, 8)
+      .map(([k, v]) => `<span class="an-pill">${Utils.escapeHtml(k)} ${v}</span>`).join("");
+    const typeList = Object.entries(a.by_type || {}).slice(0, 8)
+      .map(([k, v]) => `<span class="an-pill">.${Utils.escapeHtml(k)} ${v}</span>`).join("");
+    const mode = a.by_mode || {};
+    box.innerHTML = `
+      <div class="an-cards">${cards.map(([l, v]) =>
+        `<div class="an-card"><div class="an-val">${Utils.escapeHtml(v)}</div><div class="an-lbl">${Utils.escapeHtml(l)}</div></div>`).join("")}</div>
+      <div class="an-rows">
+        ${catList ? `<div class="an-row"><span class="an-lbl">Categories</span><div class="an-pills">${catList}</div></div>` : ""}
+        ${typeList ? `<div class="an-row"><span class="an-lbl">Types</span><div class="an-pills">${typeList}</div></div>` : ""}
+        <div class="an-row"><span class="an-lbl">Connections</span><div class="an-pills">
+          <span class="an-pill">Smart ${mode.smart || 0}</span><span class="an-pill">Manual ${mode.manual || 0}</span></div></div>
+      </div>`;
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1371,6 +1481,12 @@ const App = {
         fields: [
           { key: "download_dir", label: "Download folder", hint: "Default location for new files", type: "dir" },
           { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
+          { key: "duplicate_policy", label: "Duplicate handling", hint: "What to do when a URL or file already exists", type: "select", options: [
+            { value: "ask", label: "Ask every time" },
+            { value: "allow", label: "Allow duplicates" },
+            { value: "rename", label: "Rename automatically" },
+            { value: "replace", label: "Replace existing" },
+          ] },
           { key: "num_threads", label: "Connections per download", hint: "Parallel segments per file (higher = faster on good networks)", type: "range", min: 1, max: 64 },
           { key: "language", label: "Language", hint: "Interface language", type: "select", options: [
             { value: "en", label: "English" },
@@ -1387,6 +1503,13 @@ const App = {
           ] },
           { key: "smart_max_connections", label: "Smart max connections", hint: "Ceiling Smart mode may use", type: "range", min: 1, max: 32 },
           { key: "smart_adaptive", label: "Adaptive scaling", hint: "Gradually increase connections while the server stays stable", type: "toggle" },
+        ],
+      },
+      {
+        id: "rules", icon: "link", title: "Download Rules",
+        fields: [
+          { key: "rules_enabled", label: "Enable rules", hint: "Automatically set category, folder and priority for new downloads", type: "toggle" },
+          { key: "_rules_manager", label: "Rules", hint: "Match by extension, domain, URL text, size, or MIME type", type: "rules" },
         ],
       },
       {
@@ -1421,8 +1544,14 @@ const App = {
         fields: [
           { key: "resume_on_startup", label: "Resume on startup", hint: "Automatically continue downloads that were interrupted", type: "toggle" },
           { key: "start_minimized", label: "Start minimized", hint: "Launch the window minimized", type: "toggle" },
+          { key: "minimize_to_tray", label: "Minimize to tray", hint: "Minimizing hides N13 to the system tray", type: "toggle" },
+          { key: "close_to_tray", label: "Close to tray", hint: "Closing the window keeps N13 running in the tray", type: "toggle" },
           { key: "clipboard_monitor", label: "Clipboard monitoring", hint: "Offer to download URLs you copy", type: "toggle" },
           { key: "clipboard_autostart", label: "Auto-download copied links", hint: "Start the download without asking (when monitoring is on)", type: "toggle" },
+          { key: "notifications_enabled", label: "Desktop notifications", hint: "Balloon notifications via the system tray", type: "toggle" },
+          { key: "notify_completed", label: "Notify on completion", hint: "When a download finishes", type: "toggle" },
+          { key: "notify_failed", label: "Notify on failure", hint: "When a download fails", type: "toggle" },
+          { key: "notify_started", label: "Notify on start", hint: "When a download begins (off by default)", type: "toggle" },
         ],
       },
       {
@@ -1567,6 +1696,12 @@ const App = {
         </div>`;
     } else if (f.type === "server") {
       ctl = `<button class="btn btn-ghost" id="setGoBrowser">${Utils.icon("external", 15)} Open Browser page</button>`;
+    } else if (f.type === "rules") {
+      ctl = `<div class="rules-manager" id="rulesManager"></div>
+        <div class="rules-actions">
+          <button class="btn btn-ghost btn-sm" id="btnRuleAdd">${Utils.icon("plus", 13)} Add rule</button>
+          <button class="btn btn-ghost btn-sm" id="btnRuleTest">${Utils.icon("search", 13)} Test rule</button>
+        </div>`;
     }
 
     return `<div class="set-row${f.wide ? " set-row-wide" : ""}" data-field="${f.key}">${head}<div class="field-ctl">${ctl}</div></div>`;
@@ -1804,6 +1939,87 @@ const App = {
     });
 
     Utils.$id("setGoBrowser")?.addEventListener("click", () => this.navigate("browser"));
+    if (Utils.$id("btnRuleAdd")) this._initRulesManager(container);
+  },
+
+  // ── Download Rules manager ────────────────────────────────────────
+
+  async _initRulesManager(container) {
+    const box = Utils.$id("rulesManager");
+    if (!box) return;
+    const rules = (await API.getRules()) || [];
+    if (!rules.length) {
+      box.innerHTML = `<div class="dim-note">No rules yet. Rules auto-set category, folder and priority for matching downloads.</div>`;
+    } else {
+      box.innerHTML = rules.map((r) => `
+        <div class="rule-item" data-rid="${Utils.escapeHtml(r.id)}">
+          <label class="switch"><input type="checkbox" data-ren="${Utils.escapeHtml(r.id)}" ${r.enabled === false ? "" : "checked"}><span class="switch-track"></span></label>
+          <div class="rule-main">
+            <div class="rule-name">${Utils.escapeHtml(r.name)}</div>
+            <div class="rule-sub">${Utils.escapeHtml((r.conditions || []).map((c) => c.field + "=" + c.value).join(" & ") || "no conditions")}${r.category ? " · " + Utils.escapeHtml(r.category) : ""}</div>
+          </div>
+          <span class="rule-pri">P${r.priority}</span>
+          <div class="rule-ops">
+            <button class="icon-btn btn-xs" data-act="edit" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Edit" aria-label="Edit rule">${Utils.icon("settings", 13)}</button>
+            <button class="icon-btn btn-xs" data-act="dup" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Duplicate" aria-label="Duplicate rule">${Utils.icon("copy", 13)}</button>
+            <button class="icon-btn btn-xs" data-act="del" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Delete" aria-label="Delete rule">${Utils.icon("trash", 13)}</button>
+          </div>
+        </div>`).join("");
+    }
+
+    const reload = () => this._initRulesManager(container);
+    const ruleById = (id) => rules.find((r) => r.id === id);
+
+    Utils.$qa(".rule-item [data-ren]", box).forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        await API.updateRule(cb.dataset.ren, { enabled: cb.checked });
+        reload();
+      });
+    });
+    Utils.$qa(".rule-item [data-act]", box).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const r = ruleById(btn.dataset.rid);
+        if (!r) return;
+        if (btn.dataset.act === "edit") {
+          const saved = await Components.ruleEditor(r);
+          if (saved) { await API.updateRule(r.id, saved); reload(); }
+        } else if (btn.dataset.act === "dup") {
+          await API.duplicateRule(r.id); reload();
+        } else if (btn.dataset.act === "del") {
+          const ok = await Components.confirm({ title: "Delete rule", message: `Delete "${r.name}"?`, okText: "Delete", danger: true });
+          if (ok) { await API.deleteRule(r.id); reload(); }
+        }
+      });
+    });
+
+    Utils.$id("btnRuleAdd").addEventListener("click", async () => {
+      const saved = await Components.ruleEditor({});
+      if (saved) { await API.addRule(saved); reload(); }
+    });
+    Utils.$id("btnRuleTest").addEventListener("click", async () => {
+      const dlg = Components.showModal(`
+        <div class="confirm-body">
+          <span class="confirm-ico accent">${Utils.icon("search", 22)}</span>
+          <p class="confirm-msg">Test rule</p>
+          <input class="input mono" id="rtUrl" placeholder="https://example.com/movie.mp4" spellcheck="false">
+        </div>`, { title: "Test rule", width: 460 });
+      dlg.setFooter(`<button class="btn btn-ghost" id="rtCancel">Cancel</button><button class="btn btn-primary" id="rtGo">${Utils.icon("search", 14)} Test</button>`);
+      const url = dlg.qs("#rtUrl");
+      setTimeout(() => url.focus(), 60);
+      dlg.qs("#rtCancel").addEventListener("click", () => dlg.close());
+      dlg.qs("#rtGo").addEventListener("click", async () => {
+        const res = await API.testRule(url.value.trim());
+        dlg.close();
+        if (!res || !res.matched) {
+          Components.toast("No rule matched", "This URL would use the default settings", "info");
+          return;
+        }
+        const a = res.actions || {};
+        Components.toast("Rule matched: " + (res.rule?.name || "?"),
+          `Category: ${a.category || "default"} · Folder: ${a.folder || "default"} · Priority: ${a.priority} · Conn: ${a.connection_mode || "inherit"}`,
+          "success", 6000);
+      });
+    });
   },
 
   // ══════════════════════════════════════════════════════════════════════

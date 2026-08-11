@@ -47,6 +47,7 @@ class Api:
         self._net_baseline: Optional[tuple[int, int]] = None
         self._net_baseline_time: float = 0.0
         self._shutdown_done: bool = False
+        self._tray = None
 
         from core.paths import data_dir, migrate_legacy_saved_links
 
@@ -77,6 +78,10 @@ class Api:
         # Optional clipboard monitor (off by default).
         self._clipboard = None
         self._sync_clipboard_monitor()
+
+        # Download rules (auto-configuration) stored under the user config dir.
+        from core.rules import RuleEngine
+        self._rules = RuleEngine(config_dir() / "rules.json")
 
         # Auto-start the loopback relay so browser integration is ready and a
         # second launch can forward URLs to this instance.  Best-effort: a
@@ -110,7 +115,8 @@ class Api:
             return
         if getattr(self._config, "clipboard_autostart", False):
             try:
-                self.add_download(url)
+                allow, resolve = self._duplicate_policy_args(url, "", "")
+                self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve)
                 self._event_queue.put_nowait({"type": "toast",
                                               "title": "Download started",
                                               "message": url[:80]})
@@ -120,10 +126,20 @@ class Api:
             self._event_queue.put_nowait({"type": "clipboard_url", "url": url})
 
     def _apply_scheduled_speed(self, bps: int) -> None:
-        """Apply a scheduler-chosen bandwidth cap without mutating config."""
+        """Apply a scheduler-chosen bandwidth cap without mutating config.
+
+        When the scheduler is off or outside the night window it reports the
+        configured ``max_speed_bps``; in that case the override is *cleared* so
+        future settings changes take effect, instead of the scheduler's value
+        permanently pinning the limiter.
+        """
         try:
             from core.throttle import set_schedule_override, sync_limiter_from_config
-            set_schedule_override(bps)
+            configured = int(getattr(self._config, "max_speed_bps", 0) or 0)
+            if int(bps or 0) == configured:
+                set_schedule_override(None)
+            else:
+                set_schedule_override(bps)
             sync_limiter_from_config(self._config)
         except Exception:
             pass
@@ -133,11 +149,68 @@ class Api:
         try:
             window.events.maximized += self._on_win_maximized
             window.events.restored += self._on_win_restored
+            window.events.minimized += self._on_win_minimized
             # Fires before the window closes (title-bar X, Alt+F4, OS close).
             # Cleanup happens BEFORE the window is destroyed.
             window.events.closing += self._on_closing
         except Exception:
             pass
+        self._start_tray()
+
+    def _on_win_minimized(self) -> None:
+        if getattr(self._config, "minimize_to_tray", True) and self._window:
+            try:
+                self._window.hide()
+            except Exception:
+                pass
+        self._event_queue.put_nowait({"type": "window", "minimized": True})
+
+    def _start_tray(self) -> None:
+        """Create the optional system tray (best-effort; off without pywin32)."""
+        try:
+            from core.tray import SystemTray
+            self._tray = SystemTray(
+                on_show=self._tray_show,
+                on_pause_all=lambda: self._manager.pause_all(),
+                on_resume_all=lambda: self._manager.resume_all(),
+                on_open_folder=self._tray_open_folder,
+                on_settings=lambda: self._event_queue.put_nowait(
+                    {"type": "navigate", "page": "settings"}),
+                on_exit=self.shutdown,
+            )
+            self._tray.start()
+            self._tray.set_tooltip(self._tray_tooltip())
+        except Exception:
+            self._tray = None
+
+    def _tray_show(self) -> None:
+        w = self._window
+        if w:
+            try:
+                w.show()
+                w.restore()
+                w.focus()
+            except Exception:
+                pass
+
+    def _tray_open_folder(self) -> None:
+        try:
+            d = self._config.download_dir
+            if d and os.path.isdir(d):
+                subprocess.Popen(["explorer", d])
+        except Exception:
+            pass
+
+    def _tray_tooltip(self) -> str:
+        stats = self.get_stats()
+        return "N13\n{} active · {}/s".format(stats["running"], stats["total_speed_display"])
+
+    def _tray_tick(self) -> None:
+        if getattr(self, "_tray", None) is not None:
+            try:
+                self._tray.set_tooltip(self._tray_tooltip())
+            except Exception:
+                pass
 
     def _on_win_maximized(self) -> None:
         self._win_maximized = True
@@ -158,6 +231,28 @@ class Api:
             "event": event,
             "task": snapshot.to_dict(),
         })
+        self._maybe_notify(event, snapshot)
+        self._tray_tick()
+
+    def _maybe_notify(self, event: str, snapshot: TaskSnapshot) -> None:
+        """Event-driven desktop notifications (never per-progress updates)."""
+        cfg = self._config
+        if not getattr(cfg, "notifications_enabled", True):
+            return
+        tray = getattr(self, "_tray", None)
+        if tray is None:
+            return
+        name = snapshot.name
+        try:
+            if event == "started" and getattr(cfg, "notify_started", False):
+                tray.notify("Download started", name)
+            elif event == "finished":
+                if snapshot.state == TaskState.COMPLETED and getattr(cfg, "notify_completed", True):
+                    tray.notify("Download complete", name)
+                elif snapshot.state == TaskState.FAILED and getattr(cfg, "notify_failed", True):
+                    tray.notify("Download failed", f"{name} — {snapshot.error or 'unknown error'}")
+        except Exception:
+            pass
 
     # ── Event polling ─────────────────────────────────────────────
 
@@ -204,30 +299,147 @@ class Api:
         cat = category or self._category_for_hint(hint)
         return self._config.resolve_category_dir(cat, base) or base
 
+    def check_duplicate(self, url: str, directory: str = "", filename: str = "") -> Dict[str, Any]:
+        """Duplicate-detection check for a download about to be added."""
+        return self._manager.check_duplicate(url or "", directory or "", filename or "")
+
+    def _rule_overrides(self, url: str, filename: str, size: int = 0, content_type: str = "") -> Optional[Dict[str, Any]]:
+        """Best matching download rule, or None (only when rules are enabled)."""
+        if not getattr(self._config, "rules_enabled", True):
+            return None
+        rule = self._rules.evaluate(url or "", filename or "", int(size or 0), content_type or "")
+        if rule is None:
+            return None
+        return {
+            "category": rule.category or "",
+            "folder": rule.folder or "",
+            "priority": rule.priority_value,
+            "connection_mode": rule.connection_mode or "",
+            "num_threads": rule.manual_connections if rule.connection_mode == "manual" else 0,
+        }
+
     def add_download(self, url: str, directory: str = "", label: str = "",
                      checksum: str = "", autostart: bool = True,
-                     category: str = "") -> str:
+                     category: str = "", allow_duplicate: bool = False,
+                     resolve_conflict: str = "", size: int = 0,
+                     content_type: str = "") -> str:
         hint = label or url
+        rule = self._rule_overrides(url, hint, size, content_type)
+        if rule:
+            # Rules fill in only what the user has NOT explicitly chosen.
+            if not category and rule["category"]:
+                category = rule["category"]
+            if not directory and rule["folder"]:
+                directory = rule["folder"]
         cat = category or self._category_for_hint(hint)
         resolved = self._resolve_directory(directory, cat, hint)
+        if resolve_conflict == "replace":
+            self._delete_destination_file(resolved, label or "")
+        priority = int(rule["priority"]) if rule else 5
+        conn = rule["connection_mode"] if rule else ""
+        nthreads = int(rule["num_threads"]) if rule else 0
         request = DownloadRequest(
             url=url, directory=resolved, checksum=checksum, label=label, category=cat,
+            priority=priority, connection_mode=conn, num_threads=nthreads,
         )
-        return self._manager.add(request, autostart=autostart)
+        return self._manager.add(request, autostart=autostart, allow_duplicate=allow_duplicate)
+
+    @staticmethod
+    def _delete_destination_file(directory: str, filename: str) -> None:
+        """Delete an existing destination file (Replace policy).
+
+        Only a bare filename is ever removed (never a path / traversal), and
+        only if it is a regular file.
+        """
+        if not filename:
+            return
+        name = Path(filename).name
+        if not name or name in (".", ".."):
+            return
+        try:
+            p = Path(directory) / name
+            if p.is_file():
+                p.unlink()
+        except OSError:
+            pass
+
+    def _duplicate_policy_args(self, url: str, directory: str, filename: str) -> tuple:
+        """(allow_duplicate, resolve_conflict) for non-interactive add flows."""
+        policy = getattr(self._config, "duplicate_policy", "ask")
+        allow = policy == "allow"
+        resolve = "replace" if policy == "replace" else ""
+        return allow, resolve
 
     def add_batch(self, urls: List[str], directory: str) -> int:
+        from ui.common import name_from_url
+        policy = getattr(self._config, "duplicate_policy", "ask")
+        # "ask" in a batch context means auto-rename (never overwrite silently);
+        # "replace" deletes existing destinations; "allow" permits duplicates.
+        allow_duplicate = policy == "allow"
         requests = []
         for u in urls:
             if not u.strip():
                 continue
+            rule = self._rule_overrides(u, name_from_url(u))
             cat = self._category_for_hint(u)
+            if rule and rule["category"]:
+                cat = rule["category"]
             resolved = self._resolve_directory(directory, cat, u)
-            requests.append(DownloadRequest(url=u, directory=resolved, category=cat))
+            if rule and rule["folder"] and not directory:
+                resolved = rule["folder"]
+            if policy == "replace":
+                self._delete_destination_file(resolved, name_from_url(u))
+            requests.append(DownloadRequest(
+                url=u, directory=resolved, category=cat,
+                priority=int(rule["priority"]) if rule else 5,
+                connection_mode=rule["connection_mode"] if rule else "",
+                num_threads=int(rule["num_threads"]) if rule else 0,
+            ))
         if not requests:
             return 0
-        self._manager.add_many(requests, autostart=False)
+        self._manager.add_many(requests, autostart=False, allow_duplicate=allow_duplicate)
         self._manager.start_all()
         return len(requests)
+
+    # ── Download rules CRUD ──────────────────────────────────────────
+
+    def get_rules(self) -> List[Dict[str, Any]]:
+        return self._rules.all()
+
+    def add_rule(self, rule: Dict[str, Any]) -> str:
+        from core.rules import DownloadRule
+        r = DownloadRule.from_dict(rule)
+        return self._rules.add(r)
+
+    def update_rule(self, rule_id: str, fields: Dict[str, Any]) -> bool:
+        return self._rules.update(rule_id, fields)
+
+    def delete_rule(self, rule_id: str) -> bool:
+        return self._rules.delete(rule_id)
+
+    def duplicate_rule(self, rule_id: str) -> Optional[str]:
+        return self._rules.duplicate(rule_id)
+
+    def reorder_rules(self, rule_ids: List[str]) -> None:
+        self._rules.reorder(rule_ids)
+
+    def test_rule(self, url: str) -> Dict[str, Any]:
+        """Rule preview: evaluate *url* and report the matched rule + actions."""
+        from ui.common import name_from_url
+        rule = self._rules.evaluate(url or "", name_from_url(url or ""))
+        if rule is None:
+            return {"matched": False, "rule": None}
+        return {
+            "matched": True,
+            "rule": rule.to_dict(),
+            "actions": {
+                "category": rule.category or "",
+                "folder": rule.folder or "",
+                "priority": rule.priority_value,
+                "connection_mode": rule.connection_mode or "",
+                "num_threads": rule.manual_connections if rule.connection_mode == "manual" else 0,
+            },
+        }
 
     def pause_download(self, task_id: str) -> None:
         self._manager.pause_task(task_id)
@@ -312,6 +524,16 @@ class Api:
             directory = (entry or {}).get("directory") or ""
             path = os.path.join(directory, name)
             if os.path.isfile(path):
+                os.startfile(path)  # type: ignore[attr-defined]
+                return True
+        except OSError:
+            pass
+        return False
+
+    def open_file_at(self, path: str) -> bool:
+        """Open a file by its absolute path (duplicate-conflict 'Open')."""
+        try:
+            if path and os.path.isfile(path):
                 os.startfile(path)  # type: ignore[attr-defined]
                 return True
         except OSError:
@@ -489,7 +711,15 @@ class Api:
             pass
 
     def window_close(self) -> None:
-        """Frameless X button: run the full safe shutdown, then destroy."""
+        """Frameless X button."""
+        if getattr(self._config, "close_to_tray", False):
+            if self._window:
+                try:
+                    self._window.hide()
+                except Exception:
+                    pass
+            return
+        # Normal close: run the full safe shutdown, then destroy.
         self.shutdown()
 
     def window_set_bounds(self, x: int, y: int, width: int, height: int) -> None:
@@ -535,6 +765,62 @@ class Api:
             "failed": sum(1 for s in snaps if s.state == TaskState.FAILED),
             "total_speed_bps": total_speed,
             "total_speed_display": human_size(total_speed) + "/s",
+        }
+
+    def get_analytics(self) -> Dict[str, Any]:
+        """Local-only download analytics computed from history + live tasks."""
+        from datetime import datetime
+        from pathlib import Path
+
+        hist = self._manager.history
+        completed = [h for h in hist if h.get("status") == "Complete"]
+        failed = [h for h in hist if h.get("status") == "Failed"]
+        cancelled = [h for h in hist if h.get("status") == "Cancelled"]
+        total_bytes = sum(int(h.get("size_bytes") or 0) for h in hist)
+        speeds = [float(h.get("avg_speed") or 0) for h in completed if h.get("avg_speed")]
+        durations = [float(h.get("duration") or 0) for h in completed]
+        by_day: Dict[str, int] = {}
+        by_category: Dict[str, int] = {}
+        by_type: Dict[str, int] = {}
+        by_mode: Dict[str, int] = {"smart": 0, "manual": 0, "inherit": 0}
+
+        for h in hist:
+            cat = h.get("category") or "General"
+            by_category[cat] = by_category.get(cat, 0) + 1
+            ext = Path(h.get("name") or "").suffix.lstrip(".").lower() or "none"
+            by_type[ext] = by_type.get(ext, 0) + 1
+            mode = h.get("connection_mode") or ""
+            by_mode[mode if mode in by_mode else "inherit"] += 1
+            try:
+                day = datetime.strptime(str(h.get("finished", ""))[:10], "%Y-%m-%d")
+                key = day.strftime("%Y-%m-%d")
+                by_day[key] = by_day.get(key, 0) + 1
+            except (ValueError, TypeError):
+                pass
+
+        # Live tasks also count toward mode usage.
+        for s in self._manager.snapshots():
+            mode = s.connection_mode or ""
+            by_mode[mode if mode in by_mode else "inherit"] += 1
+
+        top_categories = sorted(by_category.items(), key=lambda kv: -kv[1])[:8]
+        top_types = sorted(by_type.items(), key=lambda kv: -kv[1])[:10]
+
+        return {
+            "total_downloads": len(hist),
+            "completed": len(completed),
+            "failed": len(failed),
+            "cancelled": len(cancelled),
+            "total_bytes": total_bytes,
+            "total_bytes_display": human_size(total_bytes),
+            "avg_speed": (sum(speeds) / len(speeds)) if speeds else 0.0,
+            "peak_speed": max(speeds) if speeds else 0.0,
+            "avg_duration": (sum(durations) / len(durations)) if durations else 0.0,
+            "total_duration": sum(durations),
+            "downloads_per_day": dict(sorted(by_day.items())),
+            "by_category": dict(top_categories),
+            "by_type": dict(top_types),
+            "by_mode": by_mode,
         }
 
     def get_system_stats(self) -> Dict[str, Any]:
@@ -642,7 +928,8 @@ class Api:
         if validate_url(url):
             if autostart:
                 # Single-instance forwarding: add directly to the queue.
-                self.add_download(url)
+                allow, resolve = self._duplicate_policy_args(url, "", "")
+                self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve)
                 self._event_queue.put_nowait({"type": "toast",
                                               "title": "Download added",
                                               "message": url[:80]})
@@ -674,8 +961,20 @@ class Api:
                 pass
 
     def _on_closing(self) -> None:
-        """pywebview ``closing`` event: cleanup only; the window closes itself."""
+        """pywebview ``closing`` event.
+
+        With ``close_to_tray`` the window hides to the tray and the close is
+        cancelled; otherwise the graceful shutdown runs and the window closes.
+        """
+        if getattr(self._config, "close_to_tray", False) and not getattr(self, "_shutdown_done", False):
+            if self._window:
+                try:
+                    self._window.hide()
+                except Exception:
+                    pass
+            return False   # cancel the close
         self._cleanup()
+        return None
 
     def _cleanup(self) -> None:
         """Idempotent, thread-safe teardown shared by both close paths."""
@@ -694,6 +993,12 @@ class Api:
         except Exception:
             pass
         self.stop_live_server()
+        if getattr(self, "_tray", None) is not None:
+            try:
+                self._tray.stop()
+            except Exception:
+                pass
+            self._tray = None
         if getattr(self, "_clipboard", None) is not None:
             try:
                 self._clipboard.stop()

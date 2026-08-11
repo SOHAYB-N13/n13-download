@@ -141,6 +141,158 @@ const Components = {
     });
   },
 
+  // ── Duplicate download conflict prompt ────────────────────────────
+
+  async conflictPrompt({ reason, filePath, name }) {
+    const isActive = reason === "same_url";
+    const lines = [];
+    if (isActive) lines.push("This URL is already in your download queue.");
+    else {
+      if (reason === "in_history" || reason === "file_exists")
+        lines.push("This download already exists on your system.");
+    }
+    if (filePath) lines.push(filePath);
+    return new Promise((resolve) => {
+      const body = `
+        <div class="confirm-body">
+          <span class="confirm-ico warning">${Utils.icon("alert", 22)}</span>
+          <p class="confirm-msg">Download already exists</p>
+          ${lines.length ? `<p class="confirm-sub mono" style="word-break:break-all">${Utils.escapeHtml(lines.join("\n"))}</p>` : ""}
+        </div>`;
+      const dlg = this.showModal(body, { title: isActive ? "Already downloading" : "Duplicate detected", width: 480, onClose: () => resolve("cancel") });
+
+      const btns = [];
+      if (isActive) {
+        btns.push(`<button class="btn btn-ghost" id="cfOpenTask">${Utils.icon("folder", 14)} Open existing task</button>`);
+        btns.push(`<button class="btn btn-primary" id="cfAnyway">${Utils.icon("download", 14)} Download anyway</button>`);
+        btns.push(`<button class="btn btn-ghost" id="cfCancel2">Cancel</button>`);
+      } else {
+        if (filePath) btns.push(`<button class="btn btn-ghost" id="cfOpen">${Utils.icon("external", 14)} Open existing</button>`);
+        btns.push(`<button class="btn btn-ghost" id="cfRename">${Utils.icon("retry", 14)} Rename automatically</button>`);
+        btns.push(`<button class="btn btn-ghost" id="cfReplace">${Utils.icon("trash", 14)} Replace existing</button>`);
+        btns.push(`<button class="btn btn-primary" id="cfAgain">${Utils.icon("download", 14)} Download again</button>`);
+        btns.push(`<button class="btn btn-ghost" id="cfCancel3">Cancel</button>`);
+      }
+      dlg.setFooter(btns.join(""));
+      const wire = (id, val) => dlg.qs(id)?.addEventListener("click", () => { resolve(val); dlg.close(); });
+      if (isActive) {
+        wire("#cfOpenTask", "open_task");
+        wire("#cfAnyway", "again");
+        wire("#cfCancel2", "cancel");
+      } else {
+        wire("#cfOpen", "open");
+        wire("#cfRename", "rename");
+        wire("#cfReplace", "replace");
+        wire("#cfAgain", "again");
+        wire("#cfCancel3", "cancel");
+      }
+    });
+  },
+
+  // ── Download rule editor ──────────────────────────────────────────
+
+  async ruleEditor(rule) {
+    const fields = ["extension", "domain", "url_contains", "filename_contains", "mime", "min_size", "max_size"];
+    const conds = (rule.conditions || []).length ? rule.conditions : [{ field: "extension", value: "" }];
+    const dlg = this.showModal(`
+      <div class="rule-edit">
+        <div class="field">
+          <label class="field-label">Rule name</label>
+          <input class="input" id="reName" value="${Utils.escapeHtml(rule.name || "")}" spellcheck="false">
+        </div>
+        <div class="re-row">
+          <label class="switch"><input type="checkbox" id="reEnabled" ${rule.enabled === false ? "" : "checked"}><span class="switch-track"></span></label>
+          <span class="switch-text">Enabled</span>
+        </div>
+        <div class="field">
+          <label class="field-label">Priority <span class="field-opt">higher wins</span></label>
+          <input class="input input-num" type="number" id="rePriority" value="${rule.priority || 0}" min="0">
+        </div>
+        <div class="re-conds">
+          <div class="re-conds-head">Conditions <span class="field-opt">all must match (AND)</span></div>
+          <div id="reConds">${conds.map((c) => this._condRow(c, fields)).join("")}</div>
+          <button class="btn btn-ghost btn-sm" id="reAddCond">${Utils.icon("plus", 13)} Add condition</button>
+        </div>
+        <div class="re-actions">
+          <div class="re-actions-head">Actions</div>
+          <div class="re-grid">
+            <div class="field">
+              <label class="field-label">Category</label>
+              <input class="input" id="reCategory" value="${Utils.escapeHtml(rule.category || "")}" placeholder="Videos" spellcheck="false">
+            </div>
+            <div class="field">
+              <label class="field-label">Download folder</label>
+              <input class="input mono" id="reFolder" value="${Utils.escapeHtml(rule.folder || "")}" placeholder="D:\\Downloads\\Videos" spellcheck="false">
+            </div>
+            <div class="field">
+              <label class="field-label">Task priority</label>
+              <input class="input input-num" type="number" id="reTaskPriority" value="${rule.priority_value ?? 5}" min="0" max="10">
+            </div>
+            <div class="field">
+              <label class="field-label">Connection mode</label>
+              <select class="input" id="reConn">
+                <option value="" ${!rule.connection_mode ? "selected" : ""}>Inherit</option>
+                <option value="smart" ${rule.connection_mode === "smart" ? "selected" : ""}>Smart</option>
+                <option value="manual" ${rule.connection_mode === "manual" ? "selected" : ""}>Manual</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label">Manual connections</label>
+              <input class="input input-num" type="number" id="reThreads" value="${rule.manual_connections || 4}" min="1" max="64">
+            </div>
+          </div>
+        </div>
+      </div>`, { title: rule.id ? "Edit rule" : "New rule", width: 620 });
+
+    dlg.setFooter(`
+      <button class="btn btn-ghost" id="reCancel">Cancel</button>
+      <button class="btn btn-primary" id="reSave">${Utils.icon("check", 15)} Save rule</button>`);
+
+    const qs = (id) => dlg.qs("#" + id);
+    qs("reAddCond").addEventListener("click", () => {
+      qs("reConds").insertAdjacentHTML("beforeend", this._condRow({ field: "extension", value: "" }, fields));
+      this._wireCondRows(dlg.el);
+    });
+    this._wireCondRows(dlg.el);
+
+    return new Promise((resolve) => {
+      qs("reCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      qs("reSave").addEventListener("click", () => {
+        const conditions = Utils.$qa(".re-cond-row", dlg.el).map((row) => ({
+          field: row.querySelector("select").value,
+          value: row.querySelector("input").value.trim(),
+        })).filter((c) => c.value);
+        resolve({
+          name: qs("reName").value.trim() || "Untitled rule",
+          enabled: qs("reEnabled").checked,
+          priority: +qs("rePriority").value || 0,
+          conditions,
+          category: qs("reCategory").value.trim(),
+          folder: qs("reFolder").value.trim(),
+          priority_value: Math.max(0, Math.min(10, +qs("reTaskPriority").value || 5)),
+          connection_mode: qs("reConn").value,
+          manual_connections: Math.max(1, Math.min(64, +qs("reThreads").value || 4)),
+        });
+        dlg.close();
+      });
+    });
+  },
+
+  _condRow(cond, fields) {
+    return `
+      <div class="re-cond-row">
+        <select class="input">${fields.map((f) => `<option value="${f}" ${cond.field === f ? "selected" : ""}>${f.replace(/_/g, " ")}</option>`).join("")}</select>
+        <input class="input mono" value="${Utils.escapeHtml(cond.value || "")}" placeholder="value" spellcheck="false">
+        <button class="icon-btn btn-xs re-cond-del" data-tip="Remove condition" aria-label="Remove condition">${Utils.icon("x", 13)}</button>
+      </div>`;
+  },
+
+  _wireCondRows(root) {
+    Utils.$qa(".re-cond-row .re-cond-del", root).forEach((b) => {
+      b.addEventListener("click", () => b.closest(".re-cond-row").remove());
+    });
+  },
+
   // ── Context menu ──────────────────────────────────────────────────
 
   showContextMenu(items, x, y) {
