@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>N13 Download Manager - Multi-threaded Download Manager for Windows</title>
+<meta name="description" content="N13 Download Manager (TDM) is a fast multi-threaded download manager for Windows with resume, batch downloads, scheduler, clipboard monitor, checksum verification and Chrome extension integration. TUI + GUI.">
+<meta property="og:title" content="N13 Download Manager">
+<meta property="og:description" content="Multi-threaded download manager for Windows. Resume, batch, scheduler, browser integration.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='10' fill='%232563EB'/><path d='M20 8v14m0 0-6-6m6 6 6-6M11 30h18' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+<style>
+  :root { --bg:#0b1120; --card:#111a2e; --line:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#3b82f6; --accent2:#8b5cf6; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; padding:0 24px; }
+  header { padding:72px 0 48px; text-align:center; background:radial-gradient(600px 300px at 50% -10%, rgba(59,130,246,.18), transparent); }
+  .logo { font-size:15px; color:var(--muted); letter-spacing:.5px; }
+  h1 { font-size:44px; margin:12px 0 8px; background:linear-gradient(90deg,#60a5fa,#a78bfa); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tagline { font-size:18px; color:var(--muted); max-width:640px; margin:0 auto 28px; }
+  .badges { margin-bottom:32px; }
+  .badges img { height:28px; margin:2px; }
+  .btn { display:inline-block; background:var(--accent); color:#fff; text-decoration:none; padding:12px 26px; border-radius:10px; font-weight:600; margin:4px; transition:transform .15s, background .15s; }
+  .btn:hover { background:#2563eb; transform:translateY(-2px); }
+  .btn.ghost { background:transparent; border:1px solid var(--line); }
+  .btn.ghost:hover { border-color:var(--accent); background:rgba(59,130,246,.08); }
+  h2 { font-size:26px; margin:48px 0 18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px; }
+  .card h3 { font-size:17px; margin-bottom:6px; }
+  .card p { color:var(--muted); font-size:14.5px; }
+  .mono { font-family:ui-monospace,Consolas,monospace; background:#0f172a; border:1px solid var(--line); border-radius:8px; padding:14px 18px; overflow-x:auto; font-size:13.5px; }
+  code { font-family:ui-monospace,Consolas,monospace; }
+  .btnrow { margin-top:6px; }
+  footer { margin:64px 0 40px; text-align:center; color:var(--muted); font-size:14px; }
+  .lang { font-size:13px; color:var(--muted); margin-bottom:6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo">⬇️ TERMINAL DOWNLOAD MANAGER</div>
+    <h1>N13 Download Manager</h1>
+    <p class="tagline">A fast multi-threaded download manager for Windows. Split downloads into parallel parts, resume anytime, schedule overnight downloads and send links straight from your browser.</p>
+    <div class="badges">
+      <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+">
+      <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT">
+      <img src="https://img.shields.io/badge/Platform-Windows-blue.svg?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+    </div>
+    <div class="btnrow">
+      <a class="btn" href="https://github.com/SOHYAB-N13/n13-download">View on GitHub</a>
+      <a class="btn ghost" href="https://github.com/SOHYAB-N13/n13-download/releases">Releases</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h2>Why N13 Download Manager?</h2>
+  <div class="grid">
+    <div class="card"><h3>⚡ Multi-threaded</h3><p>Splits every download into parallel parts (up to 64 threads) for dramatically faster speeds.</p></div>
+    <div class="card"><h3>▶️ Resume support</h3><p>Interrupted or cancelled downloads restart exactly where they stopped — no wasted bandwidth.</p></div>
+    <div class="card"><h3>🗓️ Scheduler</h3><p>Start/stop windows and a night-time speed cap let the queue run itself while you sleep.</p></div>
+    <div class="card"><h3>🌐 Browser integration</h3><p>A Chrome extension, <code>dldm://</code> protocol and local relay server capture links with one right-click.</p></div>
+    <div class="card"><h3>📋 Clipboard monitor</h3><p>Opt-in watcher that grabs a copied URL and queues it automatically.</p></div>
+    <div class="card"><h3>🗄️ SQLite task store</h3><p>Crash-safe queue and history database survives restarts without data loss.</p></div>
+    <div class="card"><h3>✅ Checksum check</h3><p>Verify every download against an MD5 or SHA-256 hash before it's done.</p></div>
+    <div class="card"><h3>🖥️ Two interfaces</h3><p>A polished Rich-based terminal UI and a dark modern web GUI (pywebview).</p></div>
+  </div>
+
+  <h2>Quick start</h2>
+  <div class="mono">pip install -r requirements.txt<br>python d.py --gui</div>
+  <p style="color:var(--muted);font-size:14px;margin-top:10px;">Terminal UI: <code>python d.py</code> &nbsp;·&nbsp; Direct download: <code>python d.py "https://example.com/file.zip" -t 8</code></p>
+
+  <h2>Install &amp; run</h2>
+  <div class="mono"># 1. Clone the repository<br>git clone https://github.com/SOHYAB-N13/n13-download.git<br><br># 2. Install dependencies<br>pip install -r requirements.txt<br><br># 3. Launch<br>python d.py          # terminal interface<br>python d.py --gui    # graphical interface</div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="lang">🌐 <a href="#top" style="color:var(--muted)">English</a> — README also available in <a href="https://github.com/SOHYAB-N13/n13-download#%F0%9F%87%AE%F0%9F%87%B7-%D9%81%D8%A7%D8%B1%D8%B3%DB%8C" style="color:var(--muted)">فارسی</a></p>
+    <p>© 2026 <a href="https://github.com/SOHYAB-N13" style="color:var(--muted)">SOHAYB N13</a> · Released under the MIT License</p>
+  </div>
+</footer>
+
+</body>
+</html>
