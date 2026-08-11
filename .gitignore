@@ -10,5 +10,7 @@ saved_links/
 gui_queue.json
 *.token.json
 token.json
+docs/
+tests/
 .DS_Store
 Thumbs.db
