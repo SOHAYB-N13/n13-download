@@ -71,6 +71,7 @@ class LegacyDownloadRunner:
         control: TaskControl,
         status_callback: Optional[Callable[[str], None]] = None,
         path_callback: Optional[Callable[[str], None]] = None,
+        smart_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
         """Execute one download. Returns True on success."""
         if control is not None and control.cancelled:
@@ -99,6 +100,13 @@ class LegacyDownloadRunner:
                 except Exception:
                     pass
 
+        def _on_smart(text: str) -> None:
+            if smart_callback is not None:
+                try:
+                    smart_callback(text)
+                except Exception:
+                    pass
+
         try:
             ok = bool(
                 controller.download_file(
@@ -111,6 +119,7 @@ class LegacyDownloadRunner:
                     pre_analysis=analysis,
                     status_callback=_on_status,
                     path_callback=_on_path,
+                    smart_callback=_on_smart,
                 )
             )
             if not ok and controller.last_error:

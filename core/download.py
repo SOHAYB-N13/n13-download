@@ -329,6 +329,7 @@ class DownloadController:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         shared_progress: Optional[dict] = None,
         control=None,
+        optimizer=None,
     ) -> bool:
         """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
 
@@ -523,6 +524,11 @@ class DownloadController:
 
             except (requests.RequestException, OSError, ConnectionError) as exc:
                 retryable, status = _is_retryable_exception(exc)
+                if optimizer is not None:
+                    try:
+                        optimizer.on_server_error(status)
+                    except Exception:
+                        pass
                 if not retryable or attempt >= max_retries:
                     detail = f" (HTTP {status})" if status else ""
                     self.last_error = friendly_error_message(exc, status)
@@ -729,6 +735,7 @@ class DownloadController:
         pre_analysis=None,
         status_callback: Optional[Callable[[str], None]] = None,
         path_callback: Optional[Callable[[str], None]] = None,
+        smart_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
         self.wait_for_schedule(control)
         if self._ctl_cancelled(control):
@@ -813,6 +820,24 @@ class DownloadController:
         loaded = state_mgr.load()
         parts: Optional[List[DownloadPart]] = None
         effective_threads = self.config.num_threads
+        optimizer = None
+        governor = None
+
+        # ---- Smart / Manual connection mode ---------------------------
+        if getattr(self.config, "connection_mode", "manual") == "smart":
+            from core.optimizer import SmartOptimizer
+
+            optimizer = SmartOptimizer(
+                max_connections=getattr(self.config, "smart_max_connections", 8),
+                adaptive=getattr(self.config, "smart_adaptive", True),
+                on_status=smart_callback,
+                log=self._print,
+            )
+            effective_threads, governor = optimizer.start(total_size, supports_range)
+            if self._limiter is not None and self._limiter.enabled:
+                optimizer.set_speed_limited(True)
+        else:
+            effective_threads = self.config.num_threads
 
         if loaded and loaded[0] == url and loaded[1] == total_size:
             _, _, saved_threads, old_parts = loaded
@@ -851,7 +876,10 @@ class DownloadController:
                 self.config.min_part_size,
             )
             effective_threads = len(parts)
-            if effective_threads < self.config.num_threads:
+            if (
+                getattr(self.config, "connection_mode", "manual") != "smart"
+                and effective_threads < self.config.num_threads
+            ):
                 self._print(
                     f"[yellow]⚠ Reduced threads to {effective_threads} "
                     f"for file size {format_size(total_size)}[/yellow]"
@@ -890,26 +918,49 @@ class DownloadController:
                         else None
                     )
                     shared_progress = {"completed": already_bytes}
+
+                    # Smart mode: feed the optimizer from the throttled progress
+                    # path and (when adaptive) pace segment concurrency.
+                    if optimizer is not None:
+                        _base_cb = progress_callback
+
+                        def _smart_cb(completed: int, total: int) -> None:
+                            try:
+                                optimizer.observe(completed, total)
+                            except Exception:
+                                pass
+                            if _base_cb:
+                                _base_cb(completed, total)
+
+                        progress_callback = _smart_cb
+
                     self._notify_progress(progress_callback, already_bytes, total_size)
 
                     failed_parts: List[DownloadPart] = []
                     pool = _get_shared_pool(max(len(pending_parts), self.config.num_threads))
-                    futures = {
-                        pool.submit(
-                            self.download_part,
-                            url,
-                            p,
-                            progress,
-                            task_id,
-                            progress_lock,
-                            speed_tracker,
-                            total_size,
-                            progress_callback,
-                            shared_progress,
-                            control,
-                        ): p
-                        for p in pending_parts
-                    }
+
+                    def _run_part(part: DownloadPart) -> bool:
+                        if governor is not None:
+                            governor.acquire()
+                        try:
+                            return self.download_part(
+                                url,
+                                part,
+                                progress,
+                                task_id,
+                                progress_lock,
+                                speed_tracker,
+                                total_size,
+                                progress_callback,
+                                shared_progress,
+                                control,
+                                optimizer=optimizer,
+                            )
+                        finally:
+                            if governor is not None:
+                                governor.release()
+
+                    futures = {pool.submit(_run_part, p): p for p in pending_parts}
                     for future in as_completed(futures):
                         part = futures[future]
                         try:
@@ -1006,10 +1057,12 @@ def download_file(
     control=None,
     pre_analysis=None,
     path_callback: Optional[Callable[[str], None]] = None,
+    smart_callback: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """Convenience wrapper used by the batch/CLI layers."""
     controller = DownloadController(config, session_manager, console_print)
     return controller.download_file(
         url, directory, verify_checksum, expected_hash, control=control,
         pre_analysis=pre_analysis, path_callback=path_callback,
+        smart_callback=smart_callback,
     )

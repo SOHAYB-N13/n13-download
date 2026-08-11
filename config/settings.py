@@ -45,6 +45,14 @@ class AppConfig:
     min_part_size: int = 2 * 1024 * 1024         # smallest range a thread takes
     buffer_size: int = 8 * 1024 * 1024           # merge buffer
 
+    # --- Connection mode ----------------------------------------------------
+    # "smart"  — the Smart Download Optimizer picks and adapts the connection
+    #            count (size-aware initial selection + safe adaptive scaling).
+    # "manual" — the classic fixed `num_threads` behaviour (unchanged).
+    connection_mode: str = "smart"
+    smart_max_connections: int = 8               # ceiling for Smart mode
+    smart_adaptive: bool = True                  # adaptive ramp in Smart mode
+
     # --- Retry strategy ----------------------------------------------------
     max_retries: int = 15
     retry_delay: float = 3.0                     # base delay between attempts
@@ -203,6 +211,11 @@ class AppConfig:
         instance.socket_buffer_size = max(0, min(16 * 1024 * 1024, int(instance.socket_buffer_size or 0)))
         instance.speed_window_size = max(1, min(100, int(instance.speed_window_size or 20)))
         instance.speed_sample_interval = max(0.05, min(5.0, float(instance.speed_sample_interval or 0.2)))
+        instance.connection_mode = str(instance.connection_mode or "smart")
+        if instance.connection_mode not in ("smart", "manual"):
+            instance.connection_mode = "smart"
+        instance.smart_max_connections = max(1, min(64, int(instance.smart_max_connections or 8)))
+        instance.smart_adaptive = bool(getattr(instance, "smart_adaptive", True))
 
         return instance
 

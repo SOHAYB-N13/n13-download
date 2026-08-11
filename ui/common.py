@@ -211,6 +211,7 @@ class TaskSnapshot:
     average_speed: float = 0.0
     filename: str = ""
     started_at: Optional[float] = None
+    smart_status: str = ""
 
     @property
     def name(self) -> str:
@@ -247,6 +248,7 @@ class TaskSnapshot:
             "average_speed": self.average_speed,
             "filename": self.filename,
             "started_at": self.started_at,
+            "smart_status": self.smart_status,
         }
 
 
@@ -269,6 +271,7 @@ class DownloadRunner(Protocol):
         control: TaskControl,
         status_callback: Optional[Callable[[str], None]] = None,
         path_callback: Optional[Callable[[str], None]] = None,
+        smart_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
         ...  # pragma: no cover
 
@@ -405,6 +408,7 @@ class TaskManager:
             average_speed=t.average_speed,
             filename=t.filename,
             started_at=t.started_at,
+            smart_status=t.smart_status,
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -942,6 +946,7 @@ class TaskManager:
                             control,
                             self._task_status_cb(task_id),
                             self._task_path_cb(task_id),
+                            self._task_smart_cb(task_id),
                         )
                     )
                 except TaskCancelled:
@@ -1111,6 +1116,23 @@ class TaskManager:
                 if rec.task.resolved_path != path:
                     rec.task.resolved_path = path
                     self._save_task_locked(rec)
+
+        return _cb
+
+    def _task_smart_cb(self, task_id: str) -> Callable[[str], None]:
+        """Live Smart-mode connection status for the UI (not persisted)."""
+
+        def _cb(text: str) -> None:
+            snap: Optional[TaskSnapshot] = None
+            with self._lock:
+                rec = self._tasks.get(task_id)
+                if rec is None or rec.removed:
+                    return
+                if rec.task.smart_status != text:
+                    rec.task.smart_status = text
+                    snap = self._snap(rec)
+            if snap:
+                self._emit("updated", snap)
 
         return _cb
 

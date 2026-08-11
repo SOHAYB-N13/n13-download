@@ -184,6 +184,8 @@ class DownloadTask:
     # engine has computed it.  Used to scope temporary-artifact cleanup to the
     # exact files this task owns.
     resolved_path: str = ""
+    # Live Smart-mode connection status ("4", "4->6") shown in the UI.
+    smart_status: str = ""
 
     def __post_init__(self) -> None:
         # Defensive: callers (JSON rows, legacy files, tests) may pass a string

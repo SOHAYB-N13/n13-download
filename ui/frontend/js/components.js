@@ -259,7 +259,7 @@ const Components = {
       <div class="dl-ico" data-type="${Utils.fileType(name)}">${Utils.fileIcon(name, 19)}</div>
       <div class="dl-main">
         <div class="dl-name" title="${Utils.escapeHtml(name)}">${Utils.escapeHtml(name)}</div>
-        <div class="dl-sub" title="${Utils.escapeHtml(task.url)}">${Utils.escapeHtml(Utils.hostOf(task.url))}</div>
+        <div class="dl-sub" title="${Utils.escapeHtml(task.url)}">${Utils.escapeHtml(Utils.hostOf(task.url))}<span class="dl-smart">${task.smart_status ? "Smart " + Utils.escapeHtml(task.smart_status) + " connections" : ""}</span></div>
       </div>
       <div class="dl-progress">
         <div class="progress" role="progressbar" aria-valuenow="${pct.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
@@ -335,6 +335,9 @@ const Components = {
     if (speedEl) speedEl.textContent = task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—";
     const etaEl = row.querySelector(".dl-eta");
     if (etaEl) etaEl.textContent = task.state === "Downloading" ? Utils.formatETA(task.eta_seconds) : "—";
+
+    const smartEl = row.querySelector(".dl-smart");
+    if (smartEl) smartEl.textContent = task.smart_status ? "Smart " + task.smart_status + " connections" : "";
 
     if (stateChanged) {
       const status = row.querySelector(".dl-status");

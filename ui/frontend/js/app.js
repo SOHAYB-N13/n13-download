@@ -1379,6 +1379,17 @@ const App = {
         ],
       },
       {
+        id: "smart", icon: "bolt", title: "Smart Download",
+        fields: [
+          { key: "connection_mode", label: "Connection mode", hint: "Smart picks the connection count automatically; Manual uses your fixed value", type: "select", options: [
+            { value: "smart", label: "Smart (recommended)" },
+            { value: "manual", label: "Manual" },
+          ] },
+          { key: "smart_max_connections", label: "Smart max connections", hint: "Ceiling Smart mode may use", type: "range", min: 1, max: 32 },
+          { key: "smart_adaptive", label: "Adaptive scaling", hint: "Gradually increase connections while the server stays stable", type: "toggle" },
+        ],
+      },
+      {
         id: "appearance", icon: "sun", title: "Appearance",
         fields: [
           { key: "_theme", label: "Theme", hint: "Interface color scheme", type: "theme" },
