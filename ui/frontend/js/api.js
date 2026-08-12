@@ -130,4 +130,15 @@ const API = {
   async getVersion() { return this._call("get_version"); },
   async shutdown() { return this._call("shutdown"); },
   async logJs(msg) { return this._call("log_js", String(msg)); },
+
+  // ── Updates ───────────────────────────────────────────────────────
+
+  async getUpdateSettings() { return this._call("get_update_settings"); },
+  async setAutoUpdateCheck(enabled) { return this._call("set_auto_update_check", !!enabled); },
+  async checkForUpdates(manual) { return this._call("check_for_updates", !!manual); },
+  async getUpdateState() { return this._call("get_update_state"); },
+  async downloadUpdate() { return this._call("download_update"); },
+  async installUpdate(restart) { return this._call("install_update", restart !== false); },
+  async skipUpdateVersion(version) { return this._call("skip_update_version", String(version)); },
+  async clearSkippedUpdate() { return this._call("clear_skipped_update"); },
 };

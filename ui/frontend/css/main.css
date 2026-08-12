@@ -219,6 +219,7 @@ kbd {
 /* ── 6. Sidebar ────────────────────────────────────────────────────────── */
 
 #sidebar {
+  position: relative;
   width: var(--sidebar-w);
   flex: none;
   display: flex;
@@ -256,7 +257,6 @@ kbd {
 .brand-text span { font-size: 11.5px; color: var(--text-3); }
 
 .nav {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -1308,8 +1308,10 @@ input[type="range"] {
   height: 22px;
   background: transparent;
   cursor: pointer;
+  direction: ltr;
 }
 input[type="range"]::-webkit-slider-runnable-track {
+  direction: ltr;
   height: 5px;
   border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--accent) var(--fill, 50%), var(--bg-active) var(--fill, 50%));
@@ -1957,6 +1959,36 @@ body.resizing * { cursor: inherit; }
 }
 
 
+/* ── RTL (Persian) layout helpers ──────────────────────────────────────── */
+
+[dir="rtl"] body { direction: rtl; }
+[dir="rtl"] #sidebar { border-right: 0; border-left: 1px solid var(--border); }
+[dir="rtl"] .nav-indicator { left: auto; right: 0; }
+[dir="rtl"] .nav-badge { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .side-speed-text { align-items: flex-end; }
+[dir="rtl"] .panel-head .btn { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .dl-pct { text-align: left; }
+[dir="rtl"] .mini-speed { text-align: left; }
+[dir="rtl"] .h-name .h-ico { margin-right: 0; margin-left: 10px; }
+[dir="rtl"] .h-open { margin-left: 0; margin-right: 6px; }
+[dir="rtl"] .h-actions { text-align: left; }
+[dir="rtl"] .table th { text-align: right; }
+[dir="rtl"] .set-saved { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .stat-spark { right: auto; left: 14px; }
+[dir="rtl"] .ring { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .switch-track::after { left: auto; right: 2px; }
+[dir="rtl"] .switch input:checked + .switch-track::after { transform: translateX(-18px); }
+[dir="rtl"] .ctx-item { text-align: right; }
+[dir="rtl"] .ctx-item kbd { margin-left: 0; margin-right: auto; }
+[dir="rtl"] #toastStack { right: auto; left: 18px; }
+[dir="rtl"] .nd-url-ico { left: auto; right: 14px; }
+[dir="rtl"] .nd-paste { right: auto; left: 8px; }
+[dir="rtl"] .nd-url { padding-left: 48px; padding-right: 42px; }
+[dir="rtl"] .catdir-name { text-align: right; }
+[dir="rtl"] .step-text { text-align: right; }
+[dir="rtl"] .server-kv code { direction: ltr; }
+[dir="rtl"] .h-dir-t { direction: ltr; text-align: right; }
+
 /* ── Phase I additions ─────────────────────────────────────────────────── */
 
 /* New lifecycle statuses reuse the active/paused look. */
@@ -2002,6 +2034,23 @@ body.resizing * { cursor: inherit; }
 
 /* Smart Download connection indicator */
 .dl-smart { color: var(--accent); font-size: 11px; margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+/* ── Update panel ──────────────────────────────────────────────────────── */
+.update-panel { display: flex; flex-direction: column; gap: 12px; }
+.update-meta { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); }
+.update-meta strong { color: var(--text-1); font-weight: 600; }
+.update-status { color: var(--text-1); font-weight: 550; min-height: 18px; }
+.update-last { font-size: 11.5px; color: var(--text-3); }
+.update-progress-wrap { height: 5px; border-radius: var(--r-pill); background: var(--bg-active); overflow: hidden; }
+.update-progress-bar { height: 100%; width: var(--p, 0%); background: var(--accent); transition: width .2s linear; }
+.update-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.update-actions .btn { min-width: 152px; }
+.update-actions .switch-row { margin: 0; }
+.update-dialog-body { display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--text-2); }
+.update-dialog-row { display: flex; gap: 8px; }
+.update-dialog-row strong { color: var(--text-1); }
+.update-dialog-label { font-weight: 600; color: var(--text-1); margin-top: 4px; }
+.update-notes { max-height: 160px; overflow: auto; font-size: 12.5px; color: var(--text-2); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 10px 12px; white-space: pre-wrap; }
 
 
 /* Download Rules manager */

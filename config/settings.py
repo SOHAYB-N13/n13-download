@@ -130,6 +130,10 @@ class AppConfig:
     # --- Language / UI ------------------------------------------------------
     language: str = "en"
 
+    # --- Auto-update ----------------------------------------------------------
+    auto_update_check: bool = True
+    update_repo: str = "SOHYAB-N13/n13-download"
+
     # --- Networking identity ----------------------------------------------
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

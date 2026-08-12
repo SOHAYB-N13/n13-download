@@ -46,7 +46,7 @@ const Utils = {
     const today = new Date();
     const sameDay = d.toDateString() === today.toDateString();
     const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    if (sameDay) return "Today · " + time;
+    if (sameDay) return I18N.t("fmt.today", "Today") + " · " + time;
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " · " + time;
   },
 
@@ -93,21 +93,30 @@ const Utils = {
   },
 
   statusLabel(state) {
-    return {
-      "Downloading": "Downloading",
-      "Analyzing": "Analyzing",
-      "Starting": "Starting",
-      "Merging": "Merging",
-      "Verifying": "Verifying",
-      "Paused": "Paused",
-      "Queued": "Queued",
-      "Complete": "Completed",
-      "Failed": "Failed",
-      "Cancelled": "Cancelled",
-      "Stopped": "Stopped",
-      "Stopping": "Stopping",
-      "Removed": "Removed",
-    }[state] || state;
+    const key = {
+      "Downloading": "status.downloading",
+      "Analyzing": "status.analyzing",
+      "Starting": "status.starting",
+      "Merging": "status.merging",
+      "Verifying": "status.verifying",
+      "Paused": "status.paused",
+      "Queued": "status.queued",
+      "Complete": "status.complete",
+      "Completed": "status.completed",
+      "Failed": "status.failed",
+      "Cancelled": "status.cancelled",
+      "Stopped": "status.stopped",
+      "Stopping": "status.stopping",
+      "Removed": "status.removed",
+    }[state];
+    const fallback = {
+      "Downloading": "Downloading", "Analyzing": "Analyzing", "Starting": "Starting",
+      "Merging": "Merging", "Verifying": "Verifying", "Paused": "Paused",
+      "Queued": "Queued", "Complete": "Completed", "Completed": "Completed",
+      "Failed": "Failed", "Cancelled": "Cancelled", "Stopped": "Stopped",
+      "Stopping": "Stopping", "Removed": "Removed",
+    }[state];
+    return (typeof I18N !== "undefined" && key) ? I18N.t(key, fallback || state) : (fallback || state);
   },
 
   // ── File type detection ───────────────────────────────────────────
@@ -182,6 +191,7 @@ const Utils = {
     disc: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/>',
     link: '<path d="M10 13.5a5 5 0 0 0 7.5.5l2.8-2.8a5 5 0 0 0-7-7l-1.6 1.5"/><path d="M14 10.5a5 5 0 0 0-7.5-.5l-2.8 2.8a5 5 0 0 0 7 7l1.6-1.5"/>',
     retry: '<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L20.5 8"/><path d="M20.5 3.5V8H16"/>',
+    refresh: '<path d="M21.5 12a9.5 9.5 0 1 1-2.8-6.7L20.5 7"/><path d="M20.5 3.5V7H17"/>',
     bolt: '<path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12l1-8Z"/>',
     menu: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
     panelLeft: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.2"/><path d="M9.5 4.5v15"/>',

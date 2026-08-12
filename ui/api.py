@@ -8,12 +8,14 @@ import os
 import queue
 import subprocess
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from config.loader import config_dir, save_config
 from config.settings import AppConfig
 from core.session import SessionManager
+from core.updater import UpdateController
 from core.utils import normalize_url, validate_url
 from ui.common import (
     DownloadRequest,
@@ -40,6 +42,8 @@ class Api:
         self._event_queue: queue.Queue[Dict[str, Any]] = queue.Queue()
         self._window = None
         self._live_server = None
+        self._updater = UpdateController(config)
+        self._updater.subscribe(self._on_update_state)
         self._session_downloaded: int = 0
         self._win_maximized: bool = False
         self._speed_history: List[float] = []
@@ -118,7 +122,7 @@ class Api:
                 allow, resolve = self._duplicate_policy_args(url, "", "")
                 self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve)
                 self._event_queue.put_nowait({"type": "toast",
-                                              "title": "Download started",
+                                              "title": self._tray_labels().get("notification.download_started", "Download started"),
                                               "message": url[:80]})
             except Exception:
                 pass
@@ -179,9 +183,43 @@ class Api:
                 on_exit=self.shutdown,
             )
             self._tray.start()
+            self._tray.set_labels(self._tray_labels())
             self._tray.set_tooltip(self._tray_tooltip())
         except Exception:
             self._tray = None
+
+    def _tray_labels(self) -> dict[str, str]:
+        """Return tray menu labels in the current UI language."""
+        lang = getattr(self._config, "language", "en")
+        labels: dict[str, dict[str, str]] = {
+            "en": {
+                "tray.show": "Show N13",
+                "tray.pause_all": "Pause all",
+                "tray.resume_all": "Resume all",
+                "tray.open_folder": "Open downloads folder",
+                "tray.settings": "Settings",
+                "tray.exit": "Exit",
+                "tray.active": "active",
+                "notification.download_started": "Download started",
+                "notification.download_complete": "Download complete",
+                "notification.download_failed": "Download failed",
+                "toast.download_added": "Download added",
+            },
+            "fa": {
+                "tray.show": "نمایش N13",
+                "tray.pause_all": "توقف همه",
+                "tray.resume_all": "ادامهٔ همه",
+                "tray.open_folder": "باز کردن پوشهٔ دانلودها",
+                "tray.settings": "تنظیمات",
+                "tray.exit": "خروج",
+                "tray.active": "فعال",
+                "notification.download_started": "دانلود شروع شد",
+                "notification.download_complete": "دانلود کامل شد",
+                "notification.download_failed": "دانلود ناموفق بود",
+                "toast.download_added": "دانلود اضافه شد",
+            },
+        }
+        return labels.get(lang, labels["en"])
 
     def _tray_show(self) -> None:
         w = self._window
@@ -203,7 +241,8 @@ class Api:
 
     def _tray_tooltip(self) -> str:
         stats = self.get_stats()
-        return "N13\n{} active · {}/s".format(stats["running"], stats["total_speed_display"])
+        active = self._tray_labels().get("tray.active", "active")
+        return "N13\n{} {} · {}/s".format(stats["running"], active, stats["total_speed_display"])
 
     def _tray_tick(self) -> None:
         if getattr(self, "_tray", None) is not None:
@@ -234,6 +273,10 @@ class Api:
         self._maybe_notify(event, snapshot)
         self._tray_tick()
 
+    def _on_update_state(self, state: Dict[str, Any]) -> None:
+        """Forward updater state changes to the frontend event stream."""
+        self._event_queue.put_nowait({"type": "update_state", "state": state})
+
     def _maybe_notify(self, event: str, snapshot: TaskSnapshot) -> None:
         """Event-driven desktop notifications (never per-progress updates)."""
         cfg = self._config
@@ -243,14 +286,16 @@ class Api:
         if tray is None:
             return
         name = snapshot.name
+        labels = self._tray_labels()
         try:
             if event == "started" and getattr(cfg, "notify_started", False):
-                tray.notify("Download started", name)
+                tray.notify(labels.get("notification.download_started", "Download started"), name)
             elif event == "finished":
                 if snapshot.state == TaskState.COMPLETED and getattr(cfg, "notify_completed", True):
-                    tray.notify("Download complete", name)
+                    tray.notify(labels.get("notification.download_complete", "Download complete"), name)
                 elif snapshot.state == TaskState.FAILED and getattr(cfg, "notify_failed", True):
-                    tray.notify("Download failed", f"{name} — {snapshot.error or 'unknown error'}")
+                    tray.notify(labels.get("notification.download_failed", "Download failed"),
+                                f"{name} — {snapshot.error or 'unknown error'}")
         except Exception:
             pass
 
@@ -658,6 +703,11 @@ class Api:
                 self._manager.set_max_concurrent(int(self._config.max_concurrent))
             except Exception:
                 pass
+        if "language" in settings and self._tray is not None:
+            try:
+                self._tray.set_labels(self._tray_labels())
+            except Exception:
+                pass
         return True
 
     def select_directory(self) -> str:
@@ -740,17 +790,110 @@ class Api:
 
     # ── Theme ─────────────────────────────────────────────────────
 
-    def get_theme_config(self) -> Dict[str, Any]:
+    def _load_ui_prefs(self) -> Dict[str, Any]:
         prefs_path = config_dir() / "ui_prefs.json"
         try:
             return json.loads(prefs_path.read_text(encoding="utf-8"))
         except Exception:
-            return {"theme": "dark", "accent": "#4f8ef7"}
+            return {}
 
-    def save_theme_config(self, prefs: Dict[str, Any]) -> None:
+    def _save_ui_prefs(self, prefs: Dict[str, Any]) -> None:
         prefs_path = config_dir() / "ui_prefs.json"
         prefs_path.parent.mkdir(parents=True, exist_ok=True)
         prefs_path.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+
+    def get_theme_config(self) -> Dict[str, Any]:
+        prefs = self._load_ui_prefs()
+        return {
+            "theme": prefs.get("theme", "dark"),
+            "accent": prefs.get("accent", "#4f8ef7"),
+        }
+
+    def save_theme_config(self, prefs: Dict[str, Any]) -> None:
+        existing = self._load_ui_prefs()
+        existing.update({k: prefs[k] for k in ("theme", "accent") if k in prefs})
+        self._save_ui_prefs(existing)
+
+    # ── Updates ───────────────────────────────────────────────────
+
+    def get_version(self) -> str:
+        from core.version import get_version
+        return get_version()
+
+    def get_update_settings(self) -> Dict[str, Any]:
+        prefs = self._load_ui_prefs()
+        return {
+            "current_version": self.get_version(),
+            "auto_update_check": bool(getattr(self._config, "auto_update_check", True)),
+            "skipped_version": prefs.get("skipped_update_version", ""),
+            "last_checked": prefs.get("update_last_checked", ""),
+        }
+
+    def set_auto_update_check(self, enabled: bool) -> bool:
+        self._config.auto_update_check = bool(enabled)
+        save_config(self._config)
+        return True
+
+    def check_for_updates(self, manual: bool = False) -> Dict[str, Any]:
+        """Trigger a background update check.
+
+        Manual checks always fetch; automatic checks update the last-checked
+        timestamp and are used by the startup-once logic.
+        """
+        if not manual:
+            prefs = self._load_ui_prefs()
+            prefs["update_last_checked"] = datetime.now().isoformat()
+            self._save_ui_prefs(prefs)
+        self._updater.check()
+        return self._updater.get_state()
+
+    def get_update_state(self) -> Dict[str, Any]:
+        return self._updater.get_state()
+
+    def download_update(self) -> Dict[str, Any]:
+        self._updater.download()
+        return self._updater.get_state()
+
+    def install_update(self, restart: bool = True) -> Dict[str, Any]:
+        """Launch the verified installer and schedule safe shutdown.
+
+        The installer is started in a detached process so it survives this
+        process exiting. A short PowerShell wrapper waits for the installer
+        and optionally restarts N13.
+        """
+        import sys
+        import threading
+
+        state = self._updater.get_state()
+        if state.get("state") != "ready":
+            return {"status": "not_ready"}
+
+        app_dir = Path(sys.executable).resolve().parent
+
+        def _install_then_exit() -> None:
+            try:
+                # Give the JS response a moment to return before tearing down.
+                import time
+                time.sleep(0.5)
+                self._updater.install(app_dir=app_dir, restart=restart)
+                self.shutdown()
+            except Exception as exc:
+                log.error("Update install failed: %s", exc)
+
+        threading.Thread(target=_install_then_exit, daemon=False).start()
+        return {"status": "installing"}
+
+    def skip_update_version(self, version: str) -> bool:
+        prefs = self._load_ui_prefs()
+        prefs["skipped_update_version"] = version
+        self._save_ui_prefs(prefs)
+        return True
+
+    def clear_skipped_update(self) -> bool:
+        prefs = self._load_ui_prefs()
+        prefs.pop("skipped_update_version", None)
+        self._save_ui_prefs(prefs)
+        return True
 
     # ── Dashboard stats ───────────────────────────────────────────
 
@@ -931,20 +1074,11 @@ class Api:
                 allow, resolve = self._duplicate_policy_args(url, "", "")
                 self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve)
                 self._event_queue.put_nowait({"type": "toast",
-                                              "title": "Download added",
+                                              "title": self._tray_labels().get("toast.download_added", "Download added"),
                                               "message": url[:80]})
             else:
                 self._event_queue.put_nowait({"type": "browser_url", "url": url})
         return True
-
-    # ── Version ───────────────────────────────────────────────────
-
-    def get_version(self) -> str:
-        try:
-            from __init__ import __version__
-            return __version__
-        except ImportError:
-            return "2.0.0"
 
     # ── Shutdown ──────────────────────────────────────────────────
     # One authoritative shutdown path.  It is idempotent and thread-safe, and

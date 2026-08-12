@@ -42,6 +42,7 @@ const App = {
     this._loadLocalPrefs();
     this._applyTheme();
     Components.initRipple();
+    I18N.onChange(() => this._onLanguageChange());
     this._bindNavigation();
     this._bindTitlebar();
     this._bindWindowControls();
@@ -97,10 +98,13 @@ const App = {
       this.state.settings = await API.getSettings();
     } catch {}
 
+    this._applyLanguage();
+
     try { await this._loadDownloads(); } catch {}
     try { await this._refreshHistory(); } catch {}
     try { await this._refreshServerStatus(); } catch {}
     this._renderDashboardLists();
+    this._maybeCheckUpdates();
     await API.ready();
   },
 
@@ -235,9 +239,26 @@ const App = {
 
   _renderPageChrome() {
     const meta = this.pages[this.state.page];
-    Utils.$id("pageTitle").textContent = meta.title;
-    Utils.$id("pageSub").textContent = meta.sub;
-    document.title = `${meta.title} · N13 Download Manager`;
+    const title = I18N.t("page." + this.state.page, meta.title);
+    Utils.$id("pageTitle").textContent = title;
+    Utils.$id("pageSub").textContent = I18N.t("page." + this.state.page + ".sub", meta.sub);
+    document.title = `${title} · N13 Download Manager`;
+  },
+
+  _applyLanguage() {
+    const lang = (this.state.settings && this.state.settings.language) || "en";
+    I18N.setLang(lang);
+  },
+
+  _onLanguageChange() {
+    I18N.apply(document);
+    this._renderPageChrome();
+    this._updateCounts();
+    if (this.state.page === "dashboard") this._renderDashboardLists();
+    if (this.state.page === "downloads") this._renderDownloads(true);
+    if (this.state.page === "history") this._renderHistory();
+    if (this.state.page === "settings") this._buildSettings();
+    if (this.state.page === "browser" && this._lastServerStatus) this._renderBrowser(this._lastServerStatus);
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -401,7 +422,7 @@ const App = {
       } else {
         const dir = (this.state.settings && this.state.settings.download_dir) || "";
         const n = await API.addBatch(urls, dir);
-        Components.toast("Batch added", `${n} downloads queued`, "success");
+        Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${n} ${I18N.t("batch.queued", "queued")}`, "success");
         this.navigate("downloads");
       }
     });
@@ -466,13 +487,13 @@ const App = {
       this._renderDashboardLists();
       if (evt.event === "finished") {
         if (t.state === "Complete") {
-          Components.toast("Download complete", Utils.fileName(t) + " — " + Utils.formatSize(t.completed || t.total), "success");
+          Components.toast(I18N.t("toast.download_complete", "Download complete"), Utils.fileName(t) + " — " + Utils.formatSize(t.completed || t.total), "success");
           this._refreshHistory();
         } else if (t.state === "Failed") {
-          Components.toast("Download failed", `${Utils.fileName(t)}${t.error ? " — " + t.error : ""}`, "error");
+          Components.toast(I18N.t("toast.download_failed", "Download failed"), `${Utils.fileName(t)}${t.error ? " — " + t.error : ""}`, "error");
           this._refreshHistory();
         } else if (t.state === "Cancelled") {
-          Components.toast("Download cancelled", Utils.fileName(t), "info");
+          Components.toast(I18N.t("toast.download_cancelled", "Download cancelled"), Utils.fileName(t), "info");
         }
       }
     } else if (evt.type === "log") {
@@ -480,7 +501,7 @@ const App = {
       if (this.state.logs.length > 800) this.state.logs.shift();
       if (this.state.page === "logs") this._appendLog(evt.message);
     } else if (evt.type === "browser_url") {
-      Components.toast("Link captured", "Received from browser extension", "info");
+      Components.toast(I18N.t("toast.link_captured", "Link captured"), "Received from browser extension", "info");
       this.openNewDownload(evt.url);
     } else if (evt.type === "clipboard_url") {
       this._onClipboardLink(evt.url);
@@ -490,6 +511,18 @@ const App = {
       Components.toast(evt.title || "Notice", evt.message || "", evt.kind || "info");
     } else if (evt.type === "window") {
       this._setMaxState(!!evt.maximized);
+    } else if (evt.type === "update_state") {
+      this._applyUpdateState(evt.state);
+      const st = evt.state;
+      if (st.state === "available" && st.info?.version) {
+        const skipped = this.state.updateSettings?.skipped_version;
+        if (st.info.version !== skipped && this._updateNotifiedFor !== st.info.version) {
+          this._updateNotifiedFor = st.info.version;
+          Components.toast(I18N.t("update.notify_title", "N13 Update Available"), I18N.fmt("update.notify_body", { version: st.info.version }), "info", 6000);
+          // Also open the dialog so the user can act immediately.
+          this._showUpdateDialog(st.info);
+        }
+      }
     }
   },
 
@@ -499,7 +532,7 @@ const App = {
       if (ok) {
         await this.openNewDownload(url);
       } else {
-        Components.toast("Ignored", "Link not downloaded", "info", 1800);
+        Components.toast(I18N.t("toast.ignored", "Ignored"), I18N.t("toast.link_ignored", "Link not downloaded"), "info", 1800);
       }
     } catch (e) {
       API.logJs("clipboard link: " + String(e));
@@ -517,17 +550,17 @@ const App = {
     onRetry(id) { API.retryDownload(id); },
     async onCancel(id) {
       const ok = await Components.confirm({
-        title: "Cancel download",
-        message: "Stop this download? Progress is saved so you can resume later.",
-        okText: "Cancel download", cancelText: "Keep", danger: true,
+        title: I18N.t("confirm.cancel_download", "Cancel download"),
+        message: I18N.t("confirm.cancel_download_msg", "Stop this download? Progress is saved so you can resume later."),
+        okText: I18N.t("act.cancel", "Cancel"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true,
       });
       if (ok) API.cancelDownload(id);
     },
     async onRemove(id) {
       const ok = await Components.confirm({
-        title: "Remove download",
-        message: "Remove this entry from the list? The file on disk is kept.",
-        okText: "Remove", cancelText: "Keep", danger: true,
+        title: I18N.t("confirm.remove_download", "Remove download"),
+        message: I18N.t("confirm.remove_download_msg", "Remove this entry from the list? The file on disk is kept."),
+        okText: I18N.t("act.remove", "Remove"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true,
       });
       if (ok) API.removeDownload(id);
     },
@@ -539,29 +572,29 @@ const App = {
       const p = `${task.directory}\\${task.filename || Utils.fileName(task)}`;
       try {
         await navigator.clipboard.writeText(p);
-        Components.toast("Copied", "File path copied to clipboard", "info", 2200);
+        Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_path", "File path copied to clipboard"), "info", 2200);
       } catch {
-        Components.toast("Copy failed", "Clipboard is unavailable", "error");
+        Components.toast(I18N.t("toast.copy_failed", "Copy failed"), I18N.t("toast.copy_failed_msg", "Clipboard is unavailable"), "error");
       }
     },
     async onDeleteFile(id, name) {
       const ok = await Components.confirm({
-        title: "Delete file",
-        message: `Permanently delete "${name}" from disk? This cannot be undone.`,
-        okText: "Delete file", cancelText: "Keep", danger: true, icon: "trash",
+        title: I18N.t("confirm.delete_file", "Delete file"),
+        message: I18N.t("confirm.delete_file_msg", "Permanently delete “{name}” from disk? This cannot be undone.").replace("{name}", name),
+        okText: I18N.t("confirm.delete", "Delete"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true, icon: "trash",
       });
       if (ok) {
         const done = await API.deleteFile(id);
-        if (done) Components.toast("File deleted", name, "success");
-        else Components.toast("Delete failed", "The file could not be deleted", "error");
+        if (done) Components.toast(I18N.t("toast.delete_file_done", "File deleted"), name, "success");
+        else Components.toast(I18N.t("toast.delete_failed", "Delete failed"), I18N.t("toast.delete_failed_msg", "The file could not be deleted"), "error");
       }
     },
     async onCopyUrl(url) {
       try {
         await navigator.clipboard.writeText(url);
-        Components.toast("Copied", "Download URL copied to clipboard", "info", 2200);
+        Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_url", "Download URL copied to clipboard"), "info", 2200);
       } catch {
-        Components.toast("Copy failed", "Clipboard is unavailable", "error");
+        Components.toast(I18N.t("toast.copy_failed", "Copy failed"), I18N.t("toast.copy_failed_msg", "Clipboard is unavailable"), "error");
       }
     },
   },
@@ -586,15 +619,15 @@ const App = {
 
     Utils.$id("btnPauseAll").addEventListener("click", async () => {
       await API.pauseAll();
-      Components.toast("All paused", "Every active download was paused", "info");
+      Components.toast(I18N.t("toast.all_paused", "All paused"), I18N.t("toast.all_paused_msg", "Every active download was paused"), "info");
     });
     Utils.$id("btnResumeAll").addEventListener("click", async () => {
       await API.resumeAll();
-      Components.toast("All resumed", "Paused downloads are running again", "info");
+      Components.toast(I18N.t("toast.all_resumed", "All resumed"), I18N.t("toast.all_resumed_msg", "Paused downloads are running again"), "info");
     });
     Utils.$id("btnClearFinished").addEventListener("click", async () => {
       await API.clearFinished();
-      Components.toast("List cleared", "Finished entries were removed", "info");
+      Components.toast(I18N.t("toast.list_cleared", "List cleared"), I18N.t("toast.list_cleared_msg", "Finished entries were removed"), "info");
     });
   },
 
@@ -660,9 +693,9 @@ const App = {
       listEl.innerHTML = "";
       emptyEl.replaceChildren(Components.emptyState({
         icon: "download",
-        title: "No downloads yet",
-        desc: "Paste a link or drop it anywhere to start your first download.",
-        actionLabel: "New download",
+        title: I18N.t("empty.no_downloads", "No downloads yet"),
+        desc: I18N.t("empty.no_downloads_desc", "Paste a link or drop it anywhere to start your first download."),
+        actionLabel: I18N.t("title.new_download", "New download"),
         onAction: () => this.openNewDownload(null, { paste: true }),
       }));
       emptyEl.hidden = false;
@@ -674,8 +707,8 @@ const App = {
       listEl.innerHTML = "";
       emptyEl.replaceChildren(Components.emptyState({
         icon: "search",
-        title: "Nothing matches",
-        desc: "Try a different filter or search term.",
+        title: I18N.t("empty.nothing_matches", "Nothing matches"),
+        desc: I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
       }));
       emptyEl.hidden = false;
       return;
@@ -763,6 +796,7 @@ const App = {
 
   async openNewDownload(prefillUrl = null, { paste = false } = {}) {
     try {
+    const L = (k, f) => I18N.t(k, f);
     const settings = this.state.settings || (await API.getSettings()) || {};
     const baseDir = settings.download_dir || "";
     const categories = ["General", "Compressed", "Videos", "Music", "Documents", "Programs", "Images"];
@@ -771,8 +805,8 @@ const App = {
       <div class="nd">
         <div class="nd-url-wrap">
           <span class="nd-url-ico">${Utils.icon("link", 17)}</span>
-          <input id="ndUrl" class="input nd-url" type="url" placeholder="Paste a download link…  https://" autocomplete="off" spellcheck="false" aria-label="Download URL">
-          <button class="icon-btn nd-paste" id="ndPaste" data-tip="Paste from clipboard" aria-label="Paste from clipboard">${Utils.icon("paste", 15)}</button>
+          <input id="ndUrl" class="input nd-url" type="url" placeholder="${L("dlg.url_placeholder", "Paste a download link…  https://")}" autocomplete="off" spellcheck="false" aria-label="${L("dlg.url_placeholder", "Download URL")}">
+          <button class="icon-btn nd-paste" id="ndPaste" data-tip="${L("dlg.paste", "Paste from clipboard")}" aria-label="${L("dlg.paste", "Paste from clipboard")}">${Utils.icon("paste", 15)}</button>
         </div>
         <p class="nd-error" id="ndError" hidden></p>
 
@@ -782,7 +816,7 @@ const App = {
             <div class="nd-detect-name" id="ndDetectName"></div>
             <div class="nd-detect-meta" id="ndDetectMeta"></div>
           </div>
-          <span class="nd-resume" id="ndResume" hidden>${Utils.icon("bolt", 13)} Resumable</span>
+          <span class="nd-resume" id="ndResume" hidden>${Utils.icon("bolt", 13)} ${L("dlg.resumable", "Resumable")}</span>
         </div>
         <div class="nd-detect nd-probing" id="ndProbing" hidden>
           <span class="sk sk-box" style="width:40px;height:40px;border-radius:12px"></span>
@@ -793,43 +827,43 @@ const App = {
 
         <div class="nd-grid">
           <div class="field">
-            <label class="field-label" for="ndName">File name</label>
-            <input id="ndName" class="input" type="text" placeholder="Detected automatically" autocomplete="off">
+            <label class="field-label" for="ndName">${L("dlg.file_name", "File name")}</label>
+            <input id="ndName" class="input" type="text" placeholder="${L("dlg.file_name_placeholder", "Detected automatically")}" autocomplete="off">
           </div>
           <div class="field">
-            <label class="field-label">Category</label>
+            <label class="field-label">${L("dlg.category", "Category")}</label>
             <div class="nd-cats" id="ndCats">
-              ${categories.map((c, i) => `<button class="cat-chip${i === 0 ? " active" : ""}" data-cat="${c}">${c}</button>`).join("")}
+              ${categories.map((c, i) => `<button class="cat-chip${i === 0 ? " active" : ""}" data-cat="${c}">${L("category." + c, c)}</button>`).join("")}
             </div>
           </div>
           <div class="field">
-            <label class="field-label" for="ndDir">Save to</label>
+            <label class="field-label" for="ndDir">${L("dlg.save_to", "Save to")}</label>
             <div class="input-join">
               <input id="ndDir" class="input" type="text" value="${Utils.escapeHtml(baseDir)}" autocomplete="off">
-              <button class="btn btn-ghost" id="ndBrowse">${Utils.icon("folder", 15)} Browse</button>
+              <button class="btn btn-ghost" id="ndBrowse">${Utils.icon("folder", 15)} ${L("dlg.browse", "Browse")}</button>
             </div>
           </div>
         </div>
 
         <button class="nd-adv-toggle" id="ndAdvToggle" aria-expanded="false">
-          ${Utils.icon("chevronRight", 14)} Advanced options
+          ${Utils.icon("chevronRight", 14)} ${L("dlg.advanced", "Advanced options")}
         </button>
         <div class="nd-adv" id="ndAdv" hidden>
           <div class="field">
-            <label class="field-label" for="ndChecksum">Checksum <span class="field-opt">MD5 or SHA-256, optional</span></label>
+            <label class="field-label" for="ndChecksum">${L("dlg.checksum", "Checksum")} <span class="field-opt">${L("dlg.checksum_hint", "MD5 or SHA-256, optional")}</span></label>
             <input id="ndChecksum" class="input mono" type="text" placeholder="e.g. 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" autocomplete="off" spellcheck="false">
           </div>
           <label class="switch-row">
             <span class="switch"><input type="checkbox" id="ndAutostart" checked><span class="switch-track"></span></span>
-            <span class="switch-text">Start immediately<span class="switch-hint">Off — add to the queue without starting</span></span>
+            <span class="switch-text">${L("dlg.start_immediately", "Start immediately")}<span class="switch-hint">${L("dlg.start_off", "Off — add to the queue without starting")}</span></span>
           </label>
         </div>
       </div>`,
-      { title: "New download", subtitle: "Add a file by URL", width: 620 });
+      { title: L("dlg.add_download", "New download"), subtitle: L("dlg.add_file_by_url", "Add a file by URL"), width: 620 });
 
     dlg.setFooter(`
-      <button class="btn btn-ghost" id="ndCancel">Cancel</button>
-      <button class="btn btn-primary btn-lg" id="ndGo" disabled>${Utils.icon("download", 16)} Download</button>`);
+      <button class="btn btn-ghost" id="ndCancel">${L("dlg.cancel_btn", "Cancel")}</button>
+      <button class="btn btn-primary btn-lg" id="ndGo" disabled>${Utils.icon("download", 16)} ${L("dlg.download_btn", "Download")}</button>`);
 
     const el = {
       url: dlg.qs("#ndUrl"), name: dlg.qs("#ndName"), dir: dlg.qs("#ndDir"),
@@ -866,7 +900,7 @@ const App = {
       el.detect.hidden = true;
       if (!raw) { setValid(false); el.probing.hidden = true; return; }
       const v = await API.validateUrl(raw);
-      if (!v || !v.valid) { setValid(false, "Enter a valid http:// or https:// link"); return; }
+      if (!v || !v.valid) { setValid(false, L("dlg.valid_url_error", "Enter a valid http:// or https:// link")); return; }
       model.normalized = v.normalized;
       setValid(true);
 
@@ -880,7 +914,7 @@ const App = {
         el.detect.hidden = false;
         el.detectName.textContent = fname;
         el.detectMeta.textContent =
-          (res.size_display ? res.size_display : "Unknown size") +
+          (res.size_display ? res.size_display : L("dlg.unknown_size", "Unknown size")) +
           (Utils.hostOf(v.normalized) ? " · " + Utils.hostOf(v.normalized) : "");
         el.detectIco.innerHTML = Utils.fileIcon(fname, 20);
         el.resume.hidden = !res.range;
@@ -889,7 +923,7 @@ const App = {
       } else {
         el.detect.hidden = false;
         el.detectName.textContent = Utils.fileName({ url: v.normalized });
-        el.detectMeta.textContent = (res && res.error) ? res.error : "Could not inspect this link";
+        el.detectMeta.textContent = (res && res.error) ? res.error : L("dlg.could_not_inspect", "Could not inspect this link");
         el.detectIco.innerHTML = Utils.icon("file", 20);
         el.resume.hidden = true;
         if (!model.nameTouched) el.name.value = Utils.fileName({ url: v.normalized });
@@ -912,7 +946,7 @@ const App = {
         const text = (await navigator.clipboard.readText() || "").trim();
         if (text) { el.url.value = text.split(/\s/)[0]; probe(); }
       } catch {
-        Components.toast("Clipboard blocked", "Allow clipboard access or paste manually", "warning");
+        Components.toast(L("toast.clipboard_blocked", "Clipboard blocked"), L("toast.clipboard_blocked_msg", "Allow clipboard access or paste manually"), "warning");
       }
     });
 
@@ -945,10 +979,10 @@ const App = {
         if (id) {
           this.state.highlightId = id;
           dlg.close();
-          Components.toast("Download added", name || Utils.fileName({ url }), "success");
+          Components.toast(I18N.t("toast.download_added", "Download added"), name || Utils.fileName({ url }), "success");
           if (this.state.page !== "downloads") this.navigate("downloads");
         } else {
-          setValid(false, "Could not add this download");
+          setValid(false, L("dlg.add_error", "Could not add this download"));
         }
       } finally {
         el.go.classList.remove("busy");
@@ -971,7 +1005,7 @@ const App = {
     }
     el.url.focus();
     } catch (e) {
-      Components.toast("Could not open dialog", String(e), "error");
+      Components.toast(I18N.t("toast.open_dialog_failed", "Could not open dialog"), String(e), "error");
       API.logJs("openNewDownload: " + String(e));
     }
   },
@@ -1051,13 +1085,13 @@ const App = {
       set("stDone", stats.completed || 0);
       set("stFailed", stats.failed || 0);
     }
-    set("stTodaySub", Utils.formatSize(todayBytes) + " downloaded");
-    set("stActiveSub", (stats.queued || 0) + " in queue");
+    set("stTodaySub", I18N.fmt("fmt.downloaded", { size: Utils.formatSize(todayBytes) }));
+    set("stActiveSub", I18N.fmt("fmt.in_queue", { n: stats.queued || 0 }));
     set("stSpeed", Utils.formatSpeed(stats.total_speed_bps));
-    set("stSpeedPeak", (stats.running || 0) + " connection" + (stats.running === 1 ? "" : "s") + " live");
+    set("stSpeedPeak", I18N.fmt("fmt.connections_live", { n: stats.running || 0, s: stats.running === 1 ? "" : "s" }));
     set("stNetwork", sys.session_downloaded_display || "0 B");
-    set("stDisk", sys.disk_free_display || "—");
-    set("stDiskSub", sys.disk_total ? `${sys.disk_used_display} of ${sys.disk_total_display} used` : "");
+    set("stDisk", sys.disk_free_display || I18N.t("fmt.unknown", "—"));
+    set("stDiskSub", sys.disk_total ? I18N.fmt("fmt.of_used", { used: sys.disk_used_display, total: sys.disk_total_display }) : "");
 
     const ring = Utils.$id("diskRing");
     if (ring && sys.disk_total) {
@@ -1080,9 +1114,9 @@ const App = {
     if (!active.length) {
       body.replaceChildren(Components.emptyState({
         icon: "bolt",
-        title: "All quiet",
-        desc: "Active downloads will show up here in real time.",
-        actionLabel: "New download",
+        title: I18N.t("dash.all_quiet", "All quiet"),
+        desc: I18N.t("dash.all_quiet_desc", "Active downloads will show up here in real time."),
+        actionLabel: I18N.t("title.new_download", "New download"),
         onAction: () => this.openNewDownload(null, { paste: true }),
       }));
     } else {
@@ -1097,8 +1131,8 @@ const App = {
     const rbody = recentEl.querySelector(".panel-body");
     if (!recent.length) {
       rbody.replaceChildren(Components.emptyState({
-        icon: "history", title: "No history yet",
-        desc: "Finished downloads appear here.",
+        icon: "history", title: I18N.t("dash.no_history", "No history yet"),
+        desc: I18N.t("dash.no_history_desc", "Finished downloads appear here."),
       }));
     } else {
       const frag = document.createDocumentFragment();
@@ -1112,7 +1146,7 @@ const App = {
             <span class="mini-name" title="${Utils.escapeHtml(h.name)}">${Utils.escapeHtml(h.name)}</span>
             <span class="mini-sub">${Utils.escapeHtml(h.size || "")} · ${Utils.formatDateTime(h.finished)}</span>
           </div>
-          <span class="mini-status ${ok ? "ok" : "bad"}" title="${Utils.escapeHtml(h.status)}">${Utils.icon(ok ? "check" : "x", 13)}</span>`;
+          <span class="mini-status ${ok ? "ok" : "bad"}" title="${Utils.escapeHtml(Utils.statusLabel(h.status))}">${Utils.icon(ok ? "check" : "x", 13)}</span>`;
         frag.appendChild(row);
       });
       rbody.replaceChildren(frag);
@@ -1162,15 +1196,15 @@ const App = {
     });
     Utils.$id("btnClearHistory").addEventListener("click", async () => {
       const ok = await Components.confirm({
-        title: "Clear history",
-        message: "Remove all history entries? Downloaded files are not affected.",
-        okText: "Clear history", cancelText: "Keep", danger: true,
+        title: I18N.t("confirm.clear_history", "Clear history"),
+        message: I18N.t("confirm.clear_history_msg", "Remove all history entries? Downloaded files are not affected."),
+        okText: I18N.t("history.clear", "Clear history"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true,
       });
       if (ok) {
         await API.clearHistory();
         this.state.history = [];
         this._renderHistory();
-        Components.toast("History cleared", "", "info");
+        Components.toast(I18N.t("toast.history_cleared", "History cleared"), "", "info");
       }
     });
   },
@@ -1185,18 +1219,18 @@ const App = {
     if (action === "folder") { await API.openPath(h.directory); return; }
     if (action === "file") {
       const ok = await API.openFileFromHistory(h);
-      if (!ok) Components.toast("File not found", `${h.name} is no longer on disk`, "error");
+      if (!ok) Components.toast(I18N.t("toast.file_not_found_title", "File not found"), I18N.t("toast.file_not_found", "{name} is no longer on disk").replace("{name}", h.name), "error");
       return;
     }
     if (action === "copypath") {
-      try { await navigator.clipboard.writeText(`${h.directory}\\${h.name}`); Components.toast("Copied", "File path copied", "info", 2000); } catch {}
+      try { await navigator.clipboard.writeText(`${h.directory}\\${h.name}`); Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_path", "File path copied to clipboard"), "info", 2000); } catch {}
       return;
     }
     if (action === "redownload") {
       // Smart re-download: check the destination / existing file first and
       // offer conflict handling instead of blindly creating a new task.
       const id = await this._addDownloadResolvingConflict(h.url, h.directory, h.name, "", true, "");
-      if (id) { this.state.highlightId = id; Components.toast("Re-queued", h.name, "success"); this.navigate("downloads"); }
+      if (id) { this.state.highlightId = id; Components.toast(I18N.t("act.redownload", "Redownload"), h.name, "success"); this.navigate("downloads"); }
       return;
     }
     if (action === "remove") {
@@ -1222,8 +1256,10 @@ const App = {
       empty.hidden = false;
       empty.replaceChildren(Components.emptyState({
         icon: "history",
-        title: this.state.history.length ? "Nothing matches" : "No history yet",
-        desc: this.state.history.length ? "Try a different filter or search term." : "Completed and failed downloads are listed here.",
+        title: this.state.history.length ? I18N.t("empty.nothing_matches", "Nothing matches")
+                                        : I18N.t("empty.no_history", "No history yet"),
+        desc: this.state.history.length ? I18N.t("empty.nothing_matches_desc", "Try a different filter or search term.")
+                                        : I18N.t("empty.no_history_desc", "Completed and failed downloads are listed here."),
       }));
       return;
     }
@@ -1246,17 +1282,17 @@ const App = {
           <span class="h-name-t" title="${Utils.escapeHtml(h.name || "")}">${Utils.escapeHtml(h.name || "")}</span>
         </td>
         <td class="h-size">${Utils.escapeHtml(sizeTxt)}${meta}</td>
-        <td class="h-cat"><span class="cat-pill">${Utils.escapeHtml(h.category || "General")}</span></td>
+        <td class="h-cat"><span class="cat-pill">${Utils.escapeHtml(I18N.t("category." + (h.category || "General"), h.category || "General"))}</span></td>
         <td><span class="badge badge-${stCls}"><i class="badge-dot"></i>${Utils.statusLabel(h.status || "Failed")}</span></td>
         <td class="h-dir">
           <span class="h-dir-t" title="${Utils.escapeHtml(dir)}">${Utils.escapeHtml(dir || "")}</span>
         </td>
         <td class="h-actions">
-          <button class="icon-btn btn-xs" data-hact="file" data-tip="Open file" aria-label="Open file">${Utils.icon("external", 13)}</button>
-          <button class="icon-btn btn-xs" data-hact="folder" data-tip="Open folder" aria-label="Open folder">${Utils.icon("folderOpen", 13)}</button>
-          <button class="icon-btn btn-xs" data-hact="copypath" data-tip="Copy path" aria-label="Copy path">${Utils.icon("copy", 13)}</button>
-          <button class="icon-btn btn-xs" data-hact="redownload" data-tip="Redownload" aria-label="Redownload">${Utils.icon("retry", 13)}</button>
-          <button class="icon-btn btn-xs" data-hact="remove" data-tip="Remove entry" aria-label="Remove from history">${Utils.icon("x", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="file" data-tip="${I18N.t("act.open_file", "Open file")}" aria-label="${I18N.t("act.open_file", "Open file")}">${Utils.icon("external", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="folder" data-tip="${I18N.t("act.open_folder", "Open folder")}" aria-label="${I18N.t("act.open_folder", "Open folder")}">${Utils.icon("folderOpen", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="copypath" data-tip="${I18N.t("act.copy_path", "Copy path")}" aria-label="${I18N.t("act.copy_path", "Copy path")}">${Utils.icon("copy", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="redownload" data-tip="${I18N.t("act.redownload", "Redownload")}" aria-label="${I18N.t("act.redownload", "Redownload")}">${Utils.icon("retry", 13)}</button>
+          <button class="icon-btn btn-xs" data-hact="remove" data-tip="${I18N.t("act.remove", "Remove")}" aria-label="${I18N.t("act.remove", "Remove")}">${Utils.icon("x", 13)}</button>
         </td>
       </tr>`;
     }).join("");
@@ -1283,21 +1319,21 @@ const App = {
     const fmtDur = (s) => {
       if (!s) return "0s";
       s = Math.round(s);
-      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-      return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+      return h ? I18N.fmt("fmt.duration", { h, m }) : I18N.fmt("fmt.duration_short", { m, s: sec });
     };
     const cards = [
-      ["Downloads", String(a.total_downloads)],
-      ["Completed", String(a.completed)],
-      ["Failed", String(a.failed)],
-      ["Cancelled", String(a.cancelled)],
-      ["Data", a.total_bytes_display],
-      ["Avg speed", Utils.formatSpeed(a.avg_speed)],
-      ["Peak speed", Utils.formatSpeed(a.peak_speed)],
-      ["Time", fmtDur(a.total_duration)],
+      [I18N.t("analytics.downloads", "Downloads"), String(a.total_downloads)],
+      [I18N.t("analytics.completed", "Completed"), String(a.completed)],
+      [I18N.t("analytics.failed", "Failed"), String(a.failed)],
+      [I18N.t("analytics.cancelled", "Cancelled"), String(a.cancelled)],
+      [I18N.t("analytics.data", "Data"), a.total_bytes_display],
+      [I18N.t("analytics.avg_speed", "Avg speed"), Utils.formatSpeed(a.avg_speed)],
+      [I18N.t("analytics.peak_speed", "Peak speed"), Utils.formatSpeed(a.peak_speed)],
+      [I18N.t("analytics.time", "Time"), fmtDur(a.total_duration)],
     ];
     const catList = Object.entries(a.by_category || {}).slice(0, 8)
-      .map(([k, v]) => `<span class="an-pill">${Utils.escapeHtml(k)} ${v}</span>`).join("");
+      .map(([k, v]) => `<span class="an-pill">${Utils.escapeHtml(I18N.t("category." + k, k))} ${v}</span>`).join("");
     const typeList = Object.entries(a.by_type || {}).slice(0, 8)
       .map(([k, v]) => `<span class="an-pill">.${Utils.escapeHtml(k)} ${v}</span>`).join("");
     const mode = a.by_mode || {};
@@ -1305,10 +1341,10 @@ const App = {
       <div class="an-cards">${cards.map(([l, v]) =>
         `<div class="an-card"><div class="an-val">${Utils.escapeHtml(v)}</div><div class="an-lbl">${Utils.escapeHtml(l)}</div></div>`).join("")}</div>
       <div class="an-rows">
-        ${catList ? `<div class="an-row"><span class="an-lbl">Categories</span><div class="an-pills">${catList}</div></div>` : ""}
-        ${typeList ? `<div class="an-row"><span class="an-lbl">Types</span><div class="an-pills">${typeList}</div></div>` : ""}
-        <div class="an-row"><span class="an-lbl">Connections</span><div class="an-pills">
-          <span class="an-pill">Smart ${mode.smart || 0}</span><span class="an-pill">Manual ${mode.manual || 0}</span></div></div>
+        ${catList ? `<div class="an-row"><span class="an-lbl">${I18N.t("analytics.categories", "Categories")}</span><div class="an-pills">${catList}</div></div>` : ""}
+        ${typeList ? `<div class="an-row"><span class="an-lbl">${I18N.t("analytics.types", "Types")}</span><div class="an-pills">${typeList}</div></div>` : ""}
+        <div class="an-row"><span class="an-lbl">${I18N.t("analytics.connections", "Connections")}</span><div class="an-pills">
+          <span class="an-pill">${I18N.t("analytics.smart", "Smart")} ${mode.smart || 0}</span><span class="an-pill">${I18N.t("analytics.manual", "Manual")} ${mode.manual || 0}</span></div></div>
       </div>`;
   },
 
@@ -1330,7 +1366,7 @@ const App = {
     const counter = Utils.$id("batchCount");
     const updateCount = () => {
       const n = area.value.split("\n").map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l)).length;
-      counter.textContent = n ? `${n} valid URL${n === 1 ? "" : "s"}` : "";
+      counter.textContent = n ? I18N.fmt("batch.valid_urls", { n }) : "";
     };
     area.addEventListener("input", updateCount);
 
@@ -1341,9 +1377,9 @@ const App = {
       if (res && res.ok) {
         area.value = res.text;
         updateCount();
-        Components.toast("File loaded", `${path.split(/[\\/]/).pop()}`, "success");
+        Components.toast(I18N.t("toast.file_loaded", "File loaded"), `${path.split(/[\\/]/).pop()}`, "success");
       } else {
-        Components.toast("Could not read file", res?.error || "", "error");
+        Components.toast(I18N.t("toast.file_not_read", "Could not read file"), res?.error || "", "error");
       }
     });
 
@@ -1355,12 +1391,12 @@ const App = {
     Utils.$id("btnBatchQueue").addEventListener("click", async () => {
       const urls = area.value.split("\n").map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l));
       if (!urls.length) {
-        Components.toast("No URLs", "Paste at least one valid http(s) link", "warning");
+        Components.toast(I18N.t("toast.no_urls", "No URLs"), I18N.t("batch.no_urls_msg", "Paste at least one valid http(s) link"), "warning");
         return;
       }
       const dir = Utils.$id("batchDir").value.trim() || this.state.settings?.download_dir || "";
       const count = await API.addBatch(urls, dir);
-      Components.toast("Batch queued", `${count} downloads added`, "success");
+      Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
       area.value = "";
       updateCount();
       this.navigate("downloads");
@@ -1375,7 +1411,7 @@ const App = {
     Utils.$id("btnPatternScan").addEventListener("click", async () => {
       const pattern = Utils.$id("patternUrl").value.trim();
       if (!pattern.includes("*")) {
-        Components.toast("Invalid pattern", "Use * where the number goes, e.g. file-*.zip", "warning");
+        Components.toast(I18N.t("toast.invalid_pattern", "Invalid pattern"), I18N.t("batch.invalid_pattern_msg", "Use * where the number goes, e.g. file-*.zip"), "warning");
         return;
       }
       const dir = Utils.$id("patternDir").value.trim() || this.state.settings?.download_dir || "";
@@ -1390,16 +1426,16 @@ const App = {
         const res = await API.scanPattern(pattern, dir, start, padding);
         if (res && res.urls && res.urls.length) {
           results.innerHTML = `
-            <div class="pattern-note ok">${Utils.icon("check", 14)} ${res.urls.length} files found — queued for download</div>
+            <div class="pattern-note ok">${Utils.icon("check", 14)} ${res.urls.length} ${I18N.t("batch.files_found", "files found — queued for download")}</div>
             <div class="pattern-list">${res.urls.slice(0, 40).map((u) => `<div class="pattern-item">${Utils.escapeHtml(u)}</div>`).join("")}
-            ${res.urls.length > 40 ? `<div class="pattern-item dim">… and ${res.urls.length - 40} more</div>` : ""}</div>`;
+            ${res.urls.length > 40 ? `<div class="pattern-item dim">… ${res.urls.length - 40} ${I18N.t("batch.more", "more")}</div>` : ""}</div>`;
           const count = await API.addBatch(res.urls, dir);
-          Components.toast("Scan complete", `${count} downloads queued`, "success");
+          Components.toast(I18N.t("toast.scan_complete", "Scan complete"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
         } else {
-          results.innerHTML = `<div class="pattern-note">${Utils.icon("info", 14)} No reachable files matched this pattern</div>`;
+          results.innerHTML = `<div class="pattern-note">${Utils.icon("info", 14)} ${I18N.t("batch.nothing_matched", "No reachable files matched this pattern")}</div>`;
         }
       } catch {
-        results.innerHTML = `<div class="pattern-note bad">${Utils.icon("alert", 14)} Scan failed</div>`;
+        results.innerHTML = `<div class="pattern-note bad">${Utils.icon("alert", 14)} ${I18N.t("toast.scan_failed", "Scan failed")}</div>`;
       }
       btn.disabled = false;
       btn.classList.remove("busy");
@@ -1414,6 +1450,7 @@ const App = {
     try {
       const st = await API.liveServerStatus();
       if (!st) return;
+      this._lastServerStatus = st;
       this.state.serverRunning = st.running;
       if (this.state.page === "browser") this._renderBrowser(st);
     } catch {}
@@ -1426,12 +1463,12 @@ const App = {
     const token = Utils.$id("serverToken");
     const btn = Utils.$id("btnServerToggle");
     orb.className = "server-orb " + (st.running ? "on" : "off");
-    status.textContent = st.running ? "Live server is running" : "Live server is stopped";
+    status.textContent = st.running ? I18N.t("browser.server_running", "Live server is running") : I18N.t("browser.server_stopped", "Live server is stopped");
     addr.textContent = st.running ? `http://${st.host}:${st.port}` : "—";
     token.textContent = st.running ? st.token : "—";
     btn.innerHTML = st.running
-      ? `${Utils.icon("stop", 15)} Stop server`
-      : `${Utils.icon("power", 15)} Start server`;
+      ? `${Utils.icon("stop", 15)} ${I18N.t("browser.stop_server", "Stop server")}`
+      : `${Utils.icon("power", 15)} ${I18N.t("browser.start_server", "Start server")}`;
     btn.classList.toggle("btn-danger", st.running);
     btn.classList.toggle("btn-primary", !st.running);
   },
@@ -1442,10 +1479,11 @@ const App = {
       btn.disabled = true;
       if (this.state.serverRunning) {
         await API.stopLiveServer();
-        Components.toast("Server stopped", "", "info");
+        Components.toast(I18N.t("toast.server_stopped", "Server stopped"), "", "info");
       } else {
         const ok = await API.startLiveServer();
-        Components.toast(ok ? "Server started" : "Start failed", ok ? "The extension can now connect" : "The port may already be in use", ok ? "success" : "error");
+        Components.toast(ok ? I18N.t("toast.server_started", "Server started") : I18N.t("toast.server_start_failed", "Start failed"),
+          ok ? I18N.t("toast.server_started_msg", "The extension can now connect") : I18N.t("toast.server_start_failed_msg", "The port may already be in use"), ok ? "success" : "error");
       }
       btn.disabled = false;
       await this._refreshServerStatus();
@@ -1454,19 +1492,19 @@ const App = {
     Utils.$id("btnCopyAddr").addEventListener("click", async () => {
       const text = Utils.$id("serverAddr").textContent;
       if (text && text !== "—") {
-        try { await navigator.clipboard.writeText(text); Components.toast("Copied", text, "info", 2000); } catch {}
+        try { await navigator.clipboard.writeText(text); Components.toast(I18N.t("toast.copied", "Copied"), text, "info", 2000); } catch {}
       }
     });
 
     Utils.$id("btnCreateExt").addEventListener("click", async () => {
       const path = await API.createExtension();
-      if (path) Components.toast("Extension created", path, "success", 6500);
+      if (path) Components.toast(I18N.t("toast.extension_created", "Extension created"), path, "success", 6500);
     });
 
     Utils.$id("btnRegProtocol").addEventListener("click", async () => {
       const ok = await API.registerProtocol();
-      Components.toast(ok ? "Protocol registered" : "Registration failed",
-        ok ? "dldm:// links now open in N13" : "Try running as administrator", ok ? "success" : "error");
+      Components.toast(ok ? I18N.t("toast.protocol_registered", "Protocol registered") : I18N.t("toast.protocol_failed", "Registration failed"),
+        ok ? I18N.t("toast.protocol_registered_msg", "dldm:// links now open in N13") : I18N.t("toast.protocol_failed_msg", "Try running as administrator"), ok ? "success" : "error");
     });
   },
 
@@ -1475,9 +1513,10 @@ const App = {
   // ══════════════════════════════════════════════════════════════════════
 
   _settingsDef() {
+    const st = (key, fallback) => I18N.t("settings." + key, fallback);
     return [
       {
-        id: "general", icon: "download", title: "General",
+        id: "general", icon: "download", title: st("general", "General"),
         fields: [
           { key: "download_dir", label: "Download folder", hint: "Default location for new files", type: "dir" },
           { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
@@ -1495,7 +1534,7 @@ const App = {
         ],
       },
       {
-        id: "smart", icon: "bolt", title: "Smart Download",
+        id: "smart", icon: "bolt", title: st("smart", "Smart Download"),
         fields: [
           { key: "connection_mode", label: "Connection mode", hint: "Smart picks the connection count automatically; Manual uses your fixed value", type: "select", options: [
             { value: "smart", label: "Smart (recommended)" },
@@ -1506,21 +1545,21 @@ const App = {
         ],
       },
       {
-        id: "rules", icon: "link", title: "Download Rules",
+        id: "rules", icon: "link", title: st("rules", "Download Rules"),
         fields: [
           { key: "rules_enabled", label: "Enable rules", hint: "Automatically set category, folder and priority for new downloads", type: "toggle" },
           { key: "_rules_manager", label: "Rules", hint: "Match by extension, domain, URL text, size, or MIME type", type: "rules" },
         ],
       },
       {
-        id: "appearance", icon: "sun", title: "Appearance",
+        id: "appearance", icon: "sun", title: st("appearance", "Appearance"),
         fields: [
           { key: "_theme", label: "Theme", hint: "Interface color scheme", type: "theme" },
           { key: "_accent", label: "Accent color", hint: "Used for buttons, links and progress", type: "accent" },
         ],
       },
       {
-        id: "bandwidth", icon: "gauge", title: "Bandwidth",
+        id: "bandwidth", icon: "gauge", title: st("bandwidth", "Bandwidth"),
         fields: [
           { key: "_limit_enabled", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
           { key: "max_speed_bps", label: "Speed limit", hint: "Applies to all downloads combined", type: "speed" },
@@ -1528,7 +1567,7 @@ const App = {
         ],
       },
       {
-        id: "scheduler", icon: "calendar", title: "Scheduler",
+        id: "scheduler", icon: "calendar", title: st("scheduler", "Scheduler"),
         fields: [
           { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
           { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
@@ -1540,7 +1579,7 @@ const App = {
         ],
       },
       {
-        id: "startup", icon: "power", title: "Startup & clipboard",
+        id: "startup", icon: "power", title: st("startup", "Startup & clipboard"),
         fields: [
           { key: "resume_on_startup", label: "Resume on startup", hint: "Automatically continue downloads that were interrupted", type: "toggle" },
           { key: "start_minimized", label: "Start minimized", hint: "Launch the window minimized", type: "toggle" },
@@ -1555,7 +1594,7 @@ const App = {
         ],
       },
       {
-        id: "categories", icon: "folder", title: "Categories",
+        id: "categories", icon: "folder", title: st("categories", "Categories"),
         fields: [
           { key: "auto_categorize", label: "Auto-detect category", hint: "Assign a category from the file type", type: "toggle" },
           { key: "_category_dirs", label: "Category folders", hint: "Save each category to its own folder", type: "catdirs" },
@@ -1563,7 +1602,7 @@ const App = {
         ],
       },
       {
-        id: "network", icon: "wifi", title: "Network",
+        id: "network", icon: "wifi", title: st("network", "Network"),
         fields: [
           { key: "proxy_url", label: "Proxy", hint: "e.g. http://127.0.0.1:8080 — empty disables", type: "text", placeholder: "http://host:port" },
           { key: "proxy_username", label: "Proxy username", hint: "", type: "text" },
@@ -1572,7 +1611,7 @@ const App = {
         ],
       },
       {
-        id: "reliability", icon: "retry", title: "Reliability",
+        id: "reliability", icon: "retry", title: st("reliability", "Reliability"),
         fields: [
           { key: "max_retries", label: "Retry attempts", hint: "Times a failed segment is retried", type: "range", min: 0, max: 20 },
           { key: "retry_delay", label: "Retry delay", hint: "Base wait between attempts, in seconds", type: "range", min: 1, max: 60 },
@@ -1582,10 +1621,16 @@ const App = {
         ],
       },
       {
-        id: "integration", icon: "browser", title: "Browser integration",
+        id: "integration", icon: "browser", title: st("integration", "Browser integration"),
         fields: [
           { key: "live_server_port", label: "Extension server port", hint: "Restart the live server after changing", type: "number", min: 1024, max: 65535 },
           { key: "_server_link", label: "Live server", hint: "Manage the browser bridge", type: "server" },
+        ],
+      },
+      {
+        id: "updates", icon: "refresh", title: st("updates", "Updates"),
+        fields: [
+          { key: "_update_panel", label: "", hint: "", type: "update" },
         ],
       },
     ];
@@ -1612,7 +1657,7 @@ const App = {
         <header class="set-head">
           <span class="set-ico">${Utils.icon(sec.icon, 17)}</span>
           <h3>${sec.title}</h3>
-          <span class="set-saved" data-saved="${sec.id}">${Utils.icon("check", 12)} Saved</span>
+          <span class="set-saved" data-saved="${sec.id}">${Utils.icon("check", 12)} ${I18N.t("settings.saved", "Saved")}</span>
         </header>
         <div class="set-body">
           ${sec.fields.map((f) => this._fieldHtml(f, s, ctx)).join("")}
@@ -1623,32 +1668,36 @@ const App = {
   },
 
   _fieldHtml(f, s, ctx) {
+    const tkey = f.key.replace(/^_/, "");
+    const label = I18N.t("set." + tkey, f.label);
+    const hint = I18N.t("set." + tkey + ".hint", f.hint);
     const head = `
       <div class="field-info">
-        <label class="field-label" ${f.key.startsWith("_") ? "" : `for="set-${f.key}"`}>${f.label}</label>
-        ${f.hint ? `<p class="field-hint">${f.hint}</p>` : ""}
+        <label class="field-label" ${f.key.startsWith("_") ? "" : `for="set-${f.key}"`}>${label}</label>
+        ${hint ? `<p class="field-hint">${hint}</p>` : ""}
       </div>`;
 
     let ctl = "";
     if (f.type === "dir") {
       ctl = `<div class="input-join">
           <input class="input mono" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}" spellcheck="false">
-          <button class="btn btn-ghost" data-browse="${f.key}">${Utils.icon("folder", 15)} Browse</button>
+          <button class="btn btn-ghost" data-browse="${f.key}">${Utils.icon("folder", 15)} ${I18N.t("dlg.browse", "Browse")}</button>
         </div>`;
     } else if (f.type === "range") {
       ctl = `<div class="slider-wrap">
-          <input type="range" id="set-${f.key}" data-key="${f.key}" min="${f.min}" max="${f.max}" value="${s[f.key]}" aria-label="${f.label}">
+          <input type="range" id="set-${f.key}" data-key="${f.key}" min="${f.min}" max="${f.max}" value="${s[f.key]}" aria-label="${Utils.escapeHtml(label)}">
           <output>${s[f.key]}</output>
         </div>`;
     } else if (f.type === "toggle") {
       const enabled = f.of ? (ctx.speedMbps?.[f.of] > 0) : !!s[f.key];
       ctl = `<span class="switch"><input type="checkbox" id="set-${f.key}" data-key="${f.key}" data-of="${f.of || ""}" ${enabled ? "checked" : ""}><span class="switch-track"></span></span>`;
     } else if (f.type === "text" || f.type === "password") {
-      ctl = `<input class="input" type="${f.type}" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}" placeholder="${f.placeholder || ""}" spellcheck="false">`;
+      const ph = f.placeholder ? I18N.t("set." + tkey + ".placeholder", f.placeholder) : "";
+      ctl = `<input class="input" type="${f.type}" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}" placeholder="${Utils.escapeHtml(ph)}" spellcheck="false">`;
     } else if (f.type === "uatext") {
       ctl = `<div class="ua-wrap">
         <input class="input mono" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}" spellcheck="false" autocomplete="off">
-        <button class="btn btn-ghost btn-sm" data-reset="${f.key}" data-tip="Restore default browser string">${Utils.icon("retry", 13)} Reset</button>
+        <button class="btn btn-ghost btn-sm" data-reset="${f.key}" data-tip="${I18N.t("set.user_agent.reset", "Restore default browser string")}">${Utils.icon("retry", 13)} ${I18N.t("btn.reset", "Reset")}</button>
       </div>`;
     } else if (f.type === "number") {
       ctl = `<input class="input input-num" type="number" id="set-${f.key}" data-key="${f.key}" value="${s[f.key]}" min="${f.min}" max="${f.max}">`;
@@ -1656,52 +1705,76 @@ const App = {
       ctl = `<input class="input mono" type="time" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}">`;
     } else if (f.type === "select") {
       ctl = `<select class="input" id="set-${f.key}" data-key="${f.key}">
-        ${(f.options || []).map((o) => `<option value="${Utils.escapeHtml(o.value)}" ${String(s[f.key] || "") === o.value ? "selected" : ""}>${Utils.escapeHtml(o.label)}</option>`).join("")}
+        ${(f.options || []).map((o) => {
+          const optLabel = f.key === "language"
+            ? I18N.t("lang." + o.value, o.label)
+            : I18N.t("setopt." + o.value, o.label);
+          return `<option value="${Utils.escapeHtml(o.value)}" ${String(s[f.key] || "") === o.value ? "selected" : ""}>${Utils.escapeHtml(optLabel)}</option>`;
+        }).join("")}
       </select>`;
     } else if (f.type === "speed") {
       const mbps = (ctx.speedMbps?.[f.key] > 0) ? ctx.speedMbps[f.key] : 10;
       const off = !(ctx.speedMbps?.[f.key] > 0);
       ctl = `<div class="speed-wrap ${off ? "off" : ""}" id="speedwrap-${f.key}">
-          <input type="range" data-speed-key="${f.key}" min="0.5" max="100" step="0.5" value="${mbps}" aria-label="Speed limit in megabytes per second">
+          <input type="range" data-speed-key="${f.key}" min="0.5" max="100" step="0.5" value="${mbps}" aria-label="${Utils.escapeHtml(I18N.t("set." + f.key + ".aria", "Speed limit in megabytes per second"))}">
           <div class="speed-val"><input class="input input-num" data-speed-in="${f.key}" type="number" min="0.5" max="100" step="0.5" value="${mbps}"><span>MB/s</span></div>
         </div>`;
     } else if (f.type === "speedpresets") {
       const presets = [256, 512, 1024, 2048, 5120, 10240].map((kb) => Math.round(kb * 1024));
       ctl = `<div class="preset-row">${presets.map((bps) => `
         <button class="chip" data-preset-bps="${bps}" data-tip="${(bps / 1024 / 1024).toFixed(1).replace(/\.0$/, "")} MB/s">${Utils.formatSpeed(bps)}</button>`).join("")}
-        <button class="chip" data-preset-bps="0">Unlimited</button>
+        <button class="chip" data-preset-bps="0">${I18N.t("setopt.unlimited", "Unlimited")}</button>
       </div>`;
     } else if (f.type === "catdirs") {
       const cats = ["General", "Videos", "Music", "Images", "Documents", "Archives", "Programs", "Other"];
       const dirs = s.category_dirs || {};
+      const catPlaceholder = I18N.t("set.category_dirs.placeholder", "Default folder");
       ctl = `<div class="catdirs">
         ${cats.map((c) => `
           <div class="catdir-row">
-            <span class="catdir-name">${c}</span>
-            <input class="input mono" data-catdir="${c}" value="${Utils.escapeHtml(dirs[c] || "")}" placeholder="Default folder">
-            <button class="icon-btn btn-xs" data-catdir-browse="${c}" data-tip="Browse" aria-label="Browse">${Utils.icon("folder", 13)}</button>
+            <span class="catdir-name">${Utils.escapeHtml(I18N.t("category." + c, c))}</span>
+            <input class="input mono" data-catdir="${c}" value="${Utils.escapeHtml(dirs[c] || "")}" placeholder="${Utils.escapeHtml(catPlaceholder)}">
+            <button class="icon-btn btn-xs" data-catdir-browse="${c}" data-tip="${I18N.t("dlg.browse", "Browse")}" aria-label="${I18N.t("dlg.browse", "Browse")}">${Utils.icon("folder", 13)}</button>
           </div>`).join("")}
       </div>`;
     } else if (f.type === "catexts") {
       const txt = JSON.stringify(s.category_extensions || {}, null, 1);
-      ctl = `<textarea class="input textarea mono" data-catexts rows="4" spellcheck="false" placeholder='{"Videos": ["mp4", "mkv"]}'>${Utils.escapeHtml(txt)}</textarea>`;
+      ctl = `<textarea class="input textarea mono" data-catexts rows="4" spellcheck="false" placeholder='{"${I18N.t("category.Videos", "Videos")}": ["mp4", "mkv"]}'>${Utils.escapeHtml(txt)}</textarea>`;
     } else if (f.type === "theme") {
-      ctl = `<div class="seg" role="radiogroup" aria-label="Theme">
-          <button class="seg-btn ${this.state.theme === "dark" ? "active" : ""}" data-theme="dark" role="radio" aria-checked="${this.state.theme === "dark"}">${Utils.icon("moon", 15)} Dark</button>
-          <button class="seg-btn ${this.state.theme === "light" ? "active" : ""}" data-theme="light" role="radio" aria-checked="${this.state.theme === "light"}">${Utils.icon("sun", 15)} Light</button>
+      ctl = `<div class="seg" role="radiogroup" aria-label="${Utils.escapeHtml(label)}">
+          <button class="seg-btn ${this.state.theme === "dark" ? "active" : ""}" data-theme="dark" role="radio" aria-checked="${this.state.theme === "dark"}">${Utils.icon("moon", 15)} ${I18N.t("setopt.dark", "Dark")}</button>
+          <button class="seg-btn ${this.state.theme === "light" ? "active" : ""}" data-theme="light" role="radio" aria-checked="${this.state.theme === "light"}">${Utils.icon("sun", 15)} ${I18N.t("setopt.light", "Light")}</button>
         </div>`;
     } else if (f.type === "accent") {
       ctl = `<div class="swatches">${this.accents.map((c) => `
-          <button class="swatch ${this.state.accent.toLowerCase() === c.toLowerCase() ? "active" : ""}" data-color="${c}" style="--sw:${c}" aria-label="Accent ${c}" aria-pressed="${this.state.accent.toLowerCase() === c.toLowerCase()}"></button>`).join("")}
+          <button class="swatch ${this.state.accent.toLowerCase() === c.toLowerCase() ? "active" : ""}" data-color="${c}" style="--sw:${c}" aria-label="${Utils.escapeHtml(I18N.t("set.accent.swatch", "Accent"))} ${c}" aria-pressed="${this.state.accent.toLowerCase() === c.toLowerCase()}"></button>`).join("")}
         </div>`;
     } else if (f.type === "server") {
-      ctl = `<button class="btn btn-ghost" id="setGoBrowser">${Utils.icon("external", 15)} Open Browser page</button>`;
+      ctl = `<button class="btn btn-ghost" id="setGoBrowser">${Utils.icon("external", 15)} ${I18N.t("browser.open_page", "Open Browser page")}</button>`;
     } else if (f.type === "rules") {
       ctl = `<div class="rules-manager" id="rulesManager"></div>
         <div class="rules-actions">
-          <button class="btn btn-ghost btn-sm" id="btnRuleAdd">${Utils.icon("plus", 13)} Add rule</button>
-          <button class="btn btn-ghost btn-sm" id="btnRuleTest">${Utils.icon("search", 13)} Test rule</button>
+          <button class="btn btn-ghost btn-sm" id="btnRuleAdd">${Utils.icon("plus", 13)} ${I18N.t("rules.add_rule", "Add rule")}</button>
+          <button class="btn btn-ghost btn-sm" id="btnRuleTest">${Utils.icon("search", 13)} ${I18N.t("rules.test_rule", "Test rule")}</button>
         </div>`;
+    } else if (f.type === "update") {
+      ctl = `<div class="update-panel" id="updatePanel">
+        <div class="update-meta">
+          <div class="update-version-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong id="upCurrentVersion">—</strong></div>
+          <div class="update-status" id="upStatus">${I18N.t("update.check", "Check for updates")}</div>
+          <div class="update-last" id="upLastChecked"></div>
+        </div>
+        <div class="update-progress-wrap" id="upProgressWrap" hidden>
+          <div class="update-progress-bar" id="upProgressBar" style="--p:0%"></div>
+        </div>
+        <div class="update-actions">
+          <button class="btn btn-ghost" id="btnCheckUpdates">${Utils.icon("refresh", 14)} <span>${I18N.t("update.check", "Check for updates")}</span></button>
+          <label class="switch-row update-auto">
+            <span class="switch"><input type="checkbox" id="upAutoCheck"><span class="switch-track"></span></span>
+            <span class="switch-text"><strong>${I18N.t("update.auto_check", "Automatic update checking")}</strong></span>
+          </label>
+        </div>
+      </div>`;
     }
 
     return `<div class="set-row${f.wide ? " set-row-wide" : ""}" data-field="${f.key}">${head}<div class="field-ctl">${ctl}</div></div>`;
@@ -1731,7 +1804,7 @@ const App = {
           Object.assign(this.state.settings, batch);
           ids.forEach((k) => markSaved(secId || (container.querySelector(`[data-key="${k}"]`) || {}).closest?.(".set-card")?.id?.replace("set-", "") || "general"));
         } else {
-          Components.toast("Not saved", "A setting could not be applied", "error");
+          Components.toast(I18N.t("toast.not_saved", "Not saved"), I18N.t("toast.not_saved_msg", "A setting could not be applied"), "error");
         }
       }, 300);
     };
@@ -1829,7 +1902,7 @@ const App = {
           if (input) input.value = slider.value;
         }
         scheduleSave({ max_speed_bps: bps }, "bandwidth");
-        Components.toast("Speed limit set", bps ? Utils.formatSpeed(bps) : "Unlimited", "info", 1800);
+        Components.toast(I18N.t("toast.speed_limit_set", "Speed limit set"), bps ? Utils.formatSpeed(bps) : I18N.t("toast.unlimited", "Unlimited"), "info", 1800);
       });
     });
 
@@ -1843,7 +1916,14 @@ const App = {
     // Selects.
     Utils.$qa('select[data-key]', container).forEach((sel) => {
       sel.addEventListener("change", () => {
-        scheduleSave({ [sel.dataset.key]: sel.value }, secOf(sel));
+        const key = sel.dataset.key;
+        scheduleSave({ [key]: sel.value }, secOf(sel));
+        if (key === "language") {
+          // Apply the new language immediately (the debounced save updates
+          // state later); rebuild settings in the new language right away.
+          this.state.settings = { ...(this.state.settings || {}), language: sel.value };
+          requestAnimationFrame(() => this._applyLanguage());
+        }
       });
     });
 
@@ -1876,10 +1956,10 @@ const App = {
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             scheduleSave({ category_extensions: parsed }, "categories");
           } else {
-            Components.toast("Invalid JSON", "Category extensions must be an object", "error");
+            Components.toast(I18N.t("toast.invalid_json", "Invalid JSON"), I18N.t("toast.invalid_json_msg", "Category extensions must be an object"), "error");
           }
         } catch {
-          Components.toast("Invalid JSON", "Check the category extensions syntax", "error");
+          Components.toast(I18N.t("toast.json_syntax", "Invalid JSON"), I18N.t("toast.json_syntax_msg", "Check the category extensions syntax"), "error");
         }
       });
     });
@@ -1906,7 +1986,7 @@ const App = {
         if (inp) {
           inp.value = DEFAULT_UA;
           scheduleSave({ [key]: DEFAULT_UA }, secOf(btn));
-          Components.toast("User agent restored", "Default value applied", "info");
+          Components.toast(I18N.t("toast.user_agent_restored", "User agent restored"), I18N.t("toast.user_agent_restored_msg", "Default value applied"), "info");
         }
       });
     });
@@ -1940,6 +2020,200 @@ const App = {
 
     Utils.$id("setGoBrowser")?.addEventListener("click", () => this.navigate("browser"));
     if (Utils.$id("btnRuleAdd")) this._initRulesManager(container);
+    this._wireUpdatePanel(container);
+  },
+
+  // ── Update panel ──────────────────────────────────────────────────
+
+  async _wireUpdatePanel(container) {
+    const panel = Utils.$id("updatePanel");
+    if (!panel) return;
+
+    // Load settings once; later events update state/progress.
+    try {
+      this.state.updateSettings = await API.getUpdateSettings();
+    } catch {
+      this.state.updateSettings = { current_version: "", auto_update_check: true, skipped_version: "", last_checked: "" };
+    }
+    const settings = this.state.updateSettings || {};
+    Utils.$id("upCurrentVersion").textContent = settings.current_version || "—";
+    Utils.$id("upLastChecked").textContent = settings.last_checked
+      ? I18N.t("update.last_checked", "Last checked") + ": " + new Date(settings.last_checked).toLocaleString()
+      : I18N.t("update.last_checked", "Last checked") + ": " + I18N.t("update.never", "Never");
+    const autoInp = Utils.$id("upAutoCheck");
+    if (autoInp) autoInp.checked = !!settings.auto_update_check;
+
+    const statusEl = Utils.$id("upStatus");
+    const btn = Utils.$id("btnCheckUpdates");
+    const progressWrap = Utils.$id("upProgressWrap");
+    const progressBar = Utils.$id("upProgressBar");
+
+    const setStatus = (text) => { if (statusEl) statusEl.textContent = text; };
+    const setBusy = (busy) => {
+      if (btn) { btn.disabled = busy; btn.querySelector("span").textContent = busy ? I18N.t("update.checking", "Checking for updates…") : I18N.t("update.check", "Check for updates"); }
+    };
+
+    // Auto toggle
+    autoInp?.addEventListener("change", async () => {
+      await API.setAutoUpdateCheck(autoInp.checked);
+      if (settings) settings.auto_update_check = autoInp.checked;
+    });
+
+    // Manual check
+    btn?.addEventListener("click", async () => {
+      setBusy(true);
+      setStatus(I18N.t("update.checking", "Checking for updates…"));
+      await API.checkForUpdates(true);
+      // State will arrive via events; also fetch immediate state.
+      const st = await API.getUpdateState();
+      this._applyUpdateState(st, { manual: true });
+    });
+
+    // Initial state
+    const initial = await API.getUpdateState();
+    this._applyUpdateState(initial, { manual: false });
+  },
+
+  _applyUpdateState(state, { manual = false } = {}) {
+    if (!state) return;
+    this.state.updateState = state;
+    const panel = Utils.$id("updatePanel");
+    if (!panel) return;
+
+    const statusEl = Utils.$id("upStatus");
+    const btn = Utils.$id("btnCheckUpdates");
+    const progressWrap = Utils.$id("upProgressWrap");
+    const progressBar = Utils.$id("upProgressBar");
+
+    const setStatus = (text) => { if (statusEl) statusEl.textContent = text; };
+    const setBusy = (busy) => {
+      if (btn) { btn.disabled = busy; if (btn.querySelector("span")) btn.querySelector("span").textContent = busy ? I18N.t("update.checking", "Checking for updates…") : I18N.t("update.check", "Check for updates"); }
+    };
+
+    if (state.state === "checking") {
+      setBusy(true);
+      setStatus(I18N.t("update.checking", "Checking for updates…"));
+      if (progressWrap) progressWrap.hidden = true;
+    } else if (state.state === "downloading") {
+      setBusy(true);
+      setStatus(I18N.t("update.downloading", "Downloading update…") + " " + I18N.fmt("update.download_progress", { pct: state.progress || 0 }));
+      if (progressWrap) { progressWrap.hidden = false; progressBar.style.setProperty("--p", (state.progress || 0) + "%"); }
+    } else if (state.state === "ready") {
+      setBusy(false);
+      setStatus(I18N.t("update.title", "Update available") + ": v" + (state.info?.version || ""));
+      if (progressWrap) progressWrap.hidden = true;
+      if (manual) this._showUpdateDialog(state.info);
+    } else if (state.state === "available") {
+      setBusy(false);
+      setStatus(I18N.t("update.title", "Update available") + ": v" + (state.info?.version || ""));
+      if (progressWrap) progressWrap.hidden = true;
+      if (manual) this._showUpdateDialog(state.info);
+    } else if (state.state === "error") {
+      setBusy(false);
+      setStatus(I18N.t("update.error", "Update check failed") + (state.error ? ": " + state.error : ""));
+      if (progressWrap) progressWrap.hidden = true;
+      if (manual) Components.toast(I18N.t("update.error", "Update check failed"), I18N.t("update.unavailable", "Unable to connect to the update server."), "error");
+    } else {
+      // idle / up-to-date
+      setBusy(false);
+      const latest = state.info?.version;
+      if (latest && latest === state.current_version) {
+        setStatus(I18N.t("update.up_to_date", "You're up to date.") + " v" + latest);
+      } else {
+        setStatus(I18N.t("update.check", "Check for updates"));
+      }
+      if (progressWrap) progressWrap.hidden = true;
+      if (manual && (!latest || latest === state.current_version)) {
+        Components.toast(I18N.t("update.up_to_date", "You're up to date."), "v" + (state.current_version || ""), "success", 2200);
+      }
+    }
+  },
+
+  async _showUpdateDialog(info) {
+    if (!info || !info.version) return;
+    if (this._updateDialogOpenFor === info.version) return;
+    this._updateDialogOpenFor = info.version;
+
+    const notesHtml = Utils.escapeHtml(info.notes || I18N.t("update.no_notes", "No release notes provided.")).replace(/\n/g, "<br>");
+    const dlg = Components.showModal(`
+      <div class="update-dialog-body">
+        <div class="update-dialog-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong>v${Utils.escapeHtml(this.state.updateState?.current_version || "")}</strong></div>
+        <div class="update-dialog-row"><span>${I18N.t("update.new_version", "New version")}:</span> <strong>v${Utils.escapeHtml(info.version)}</strong></div>
+        <div class="update-dialog-label">${I18N.t("update.release_notes", "Release notes")}</div>
+        <div class="update-notes">${notesHtml}</div>
+      </div>`, { title: I18N.t("update.title", "Update available"), width: 480 });
+
+    dlg.setFooter(`
+      <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
+      <button class="btn btn-ghost" id="upSkip">${I18N.t("update.skip", "Skip this version")}</button>
+      <button class="btn btn-primary" id="upNow">${I18N.t("update.update_now", "Update now")}</button>`);
+
+    dlg.qs("#upLater").addEventListener("click", () => { this._updateDialogOpenFor = null; dlg.close(); });
+    dlg.qs("#upSkip").addEventListener("click", async () => {
+      await API.skipUpdateVersion(info.version);
+      if (this.state.updateSettings) this.state.updateSettings.skipped_version = info.version;
+      this._updateDialogOpenFor = null;
+      dlg.close();
+      Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.skipped", "Skipped version") + " v" + info.version, "info", 2000);
+    });
+    dlg.qs("#upNow").addEventListener("click", async () => {
+      dlg.qs("#upNow").disabled = true;
+      dlg.qs("#upNow").textContent = I18N.t("update.downloading", "Downloading update…");
+      await API.downloadUpdate();
+      this._waitForUpdateReady(dlg);
+    });
+  },
+
+  async _waitForUpdateReady(dlg) {
+    let attempts = 0;
+    const tick = async () => {
+      attempts++;
+      const st = await API.getUpdateState();
+      this._applyUpdateState(st);
+      if (st.state === "ready") {
+        this._updateDialogOpenFor = null;
+        dlg.close();
+        await this._confirmInstallUpdate();
+        return;
+      }
+      if (st.state === "error" || attempts > 120) {
+        this._updateDialogOpenFor = null;
+        dlg.qs("#upNow").disabled = false;
+        dlg.qs("#upNow").textContent = I18N.t("update.update_now", "Update now");
+        Components.toast(I18N.t("update.error", "Update check failed"), st.error || I18N.t("update.unavailable", "Unable to connect to the update server."), "error");
+        return;
+      }
+      setTimeout(tick, 500);
+    };
+    tick();
+  },
+
+  async _confirmInstallUpdate() {
+    const stats = await API.getStats();
+    const hasActive = (stats?.running || 0) > 0;
+    if (hasActive) {
+      const ok = await Components.confirm({
+        title: I18N.t("update.title", "Update available"),
+        message: I18N.t("update.install_blocked_active", "Downloads are currently active. Updating N13 requires closing the application."),
+        okText: I18N.t("update.update_now", "Update now"),
+        cancelText: I18N.t("confirm.cancel", "Cancel"),
+      });
+      if (!ok) return;
+    }
+    Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.installing", "Installing update…"), "info", 3000);
+    await API.installUpdate(true);
+  },
+
+  async _maybeCheckUpdates() {
+    if (this._updateCheckedSession) return;
+    this._updateCheckedSession = true;
+    try {
+      const settings = await API.getUpdateSettings();
+      this.state.updateSettings = settings;
+      if (!settings.auto_update_check) return;
+      // The check is asynchronous; results arrive via events.
+      await API.checkForUpdates(false);
+    } catch {}
   },
 
   // ── Download Rules manager ────────────────────────────────────────
@@ -1949,20 +2223,20 @@ const App = {
     if (!box) return;
     const rules = (await API.getRules()) || [];
     if (!rules.length) {
-      box.innerHTML = `<div class="dim-note">No rules yet. Rules auto-set category, folder and priority for matching downloads.</div>`;
+      box.innerHTML = `<div class="dim-note">${I18N.t("rules.no_rules", "No rules yet")}. ${I18N.t("rules.no_rules_desc", "Rules auto-set category, folder and priority for matching downloads")}.</div>`;
     } else {
       box.innerHTML = rules.map((r) => `
         <div class="rule-item" data-rid="${Utils.escapeHtml(r.id)}">
           <label class="switch"><input type="checkbox" data-ren="${Utils.escapeHtml(r.id)}" ${r.enabled === false ? "" : "checked"}><span class="switch-track"></span></label>
           <div class="rule-main">
             <div class="rule-name">${Utils.escapeHtml(r.name)}</div>
-            <div class="rule-sub">${Utils.escapeHtml((r.conditions || []).map((c) => c.field + "=" + c.value).join(" & ") || "no conditions")}${r.category ? " · " + Utils.escapeHtml(r.category) : ""}</div>
+            <div class="rule-sub">${Utils.escapeHtml((r.conditions || []).map((c) => I18N.t("rules.condition_fields." + c.field, c.field.replace(/_/g, " ")) + "=" + c.value).join(" & ") || I18N.t("rules.no_conditions", "no conditions"))}${r.category ? " · " + Utils.escapeHtml(I18N.t("category." + r.category, r.category)) : ""}</div>
           </div>
           <span class="rule-pri">P${r.priority}</span>
           <div class="rule-ops">
-            <button class="icon-btn btn-xs" data-act="edit" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Edit" aria-label="Edit rule">${Utils.icon("settings", 13)}</button>
-            <button class="icon-btn btn-xs" data-act="dup" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Duplicate" aria-label="Duplicate rule">${Utils.icon("copy", 13)}</button>
-            <button class="icon-btn btn-xs" data-act="del" data-rid="${Utils.escapeHtml(r.id)}" data-tip="Delete" aria-label="Delete rule">${Utils.icon("trash", 13)}</button>
+            <button class="icon-btn btn-xs" data-act="edit" data-rid="${Utils.escapeHtml(r.id)}" data-tip="${I18N.t("rules.edit", "Edit")}" aria-label="${I18N.t("rules.edit_rule", "Edit rule")}">${Utils.icon("settings", 13)}</button>
+            <button class="icon-btn btn-xs" data-act="dup" data-rid="${Utils.escapeHtml(r.id)}" data-tip="${I18N.t("rules.duplicate", "Duplicate")}" aria-label="${I18N.t("rules.duplicate_rule", "Duplicate rule")}">${Utils.icon("copy", 13)}</button>
+            <button class="icon-btn btn-xs" data-act="del" data-rid="${Utils.escapeHtml(r.id)}" data-tip="${I18N.t("rules.delete", "Delete")}" aria-label="${I18N.t("rules.delete_rule", "Delete rule")}">${Utils.icon("trash", 13)}</button>
           </div>
         </div>`).join("");
     }
@@ -1986,8 +2260,14 @@ const App = {
         } else if (btn.dataset.act === "dup") {
           await API.duplicateRule(r.id); reload();
         } else if (btn.dataset.act === "del") {
-          const ok = await Components.confirm({ title: "Delete rule", message: `Delete "${r.name}"?`, okText: "Delete", danger: true });
-          if (ok) { await API.deleteRule(r.id); reload(); }
+          const ok = await Components.confirm({
+            title: I18N.t("confirm.delete_rule", "Delete rule"),
+            message: I18N.t("confirm.delete_rule_msg", "Delete “{name}”?").replace("{name}", r.name),
+            okText: I18N.t("confirm.delete", "Delete"), cancelText: I18N.t("confirm.cancel", "Cancel"), danger: true });
+          if (ok) {
+            await API.deleteRule(r.id); reload();
+            Components.toast(I18N.t("toast.rule_deleted", "Rule deleted"), r.name, "info");
+          }
         }
       });
     });
@@ -2000,10 +2280,10 @@ const App = {
       const dlg = Components.showModal(`
         <div class="confirm-body">
           <span class="confirm-ico accent">${Utils.icon("search", 22)}</span>
-          <p class="confirm-msg">Test rule</p>
+          <p class="confirm-msg">${I18N.t("rules.test_rule", "Test rule")}</p>
           <input class="input mono" id="rtUrl" placeholder="https://example.com/movie.mp4" spellcheck="false">
-        </div>`, { title: "Test rule", width: 460 });
-      dlg.setFooter(`<button class="btn btn-ghost" id="rtCancel">Cancel</button><button class="btn btn-primary" id="rtGo">${Utils.icon("search", 14)} Test</button>`);
+        </div>`, { title: I18N.t("rules.test_rule", "Test rule"), width: 460 });
+      dlg.setFooter(`<button class="btn btn-ghost" id="rtCancel">${I18N.t("rules.cancel", "Cancel")}</button><button class="btn btn-primary" id="rtGo">${Utils.icon("search", 14)} ${I18N.t("rules.test", "Test")}</button>`);
       const url = dlg.qs("#rtUrl");
       setTimeout(() => url.focus(), 60);
       dlg.qs("#rtCancel").addEventListener("click", () => dlg.close());
@@ -2011,12 +2291,12 @@ const App = {
         const res = await API.testRule(url.value.trim());
         dlg.close();
         if (!res || !res.matched) {
-          Components.toast("No rule matched", "This URL would use the default settings", "info");
+          Components.toast(I18N.t("toast.no_rule_matched", "No rule matched"), I18N.t("toast.no_rule_matched_msg", "This URL would use the default settings"), "info");
           return;
         }
         const a = res.actions || {};
-        Components.toast("Rule matched: " + (res.rule?.name || "?"),
-          `Category: ${a.category || "default"} · Folder: ${a.folder || "default"} · Priority: ${a.priority} · Conn: ${a.connection_mode || "inherit"}`,
+        Components.toast(I18N.t("toast.rule_matched", "Rule matched") + ": " + (res.rule?.name || "?"),
+          `${I18N.t("rules.category", "Category")}: ${I18N.t("category." + (a.category || "General"), a.category || I18N.t("rules.default", "default"))} · ${I18N.t("rules.folder", "Folder")}: ${a.folder || I18N.t("rules.default", "default")} · ${I18N.t("rules.priority", "Priority")}: ${a.priority} · ${I18N.t("rules.connection_mode", "Conn")}: ${I18N.t("setopt." + (a.connection_mode || "inherit"), a.connection_mode || I18N.t("setopt.inherit", "inherit"))}`,
           "success", 6000);
       });
     });
@@ -2034,9 +2314,9 @@ const App = {
     Utils.$id("btnCopyLogs").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(this.state.logs.join("\n"));
-        Components.toast("Logs copied", "", "info", 2000);
+        Components.toast(I18N.t("logs.copied", "Logs copied"), "", "info", 2000);
       } catch {
-        Components.toast("Copy failed", "Clipboard is unavailable", "error");
+        Components.toast(I18N.t("logs.copy_failed", "Copy failed"), I18N.t("logs.copy_failed_msg", "Clipboard is unavailable"), "error");
       }
     });
   },

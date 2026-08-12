@@ -25,6 +25,7 @@ try {
 
   <!-- ══ Sidebar ══════════════════════════════════════════════════════ -->
   <aside id="sidebar" aria-label="Primary">
+    <span class="nav-indicator" id="navIndicator" aria-hidden="true"></span>
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
         <defs>
@@ -44,45 +45,44 @@ try {
     </div>
 
     <nav class="nav" id="mainNav" aria-label="Main navigation">
-      <span class="nav-indicator" id="navIndicator" aria-hidden="true"></span>
-      <button class="nav-item active" data-page="dashboard" data-tip="Dashboard" aria-current="page">
+      <button class="nav-item active" data-page="dashboard" data-i18n-tip="nav.dashboard" aria-current="page">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>
-        <span class="nav-label">Dashboard</span>
+        <span class="nav-label" data-i18n="nav.dashboard">Dashboard</span>
       </button>
-      <button class="nav-item" data-page="downloads" data-tip="Downloads">
+      <button class="nav-item" data-page="downloads" data-i18n-tip="nav.downloads">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg>
-        <span class="nav-label">Downloads</span>
+        <span class="nav-label" data-i18n="nav.downloads">Downloads</span>
         <span class="nav-badge" id="navBadge" hidden>0</span>
       </button>
-      <button class="nav-item" data-page="history" data-tip="History">
+      <button class="nav-item" data-page="history" data-i18n-tip="nav.history">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 12a8.4 8.4 0 1 0 2.4-5.9L3.5 8.5"/><path d="M3.5 3.5v5h5"/><path d="M12 7.5V12l3.2 1.9"/></svg>
-        <span class="nav-label">History</span>
+        <span class="nav-label" data-i18n="nav.history">History</span>
       </button>
-      <button class="nav-item" data-page="batch" data-tip="Batch download">
+      <button class="nav-item" data-page="batch" data-i18n-tip="nav.batch">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.2 8.5 4.6-8.5 4.6L3.5 7.8 12 3.2Z"/><path d="m4.5 12.2 7.5 4 7.5-4"/><path d="m4.5 16.2 7.5 4 7.5-4"/></svg>
-        <span class="nav-label">Batch</span>
+        <span class="nav-label" data-i18n="nav.batch">Batch</span>
       </button>
-      <button class="nav-item" data-page="browser" data-tip="Browser integration">
+      <button class="nav-item" data-page="browser" data-i18n-tip="nav.browser">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.3 2.2 3.5 5.2 3.5 8.5s-1.2 6.3-3.5 8.5c-2.3-2.2-3.5-5.2-3.5-8.5s1.2-6.3 3.5-8.5Z"/></svg>
-        <span class="nav-label">Browser</span>
+        <span class="nav-label" data-i18n="nav.browser">Browser</span>
       </button>
     </nav>
 
     <div class="sidebar-foot">
-      <div class="side-speed" data-tip="Current combined download speed">
+      <div class="side-speed" data-i18n-tip="sidebar.speed_tooltip">
         <span class="side-speed-pulse" aria-hidden="true"></span>
         <div class="side-speed-text">
           <span class="side-speed-val" id="sidebarSpeedVal">0 B/s</span>
-          <span class="side-speed-lbl">Total speed</span>
+          <span class="side-speed-lbl" data-i18n="sidebar.total_speed">Total speed</span>
         </div>
       </div>
-      <button class="nav-item" data-page="settings" data-tip="Settings">
+      <button class="nav-item" data-page="settings" data-i18n-tip="nav.settings">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8c.6 0 1 .4 1.1 1l.3 1.5c.5.2 1 .5 1.5.8l1.4-.6c.6-.2 1.2 0 1.5.5l1 1.7c.3.5.2 1.2-.2 1.6l-1.2 1.1c.1.5.1.9.1 1.4s0 1-.1 1.4l1.2 1.1c.4.4.5 1 .2 1.6l-1 1.7c-.3.5-1 .7-1.5.5l-1.4-.6c-.5.3-1 .6-1.5.8l-.3 1.5c-.1.6-.6 1-1.1 1h-2c-.6 0-1-.4-1.1-1l-.3-1.5a7 7 0 0 1-1.5-.8l-1.4.6c-.6.2-1.2 0-1.5-.5l-1-1.7a1.2 1.2 0 0 1 .2-1.6l1.2-1.1a7.3 7.3 0 0 1 0-2.8L5.2 9.3a1.2 1.2 0 0 1-.2-1.6l1-1.7c.3-.5 1-.7 1.5-.5l1.4.6c.5-.3 1-.6 1.5-.8l.3-1.5c.1-.6.6-1 1.1-1h2Z"/></svg>
-        <span class="nav-label">Settings</span>
+        <span class="nav-label" data-i18n="nav.settings">Settings</span>
       </button>
-      <button class="nav-item" data-page="logs" data-tip="Application logs">
+      <button class="nav-item" data-page="logs" data-i18n-tip="nav.logs">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5"/><path d="M11.5 17h7"/><rect x="3" y="4" width="18" height="16" rx="2.5"/></svg>
-        <span class="nav-label">Logs</span>
+        <span class="nav-label" data-i18n="nav.logs">Logs</span>
       </button>
     </div>
   </aside>
@@ -93,40 +93,40 @@ try {
     <!-- Titlebar -->
     <header id="titlebar" class="pywebview-drag-region">
       <div class="tb-cluster">
-        <button class="icon-btn" id="sidebarToggle" data-tip="Toggle sidebar" aria-label="Toggle sidebar">
+        <button class="icon-btn" id="sidebarToggle" data-i18n-tip="title.toggle_sidebar" data-i18n-aria-label="title.toggle_sidebar">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.2"/><path d="M9.5 4.5v15"/></svg>
         </button>
         <div class="tb-search tb-nodrag">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4.6-4.6"/></svg>
-          <input id="globalSearch" type="search" placeholder="Search downloads…" aria-label="Global search" autocomplete="off" spellcheck="false">
+          <input id="globalSearch" type="search" placeholder="Search downloads…" data-i18n-ph="title.search" data-i18n-aria-label="title.search" autocomplete="off" spellcheck="false">
           <kbd>/</kbd>
         </div>
       </div>
 
       <div class="tb-cluster tb-right">
-        <button class="btn btn-primary" id="btnNewDownload" data-tip="New download · Ctrl+N">
+        <button class="btn btn-primary" id="btnNewDownload" data-i18n-tip="title.new_download">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-          <span>New download</span>
+          <span data-i18n="title.new_download">New download</span>
         </button>
-        <button class="icon-btn" id="btnPasteQuick" data-tip="Paste link from clipboard" aria-label="Paste link from clipboard">
+        <button class="icon-btn" id="btnPasteQuick" data-i18n-tip="title.paste_link" data-i18n-aria-label="title.paste_link">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="3.5" rx="1"/><path d="M16 4.5h2.5A1.5 1.5 0 0 1 20 6v14a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 20V6a1.5 1.5 0 0 1 1.5-1.5H8"/></svg>
         </button>
-        <button class="icon-btn theme-btn" id="btnTheme" data-tip="Toggle theme" aria-label="Toggle color theme">
+        <button class="icon-btn theme-btn" id="btnTheme" data-i18n-tip="title.toggle_theme" data-i18n-aria-label="title.toggle_theme">
           <svg class="ico ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5V4M12 20v1.5M4.6 4.6l1 1M18.4 18.4l1 1M2.5 12H4M20 12h1.5M4.6 19.4l1-1M18.4 5.6l1-1"/></svg>
           <svg class="ico ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 13.2A8.5 8.5 0 1 1 10.8 3.5a7 7 0 0 0 9.7 9.7Z"/></svg>
         </button>
-        <button class="icon-btn" id="btnTopSettings" data-tip="Settings · Ctrl+," aria-label="Open settings">
+        <button class="icon-btn" id="btnTopSettings" data-i18n-tip="title.settings" data-i18n-aria-label="title.settings">
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.2A1.7 1.7 0 0 0 4.7 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.6 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1Z"/></svg>
         </button>
         <span class="tb-divider" aria-hidden="true"></span>
         <div class="win-controls">
-          <button class="win-btn" id="winMin" aria-label="Minimize window" tabindex="-1">
+          <button class="win-btn" id="winMin" data-i18n-aria-label="title.minimize" tabindex="-1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5.5 12h13"/></svg>
           </button>
-          <button class="win-btn" id="winMax" aria-label="Maximize window" tabindex="-1">
+          <button class="win-btn" id="winMax" data-i18n-aria-label="title.maximize" tabindex="-1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="6" y="6" width="12" height="12" rx="1.6"/></svg>
           </button>
-          <button class="win-btn win-close" id="winClose" aria-label="Close window" tabindex="-1">
+          <button class="win-btn win-close" id="winClose" data-i18n-aria-label="title.close" tabindex="-1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </div>
@@ -136,8 +136,8 @@ try {
     <!-- Scrollable content -->
     <main id="content" role="main">
       <header class="page-head">
-        <h1 id="pageTitle">Dashboard</h1>
-        <p id="pageSub">Overview of your download activity</p>
+        <h1 id="pageTitle" data-i18n="page.dashboard">Dashboard</h1>
+        <p id="pageSub" data-i18n="page.dashboard.sub">Overview of your download activity</p>
       </header>
 
       <!-- ── Dashboard ─────────────────────────────────────────────── -->
@@ -147,7 +147,7 @@ try {
             <span class="stat-ico tint-accent"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stToday">0</span>
-              <span class="stat-label">Downloads today</span>
+              <span class="stat-label" data-i18n="stat.downloads_today">Downloads today</span>
               <span class="stat-sub" id="stTodaySub">0 B downloaded</span>
             </div>
           </article>
@@ -156,7 +156,7 @@ try {
             <span class="stat-ico tint-blue"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stActive">0</span>
-              <span class="stat-label">Active downloads</span>
+              <span class="stat-label" data-i18n="stat.active_downloads">Active downloads</span>
               <span class="stat-sub" id="stActiveSub">0 in queue</span>
             </div>
           </article>
@@ -165,8 +165,8 @@ try {
             <span class="stat-ico tint-green"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5L19.5 7"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stDone">0</span>
-              <span class="stat-label">Completed</span>
-              <span class="stat-sub">this session</span>
+              <span class="stat-label" data-i18n="stat.completed">Completed</span>
+              <span class="stat-sub" data-i18n="fmt.this_session">this session</span>
             </div>
           </article>
 
@@ -174,8 +174,8 @@ try {
             <span class="stat-ico tint-red"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.5V13"/><path d="M12 16.8h.01"/><path d="M10.2 3.6 2.4 17.3a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.8 3.6a2 2 0 0 0-3.6 0Z"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stFailed">0</span>
-              <span class="stat-label">Failed</span>
-              <span class="stat-sub">retry available</span>
+              <span class="stat-label" data-i18n="stat.failed">Failed</span>
+              <span class="stat-sub" data-i18n="fmt.retry_available">retry available</span>
             </div>
           </article>
 
@@ -183,7 +183,7 @@ try {
             <span class="stat-ico tint-cyan"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 13.5 3.5-3.5"/><path d="M3.8 19.3a9 9 0 1 1 16.4 0"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stSpeed">0 B/s</span>
-              <span class="stat-label">Download speed</span>
+              <span class="stat-label" data-i18n="stat.download_speed">Download speed</span>
               <span class="stat-sub" id="stSpeedPeak">0 connections live</span>
             </div>
             <canvas class="stat-spark" id="speedSpark" aria-hidden="true"></canvas>
@@ -193,8 +193,8 @@ try {
             <span class="stat-ico tint-violet"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 12h-3.8l-2.7 8L9.3 4l-2.7 8H2.5"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stNetwork">0 B</span>
-              <span class="stat-label">Network usage</span>
-              <span class="stat-sub">this session</span>
+              <span class="stat-label" data-i18n="stat.network_usage">Network usage</span>
+              <span class="stat-sub" data-i18n="fmt.this_session">this session</span>
             </div>
           </article>
 
@@ -202,26 +202,26 @@ try {
             <span class="stat-ico tint-amber"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-11Z"/><circle cx="12" cy="11.5" r="2.8"/><path d="M8 17.5h8"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stDisk">—</span>
-              <span class="stat-label">Disk free</span>
+              <span class="stat-label" data-i18n="stat.disk_free">Disk free</span>
               <span class="stat-sub" id="stDiskSub"></span>
             </div>
-            <span class="ring" id="diskRing" style="--p:0" role="img" aria-label="Disk usage"></span>
+            <span class="ring" id="diskRing" style="--p:0" role="img" data-i18n-aria-label="stat.disk_free"></span>
           </article>
         </div>
 
         <div class="dash-cols">
           <section class="panel" id="dashActive" aria-label="Active downloads">
             <header class="panel-head">
-              <h2>Active downloads</h2>
+              <h2 data-i18n="dash.active_downloads">Active downloads</h2>
               <span class="panel-count" id="dashActiveCount"></span>
-              <button class="btn btn-ghost btn-sm" data-nav="downloads">View all</button>
+              <button class="btn btn-ghost btn-sm" data-nav="downloads" data-i18n="dash.view_all">View all</button>
             </header>
             <div class="panel-body"></div>
           </section>
           <section class="panel" id="dashRecent" aria-label="Recent activity">
             <header class="panel-head">
-              <h2>Recent activity</h2>
-              <button class="btn btn-ghost btn-sm" data-nav="history">History</button>
+              <h2 data-i18n="dash.recent_activity">Recent activity</h2>
+              <button class="btn btn-ghost btn-sm" data-nav="history" data-i18n="dash.history">History</button>
             </header>
             <div class="panel-body"></div>
           </section>
@@ -232,47 +232,47 @@ try {
       <section class="page" id="page-downloads" aria-label="Downloads">
         <div class="dl-toolbar">
           <div class="chips" id="filterChips" role="tablist" aria-label="Filter downloads">
-            <button class="chip active" data-filter="all">All <span class="chip-n">0</span></button>
-            <button class="chip" data-filter="active">Active <span class="chip-n">0</span></button>
-            <button class="chip" data-filter="queued">Queued <span class="chip-n">0</span></button>
-            <button class="chip" data-filter="paused">Paused <span class="chip-n">0</span></button>
-            <button class="chip" data-filter="completed">Completed <span class="chip-n">0</span></button>
-            <button class="chip" data-filter="failed">Failed <span class="chip-n">0</span></button>
+            <button class="chip active" data-filter="all"><span data-i18n="filter.all">All</span> <span class="chip-n">0</span></button>
+            <button class="chip" data-filter="active"><span data-i18n="filter.active">Active</span> <span class="chip-n">0</span></button>
+            <button class="chip" data-filter="queued"><span data-i18n="filter.queued">Queued</span> <span class="chip-n">0</span></button>
+            <button class="chip" data-filter="paused"><span data-i18n="filter.paused">Paused</span> <span class="chip-n">0</span></button>
+            <button class="chip" data-filter="completed"><span data-i18n="filter.completed">Completed</span> <span class="chip-n">0</span></button>
+            <button class="chip" data-filter="failed"><span data-i18n="filter.failed">Failed</span> <span class="chip-n">0</span></button>
           </div>
           <div class="dl-toolbar-right">
-            <label class="sort-wrap" data-tip="Sort downloads">
+            <label class="sort-wrap" data-i18n-tip="sort.label">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15"/><path d="m3.5 8 3.5-3.5L10.5 8"/><path d="M17 19.5v-15"/><path d="m13.5 16 3.5 3.5 3.5-3.5"/></svg>
-              <select id="sortSelect" aria-label="Sort downloads">
-                <option value="newest:-1" selected>Newest first</option>
-                <option value="newest:1">Oldest first</option>
-                <option value="name:1">Name A–Z</option>
-                <option value="name:-1">Name Z–A</option>
-                <option value="size:-1">Largest first</option>
-                <option value="size:1">Smallest first</option>
-                <option value="progress:-1">Most complete</option>
-                <option value="speed:-1">Fastest first</option>
+              <select id="sortSelect" data-i18n-aria-label="sort.label">
+                <option value="newest:-1" selected data-i18n="sort.newest">Newest first</option>
+                <option value="newest:1" data-i18n="sort.oldest">Oldest first</option>
+                <option value="name:1" data-i18n="sort.name_az">Name A–Z</option>
+                <option value="name:-1" data-i18n="sort.name_za">Name Z–A</option>
+                <option value="size:-1" data-i18n="sort.largest">Largest first</option>
+                <option value="size:1" data-i18n="sort.smallest">Smallest first</option>
+                <option value="progress:-1" data-i18n="sort.progress">Most complete</option>
+                <option value="speed:-1" data-i18n="sort.fastest">Fastest first</option>
               </select>
             </label>
             <span class="tb-divider" aria-hidden="true"></span>
-            <button class="icon-btn" id="btnResumeAll" data-tip="Resume all" aria-label="Resume all downloads">
+            <button class="icon-btn" id="btnResumeAll" data-i18n-tip="toast.all_resumed" data-i18n-aria-label="toast.all_resumed">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.8v14.4c0 .8.9 1.3 1.6.9l11.2-7.2a1 1 0 0 0 0-1.7L9.1 4a1 1 0 0 0-1.6.8Z"/></svg>
             </button>
-            <button class="icon-btn" id="btnPauseAll" data-tip="Pause all" aria-label="Pause all downloads">
+            <button class="icon-btn" id="btnPauseAll" data-i18n-tip="toast.all_paused" data-i18n-aria-label="toast.all_paused">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="4.5" width="3.6" height="15" rx="1.2"/><rect x="13.9" y="4.5" width="3.6" height="15" rx="1.2"/></svg>
             </button>
-            <button class="icon-btn" id="btnClearFinished" data-tip="Clear finished" aria-label="Clear finished downloads">
+            <button class="icon-btn" id="btnClearFinished" data-i18n-tip="toast.list_cleared" data-i18n-aria-label="toast.list_cleared">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9 6.5v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M19 6.5 18.1 19a2 2 0 0 1-2 1.9H7.9a2 2 0 0 1-2-1.9L5 6.5"/></svg>
             </button>
           </div>
         </div>
 
         <div class="dl-head" id="downloadHead" hidden>
-          <span class="h-name">Name</span>
-          <span>Progress</span>
-          <span class="c-size">Size</span>
-          <span class="c-speed">Speed</span>
-          <span class="c-eta">ETA</span>
-          <span>Status</span>
+          <span class="h-name" data-i18n="col.name">Name</span>
+          <span data-i18n="col.progress">Progress</span>
+          <span class="c-size" data-i18n="col.size">Size</span>
+          <span class="c-speed" data-i18n="col.speed">Speed</span>
+          <span class="c-eta" data-i18n="col.eta">ETA</span>
+          <span data-i18n="col.status">Status</span>
           <span class="h-actions" aria-hidden="true"></span>
         </div>
 
@@ -285,20 +285,20 @@ try {
         <div class="analytics" id="historyStats" hidden></div>
         <div class="page-actions">
           <div class="chips" id="historyFilterChips" role="tablist" aria-label="Filter history">
-            <button class="chip active" data-hfilter="all">All</button>
-            <button class="chip" data-hfilter="Complete">Completed</button>
-            <button class="chip" data-hfilter="Failed">Failed</button>
-            <button class="chip" data-hfilter="Cancelled">Cancelled</button>
+            <button class="chip active" data-hfilter="all"><span data-i18n="history.all">All</span></button>
+            <button class="chip" data-hfilter="Complete"><span data-i18n="history.completed">Completed</span></button>
+            <button class="chip" data-hfilter="Failed"><span data-i18n="history.failed">Failed</span></button>
+            <button class="chip" data-hfilter="Cancelled"><span data-i18n="history.cancelled">Cancelled</span></button>
           </div>
           <button class="btn btn-ghost" id="btnClearHistory">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9 6.5v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M19 6.5 18.1 19a2 2 0 0 1-2 1.9H7.9a2 2 0 0 1-2-1.9L5 6.5"/></svg>
-            Clear history
+            <span data-i18n="history.clear">Clear history</span>
           </button>
         </div>
         <div class="table-card">
           <table class="table" id="historyTable">
             <thead>
-              <tr><th class="h-date">Date</th><th>File</th><th class="h-size">Size</th><th class="h-cat">Category</th><th>Status</th><th class="h-dir">Location</th><th class="h-actions" aria-hidden="true"></th></tr>
+              <tr><th class="h-date" data-i18n="col.date">Date</th><th data-i18n="col.file">File</th><th class="h-size" data-i18n="col.size">Size</th><th class="h-cat" data-i18n="col.category">Category</th><th data-i18n="col.status">Status</th><th class="h-dir" data-i18n="col.location">Location</th><th class="h-actions" aria-hidden="true"></th></tr>
             </thead>
             <tbody id="historyBody"></tbody>
           </table>
@@ -310,29 +310,29 @@ try {
       <section class="page" id="page-batch" aria-label="Batch download">
         <div class="card">
           <div class="tabs" role="tablist" aria-label="Batch mode">
-            <button class="tab-btn active" data-tab="urllist" role="tab" aria-selected="true">URL list</button>
-            <button class="tab-btn" data-tab="pattern" role="tab" aria-selected="false">Pattern scan</button>
+            <button class="tab-btn active" data-tab="urllist" role="tab" aria-selected="true"><span data-i18n="batch.url_list">URL list</span></button>
+            <button class="tab-btn" data-tab="pattern" role="tab" aria-selected="false"><span data-i18n="batch.pattern_scan">Pattern scan</span></button>
           </div>
 
           <div class="tab-panel active" id="tab-urllist" role="tabpanel">
-            <p class="dim-note">Paste one link per line. <span class="batch-count" id="batchCount"></span></p>
+            <p class="dim-note"><span data-i18n="batch.note">Paste one link per line.</span> <span class="batch-count" id="batchCount"></span></p>
             <textarea class="input textarea mono" id="batchUrls" rows="8" spellcheck="false"
-              placeholder="https://example.com/file1.zip&#10;https://example.com/file2.zip&#10;https://example.com/file3.zip" aria-label="Batch URL list"></textarea>
+              placeholder="https://example.com/file1.zip&#10;https://example.com/file2.zip&#10;https://example.com/file3.zip" data-i18n-aria-label="batch.url_list"></textarea>
             <div class="input-join">
-              <input class="input mono" id="batchDir" type="text" placeholder="Save to folder (default: download folder)" aria-label="Save to folder">
+              <input class="input mono" id="batchDir" type="text" data-i18n-ph="batch.save_to" data-i18n-aria-label="batch.save_to">
               <button class="btn btn-ghost" id="btnBatchBrowse">
                 <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10.5Z"/></svg>
-                Browse
+                <span data-i18n="batch.browse">Browse</span>
               </button>
             </div>
             <div class="batch-actions">
               <button class="btn btn-ghost" id="btnBatchFile">
                 <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5L13.5 3Z"/><path d="M13.5 3v5.5H19"/></svg>
-                Load from file
+                <span data-i18n="batch.load_from_file">Load from file</span>
               </button>
               <button class="btn btn-primary" id="btnBatchQueue">
                 <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg>
-                Queue all
+                <span data-i18n="batch.queue_all">Queue all</span>
               </button>
             </div>
           </div>
@@ -341,24 +341,24 @@ try {
             <p class="dim-note">Use <code>*</code> where the number goes — N13 probes the sequence and queues every file that exists.</p>
             <div class="pattern-grid">
               <div class="field span-2">
-                <label class="field-label" for="patternUrl">Pattern URL</label>
+                <label class="field-label" for="patternUrl" data-i18n="batch.pattern_url">Pattern URL</label>
                 <input class="input mono" id="patternUrl" type="text" placeholder="https://example.com/episode-*.mkv" spellcheck="false">
               </div>
               <div class="field">
-                <label class="field-label" for="patternStart">Start at</label>
+                <label class="field-label" for="patternStart" data-i18n="batch.start_at">Start at</label>
                 <input class="input input-num" id="patternStart" type="number" value="1" min="0">
               </div>
               <div class="field">
-                <label class="field-label" for="patternPadding">Zero padding</label>
+                <label class="field-label" for="patternPadding" data-i18n="batch.zero_padding">Zero padding</label>
                 <input class="input input-num" id="patternPadding" type="number" value="2" min="0" max="10">
               </div>
               <div class="field span-2">
-                <label class="field-label" for="patternDir">Save to</label>
+                <label class="field-label" for="patternDir" data-i18n="dlg.save_to">Save to</label>
                 <div class="input-join">
-                  <input class="input mono" id="patternDir" type="text" placeholder="Save to folder (default: download folder)">
+                  <input class="input mono" id="patternDir" type="text" data-i18n-ph="batch.save_to">
                   <button class="btn btn-ghost" id="btnPatternBrowse">
                     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10.5Z"/></svg>
-                    Browse
+                    <span data-i18n="batch.browse">Browse</span>
                   </button>
                 </div>
               </div>
@@ -366,7 +366,7 @@ try {
             <div class="batch-actions">
               <button class="btn btn-primary" id="btnPatternScan">
                 <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4.6-4.6"/></svg>
-                Scan pattern
+                <span data-i18n="batch.scan">Scan pattern</span>
               </button>
             </div>
             <div class="pattern-results" id="patternResults" aria-live="polite"></div>
@@ -381,45 +381,45 @@ try {
           <div class="server-info">
             <h3 id="serverStatusText">Live server is stopped</h3>
             <div class="server-meta">
-              <span class="server-kv">Address
+              <span class="server-kv"><span data-i18n="browser.address">Address</span>
                 <code id="serverAddr">—</code>
-                <button class="icon-btn btn-xs" id="btnCopyAddr" data-tip="Copy address" aria-label="Copy server address">
+                <button class="icon-btn btn-xs" id="btnCopyAddr" data-i18n-tip="browser.copy_address" data-i18n-aria-label="browser.copy_address">
                   <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11.5" height="11.5" rx="2"/><path d="M5.5 15h-1a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2H12a2 2 0 0 1 2 2v1"/></svg>
                 </button>
               </span>
-              <span class="server-kv">Token <code id="serverToken">—</code></span>
+              <span class="server-kv"><span data-i18n="browser.token">Token</span> <code id="serverToken">—</code></span>
             </div>
           </div>
           <button class="btn btn-primary btn-lg" id="btnServerToggle">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v8"/><path d="M6.3 6.2a8 8 0 1 0 11.4 0"/></svg>
-            Start server
+            <span data-i18n="browser.start_server">Start server</span>
           </button>
         </div>
 
         <div class="card">
-          <h3 class="card-title">Connect your browser</h3>
+          <h3 class="card-title" data-i18n="browser.connect_title">Connect your browser</h3>
           <ol class="steps">
             <li>
               <span class="step-n">1</span>
-              <div class="step-text"><strong>Start the live server</strong><p>N13 listens locally for links sent by the extension.</p></div>
+              <div class="step-text"><strong data-i18n="browser.step1_title">Start the live server</strong><p data-i18n="browser.step1_desc">N13 listens locally for links sent by the extension.</p></div>
             </li>
             <li>
               <span class="step-n">2</span>
-              <div class="step-text"><strong>Create the extension</strong><p>Generates an unpacked Chrome / Edge extension with your access token.</p></div>
+              <div class="step-text"><strong data-i18n="browser.step2_title">Create the extension</strong><p data-i18n="browser.step2_desc">Generates an unpacked Chrome / Edge extension with your access token.</p></div>
             </li>
             <li>
               <span class="step-n">3</span>
-              <div class="step-text"><strong>Load it once</strong><p>Open <code>chrome://extensions</code>, enable Developer mode, choose “Load unpacked” and pick the generated folder. Then right-click any link → “Download with N13”.</p></div>
+              <div class="step-text"><strong data-i18n="browser.step3_title">Load it once</strong><p data-i18n="browser.step3_desc">Open chrome://extensions, enable Developer mode, choose “Load unpacked” and pick the generated folder. Then right-click any link → “Download with N13”.</p></div>
             </li>
           </ol>
           <div class="batch-actions">
             <button class="btn btn-ghost" id="btnCreateExt">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Create extension
+              <span data-i18n="browser.create_extension">Create extension</span>
             </button>
             <button class="btn btn-ghost" id="btnRegProtocol">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.5a5 5 0 0 0 7.5.5l2.8-2.8a5 5 0 0 0-7-7l-1.6 1.5"/><path d="M14 10.5a5 5 0 0 0-7.5-.5l-2.8 2.8a5 5 0 0 0 7 7l1.6-1.5"/></svg>
-              Register dldm:// protocol
+              <span data-i18n="browser.register_protocol">Register dldm:// protocol</span>
             </button>
           </div>
         </div>
@@ -435,11 +435,11 @@ try {
         <div class="page-actions">
           <button class="btn btn-ghost" id="btnCopyLogs">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11.5" height="11.5" rx="2"/><path d="M5.5 15h-1a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2H12a2 2 0 0 1 2 2v1"/></svg>
-            Copy
+            <span data-i18n="logs.copy">Copy</span>
           </button>
           <button class="btn btn-ghost" id="btnClearLogs">
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9 6.5v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M19 6.5 18.1 19a2 2 0 0 1-2 1.9H7.9a2 2 0 0 1-2-1.9L5 6.5"/></svg>
-            Clear
+            <span data-i18n="logs.clear">Clear</span>
           </button>
         </div>
         <div class="log-view" id="logList" aria-live="polite"></div>
@@ -452,8 +452,8 @@ try {
 <div id="dropOverlay" aria-hidden="true">
   <div class="drop-box">
     <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="44" height="44"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg>
-    <h2>Drop link to download</h2>
-    <p>Release to add it to the queue</p>
+    <h2 data-i18n="drop.title">Drop link to download</h2>
+    <p data-i18n="drop.subtitle">Release to add it to the queue</p>
   </div>
 </div>
 
@@ -475,6 +475,7 @@ try {
 <div class="rz rz-sw" data-dir="sw" aria-hidden="true"></div>
 
 <script src="js/utils.js"></script>
+<script src="js/i18n.js"></script>
 <script src="js/api.js"></script>
 <script src="js/components.js"></script>
 <script src="js/app.js"></script>

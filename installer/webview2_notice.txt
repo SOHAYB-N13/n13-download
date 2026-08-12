@@ -1,0 +1,13 @@
+N13 Download Manager requires the Microsoft Edge WebView2 Runtime.
+
+- Windows 11: WebView2 is preinstalled.
+- Windows 10: WebView2 is included on most up-to-date systems. If the installer
+detects that it is missing, you will be offered a link to download it.
+
+You can also install WebView2 manually from:
+https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+
+No personal data, downloads, or settings are stored inside the application
+installation folder. All user data is kept under:
+
+    %LOCALAPPDATA%\N13\

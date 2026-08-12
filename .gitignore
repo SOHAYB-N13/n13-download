@@ -6,6 +6,7 @@ venv/
 *.egg-info/
 dist/
 build/
+release/
 saved_links/
 gui_queue.json
 *.token.json

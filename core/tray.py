@@ -70,15 +70,8 @@ class SystemTray:
         self._tooltip = "N13"
         self._last_tip_at = 0.0
         self._cmd_map: dict = {}
-        self._menu_items = [
-            ("Show N13", "show"),
-            ("Pause all", "pause_all"),
-            ("Resume all", "resume_all"),
-            ("Open downloads folder", "open_folder"),
-            ("Settings", "settings"),
-            None,
-            ("Exit", "exit"),
-        ]
+        self._labels: dict[str, str] = {}
+        self._menu_items = []
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -100,6 +93,19 @@ class SystemTray:
                 win32gui.PostMessage(self._hwnd, win32con.WM_CLOSE, 0, 0)
             except Exception:
                 pass
+
+    def set_labels(self, labels: dict[str, str]) -> None:
+        """Update menu labels from the frontend translation dictionary."""
+        self._labels = dict(labels)
+        self._menu_items = [
+            (self._labels.get("tray.show", "Show N13"), "show"),
+            (self._labels.get("tray.pause_all", "Pause all"), "pause_all"),
+            (self._labels.get("tray.resume_all", "Resume all"), "resume_all"),
+            (self._labels.get("tray.open_folder", "Open downloads folder"), "open_folder"),
+            (self._labels.get("tray.settings", "Settings"), "settings"),
+            None,
+            (self._labels.get("tray.exit", "Exit"), "exit"),
+        ]
 
     def set_tooltip(self, text: str) -> None:
         """Throttled tooltip update — never more than once per interval."""
