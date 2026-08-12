@@ -21,6 +21,8 @@
   .badges img { height:28px; margin:2px; }
   .btn { display:inline-block; background:var(--accent); color:#fff; text-decoration:none; padding:12px 26px; border-radius:10px; font-weight:600; margin:4px; transition:transform .15s, background .15s; }
   .btn:hover { background:#2563eb; transform:translateY(-2px); }
+  .btn.download { background:#16a34a; box-shadow:0 8px 24px rgba(22,163,74,.35); }
+  .btn.download:hover { background:#15803d; }
   .btn.ghost { background:transparent; border:1px solid var(--line); }
   .btn.ghost:hover { border-color:var(--accent); background:rgba(59,130,246,.08); }
   h2 { font-size:26px; margin:48px 0 18px; }
@@ -48,9 +50,11 @@
       <img src="https://img.shields.io/badge/Platform-Windows-blue.svg?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
     </div>
     <div class="btnrow">
+      <a class="btn download" href="https://github.com/SOHYAB-N13/n13-download/releases/latest/download/N13-Download-Manager-Setup.exe">⬇️ Download for Windows</a>
       <a class="btn" href="https://github.com/SOHYAB-N13/n13-download">View on GitHub</a>
-      <a class="btn ghost" href="https://github.com/SOHYAB-N13/n13-download/releases">Releases</a>
+      <a class="btn ghost" href="https://github.com/SOHYAB-N13/n13-download/releases">All releases</a>
     </div>
+    <p style="color:var(--muted);font-size:13px;margin-top:14px;">Windows 10+ · One-click installer · No Python needed · Auto-updates</p>
   </div>
 </header>
 
@@ -66,7 +70,20 @@
     <div class="card"><h3>🗄️ SQLite task store</h3><p>Crash-safe queue and history database survives restarts without data loss.</p></div>
     <div class="card"><h3>✅ Checksum check</h3><p>Verify every download against an MD5 or SHA-256 hash before it's done.</p></div>
     <div class="card"><h3>🖥️ Two interfaces</h3><p>A polished Rich-based terminal UI and a dark modern web GUI (pywebview).</p></div>
+    <div class="card"><h3>🧠 Smart optimizer</h3><p>Auto-tunes the connection count by file size and server stability — safe on slow or picky servers.</p></div>
+    <div class="card"><h3>⚙️ Download rules</h3><p>Rules like <code>*.mp4 → Videos</code> route every link to the right folder automatically.</p></div>
+    <div class="card"><h3>🖱️ System tray</h3><p>Tray icon with pause/resume, downloads folder, settings and a live speed tooltip.</p></div>
+    <div class="card"><h3>🔄 Auto-updater</h3><p>Checks GitHub Releases, verifies the SHA-256 checksum, then installs and restarts silently.</p></div>
   </div>
+
+  <h2>Download</h2>
+  <p style="color:var(--muted);margin-bottom:16px;">Latest stable release — Windows 10 or newer, 64-bit.</p>
+  <div class="mono">N13-Download-Manager-Setup.exe · SHA-256: 5de559e430924127c1e3cb9fe5cf6b3466a4049bbd12445cac5db2b712a4b92d</div>
+  <p style="margin-top:16px;">
+    <a class="btn download" href="https://github.com/SOHYAB-N13/n13-download/releases/latest/download/N13-Download-Manager-Setup.exe">⬇️ Download N13 Download Manager</a>
+    <a class="btn ghost" href="https://github.com/SOHYAB-N13/n13-download/releases/latest">Release notes</a>
+  </p>
+  <p style="color:var(--muted);font-size:14px;margin-top:10px;">The installer checks for the WebView2 runtime and registers the <code>dldm://</code> protocol so you can capture links straight from your browser.</p>
 
   <h2>Quick start</h2>
   <div class="mono">pip install -r requirements.txt<br>python d.py --gui</div>

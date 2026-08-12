@@ -28,6 +28,15 @@ Two interfaces are included:
 - 🖥️ **Terminal (TUI)** — a polished Rich-based menu with live progress bars
 - 🌐 **Graphical (GUI)** — a dark, modern web UI (pywebview)
 
+### 💿 Download the app (Windows)
+
+Get the ready-to-run **installer** — no Python required:
+
+[⬇️ Download N13-Download-Manager-Setup.exe](https://github.com/SOHYAB-N13/n13-download/releases/latest)
+
+The installer bundles WebView2 setup, registers the `dldm://` protocol and is
+updated automatically from the app.
+
 ### ✨ Features
 
 | Feature | Description |
@@ -47,6 +56,12 @@ Two interfaces are included:
 | 🗄️ SQLite task store | Crash-safe, persistent queue & download history |
 | 🔬 URL analyzer | Inspects a link first (name, size, type, range support) |
 | 🚦 Single instance | A second launch forwards the URL to the running instance |
+| 🧠 Smart optimizer | Auto-tunes connection count by file size and server stability |
+| ⚙️ Download rules | Rules route each link to the right folder/category automatically |
+| 🖱️ System tray | Tray icon with pause/resume/folder/settings and a live speed tooltip |
+| 🔄 Auto-updater | Checks GitHub Releases, verifies SHA-256, installs & restarts |
+| 💿 Installer | One-click Windows installer — no Python required |
+| 🌍 Multi-language | English and Persian (Farsi) UI with an i18n system |
 
 ### 🚀 Install & run from source
 
@@ -125,6 +140,15 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 - 🖥️ **رابط ترمینال (TUI)** — منوی زیبای مبتنی بر Rich با نوار پیشرفت زنده
 - 🌐 **رابط گرافیکی (GUI)** — وب‌یو تاریک و مدرن (pywebview)
 
+### 💿 دانلود برنامه (ویندوز)
+
+**نصب‌کننده آماده** را دانلود کنید — نیازی به پایتون نیست:
+
+[⬇️ دانلود N13-Download-Manager-Setup.exe](https://github.com/SOHYAB-N13/n13-download/releases/latest)
+
+نصب‌کننده شامل تنظیم WebView2 و ثبت پروتکل `dldm://` است و برنامه خودش از داخل،
+به‌روزرسانی‌ها را نصب می‌کند.
+
 ### ✨ امکانات
 
 | امکانات | توضیح |
@@ -144,6 +168,12 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 | 🗄️ پایگاه داده SQLite | ذخیره امن و پایدار صف و تاریخچه دانلود |
 | 🔬 تحلیل لینک | بررسی پیش از دانلود (نام، حجم، نوع، پشتیبانی Range) |
 | 🚦 تک‌نمونه‌ای | اجرای دوم، لینک را به نمونه در حال اجرا می‌دهد |
+| 🧠 بهینه‌ساز هوشمند | تنظیم خودکار تعداد اتصال‌ها بر اساس حجم فایل و پایداری سرور |
+| ⚙️ قوانین دانلود | قوانین، هر لینک را خودکار به پوشه/دسته مناسب می‌برند |
+| 🖱️ سینی سیستم | آیکون سینی با توقف/ادامه/پوشه/تنظیمات و تولتیپ سرعت زنده |
+| 🔄 به‌روزرسانی خودکار | بررسی ریلیز گیت‌هاب، تأیید SHA-256، نصب و اجرای مجدد |
+| 💿 نصب‌کننده | نصب یک‌کلیکه ویندوز — بدون نیاز به پایتون |
+| 🌍 چندزبانه | رابط انگلیسی و فارسی با سیستم i18n |
 
 ### 🚀 نصب و اجرا از سورس
 
