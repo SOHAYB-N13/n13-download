@@ -2041,6 +2041,7 @@ body.resizing * { cursor: inherit; }
 .update-meta strong { color: var(--text-1); font-weight: 600; }
 .update-status { color: var(--text-1); font-weight: 550; min-height: 18px; }
 .update-last { font-size: 11.5px; color: var(--text-3); }
+.update-test { font-size: 11px; color: var(--accent); font-weight: 600; margin-top: 2px; }
 .update-progress-wrap { height: 5px; border-radius: var(--r-pill); background: var(--bg-active); overflow: hidden; }
 .update-progress-bar { height: 100%; width: var(--p, 0%); background: var(--accent); transition: width .2s linear; }
 .update-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
