@@ -205,38 +205,135 @@ def cleanup_old_updates(keep: Optional[Path] = None) -> None:
         pass
 
 
-def launch_installer(installer_path: Path, app_dir: Optional[Path] = None, restart: bool = True) -> bool:
-    """Launch the verified installer.
+def _helper_log_path() -> Path:
+    return _default_update_dir() / "update_helper.log"
 
-    When *restart* is True and *app_dir* is provided, a short PowerShell
-    wrapper waits for the installer to finish and then relaunches N13.
+
+def launch_installer(installer_path: Path, app_dir: Optional[Path] = None, restart: bool = True) -> bool:
+    """Launch the verified installer from an independent helper process.
+
+    A PowerShell helper is written to disk and started with breakaway flags so
+    it survives the N13 process exit. The helper waits for N13 to exit, runs
+    the Inno Setup installer, verifies the installed executable, and restarts
+    N13.
     """
     if not installer_path.exists():
+        log.error("UPDATE: installer not found: %s", installer_path)
         return False
-    try:
-        if restart and app_dir:
-            current_pid = os.getpid()
-            ps = (
-                f'$proc = Get-Process -Id {current_pid} -ErrorAction SilentlyContinue; '
-                f'if ($proc) {{ $proc.WaitForExit() }}; '
-                f'Start-Process -FilePath "{installer_path}" -ArgumentList "/SILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait; '
-                f'Start-Sleep -Seconds 2; '
-                f'Start-Process -FilePath "{app_dir / "N13.exe"}"'
-            )
-            subprocess.Popen(
-                ["powershell.exe", "-WindowStyle", "Hidden", "-Command", ps],
-                close_fds=True,
-                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-            )
-        else:
+    if not installer_path.is_absolute():
+        log.error("UPDATE: installer path is not absolute: %s", installer_path)
+        return False
+    if installer_path.stat().st_size == 0:
+        log.error("UPDATE: installer file is empty: %s", installer_path)
+        return False
+
+    current_pid = os.getpid()
+    log.info("UPDATE: installer path = %s", installer_path)
+    log.info("UPDATE: current N13 PID = %d", current_pid)
+
+    if not restart or not app_dir:
+        # Fallback: just launch the installer detached, do not restart.
+        try:
             subprocess.Popen(
                 [str(installer_path), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
                 close_fds=True,
-                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                    | subprocess.DETACHED_PROCESS
+                    | getattr(__import__("subprocess"), "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+                ),
             )
+            return True
+        except Exception as exc:
+            log.error("UPDATE: failed to launch installer: %s", exc)
+            return False
+
+    n13_exe = app_dir / "N13.exe"
+    helper_dir = _default_update_dir()
+    helper_dir.mkdir(parents=True, exist_ok=True)
+    helper_script = helper_dir / "n13_update_helper.ps1"
+    helper_log = _helper_log_path()
+
+    # Use a PowerShell script file so quoting/lifetime is easier to control
+    # than an inline -Command string.
+    script = f"""# N13 independent update helper
+$ErrorActionPreference = "Stop"
+$log = "{helper_log}"
+function Write-Log($msg) {{
+    $line = "$(Get-Date -Format o) $msg"
+    Add-Content -Path $log -Value $line -ErrorAction SilentlyContinue
+}}
+
+try {{
+    Write-Log "UPDATE: helper started, PID=$PID"
+    Write-Log "UPDATE: waiting for N13 to exit (PID {current_pid})"
+    try {{
+        $n13 = Get-Process -Id {current_pid} -ErrorAction Stop
+        $n13.WaitForExit()
+        Write-Log "UPDATE: N13 exited"
+    }} catch {{
+        Write-Log "UPDATE: N13 already gone or error: $_"
+    }}
+
+    $installer = "{installer_path}"
+    if (-not (Test-Path $installer)) {{
+        Write-Log "UPDATE: installer not found: $installer"
+        exit 1
+    }}
+    $size = (Get-Item $installer).Length
+    Write-Log "UPDATE: installer size = $size"
+
+    Write-Log "UPDATE: launching installer = $installer"
+    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+    $exit = $proc.ExitCode
+    Write-Log "UPDATE: installer exit code = $exit"
+    if ($exit -ne 0) {{
+        Write-Log "UPDATE: installer reported failure"
+        exit $exit
+    }}
+
+    Start-Sleep -Seconds 2
+    $n13path = "{n13_exe}"
+    if (-not (Test-Path $n13path)) {{
+        Write-Log "UPDATE: installed executable not found: $n13path"
+        exit 1
+    }}
+    $ver = (Get-ItemProperty $n13path).VersionInfo.ProductVersion
+    Write-Log "UPDATE: installed executable = $n13path"
+    Write-Log "UPDATE: installed version = $ver"
+
+    Write-Log "UPDATE: restarting N13 = $n13path"
+    Start-Process -FilePath $n13path
+    Write-Log "UPDATE: restart launched"
+}} catch {{
+    Write-Log "UPDATE: helper fatal error: $_"
+    exit 1
+}}
+"""
+    helper_script.write_text(script, encoding="utf-8")
+    log.info("UPDATE: helper script = %s", helper_script)
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "powershell.exe",
+                "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden",
+                "-File", str(helper_script),
+            ],
+            close_fds=True,
+            creationflags=(
+                subprocess.CREATE_NO_WINDOW
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.DETACHED_PROCESS
+                | getattr(__import__("subprocess"), "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+            ),
+        )
+        log.info("UPDATE: helper PID = %s", proc.pid)
         return True
     except Exception as exc:
-        log.error("Failed to launch installer: %s", exc)
+        log.error("UPDATE: failed to launch helper: %s", exc)
         return False
 
 

@@ -1762,7 +1762,7 @@ const App = {
         <div class="update-meta">
           <div class="update-version-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong id="upCurrentVersion">—</strong></div>
           <div class="update-status" id="upStatus">${I18N.t("update.check", "Check for updates")}</div>
-          <div class="update-test" data-i18n="update.test_indicator">${I18N.t("update.test_indicator", "Update System Test • 1.0.1")}</div>
+          <div class="update-test" data-i18n="update.test_indicator">${I18N.t("update.test_indicator", "Update System Test • 1.0.2")}</div>
           <div class="update-last" id="upLastChecked"></div>
         </div>
         <div class="update-progress-wrap" id="upProgressWrap" hidden>

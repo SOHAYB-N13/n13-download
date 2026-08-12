@@ -20,6 +20,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
+DisableDirPage=no
 DisableProgramGroupPage=no
 OutputDir=..\release
 OutputBaseFilename=N13-Download-Manager-Setup

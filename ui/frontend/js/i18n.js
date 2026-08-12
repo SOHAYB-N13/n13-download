@@ -219,7 +219,7 @@ const I18N = {
       "update.no_notes": "No release notes provided.",
       "update.skipped": "Skipped version",
       "update.installing": "Installing update…",
-      "update.test_indicator": "Update System Test • 1.0.1",
+      "update.test_indicator": "Update System Test • 1.0.2",
 
       // Dashboard
       "dash.active_downloads": "Active downloads",
@@ -788,7 +788,7 @@ const I18N = {
       "update.no_notes": "یادداشت انتشار موجود نیست.",
       "update.skipped": "نسخه رد شد",
       "update.installing": "در حال نصب به‌روزرسانی…",
-      "update.test_indicator": "تست سیستم به‌روزرسانی • 1.0.1",
+      "update.test_indicator": "تست سیستم به‌روزرسانی • 1.0.2",
 
       // Dashboard
       "dash.active_downloads": "دانلودهای فعال",

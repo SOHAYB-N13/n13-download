@@ -857,28 +857,35 @@ class Api:
     def install_update(self, restart: bool = True) -> Dict[str, Any]:
         """Launch the verified installer and schedule safe shutdown.
 
-        The installer is started in a detached process so it survives this
-        process exiting. A short PowerShell wrapper waits for the installer
-        and optionally restarts N13.
+        The installer is started in a detached helper process so it survives
+        this process exiting. The helper waits for N13 to exit, runs the Inno
+        Setup installer, verifies the installed executable, and restarts N13.
         """
         import sys
         import threading
 
         state = self._updater.get_state()
         if state.get("state") != "ready":
+            log.warning("UPDATE: install requested but updater state is %s", state.get("state"))
             return {"status": "not_ready"}
 
         app_dir = Path(sys.executable).resolve().parent
+        log.info("UPDATE: app directory = %s", app_dir)
 
         def _install_then_exit() -> None:
             try:
                 # Give the JS response a moment to return before tearing down.
                 import time
-                time.sleep(0.5)
-                self._updater.install(app_dir=app_dir, restart=restart)
+                time.sleep(0.3)
+                log.info("UPDATE: launching helper and preparing shutdown")
+                ok = self._updater.install(app_dir=app_dir, restart=restart)
+                if not ok:
+                    log.error("UPDATE: helper launch failed")
+                    return
+                log.info("UPDATE: helper launched; shutting down N13")
                 self.shutdown()
             except Exception as exc:
-                log.error("Update install failed: %s", exc)
+                log.error("UPDATE: install thread failed: %s", exc)
 
         threading.Thread(target=_install_then_exit, daemon=False).start()
         return {"status": "installing"}

@@ -243,14 +243,6 @@ class AppConfig:
             instance.connection_mode = "smart"
         instance.smart_max_connections = max(1, min(64, int(instance.smart_max_connections or 8)))
         instance.smart_adaptive = bool(getattr(instance, "smart_adaptive", True))
-        # Auto-update repo must always point at a real GitHub repo.  Older
-        # builds saved the placeholder "n13/n13-download-manager" (or nothing),
-        # which made the updater fail with "Unable to connect to the update
-        # server".  Replace any such value with the current default.
-        repo = str(getattr(instance, "update_repo", "") or "").strip()
-        if repo == "n13/n13-download-manager" or "/" not in repo or " " in repo:
-            repo = cls.update_repo
-        instance.update_repo = repo
         instance.duplicate_policy = str(instance.duplicate_policy or "ask")
         if instance.duplicate_policy not in ("ask", "allow", "rename", "replace"):
             instance.duplicate_policy = "ask"
