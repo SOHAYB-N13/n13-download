@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N13 Extension Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="n13-options" id="app">
+    <header class="n13-header">
+      <img src="icon128.png" alt="N13" class="n13-logo">
+      <div>
+        <h1 data-i18n="optionsTitle">N13 Extension Settings</h1>
+        <p class="n13-subtitle" data-i18n="extDescription">Send browser downloads to N13 Download Manager</p>
+      </div>
+    </header>
+
+    <main class="n13-form">
+      <section class="n13-section">
+        <h2 data-i18n="settings">Settings</h2>
+
+        <label class="n13-field">
+          <span class="n13-label" data-i18n="language">Language</span>
+          <select id="language">
+            <option value="en">English</option>
+            <option value="fa">فارسی</option>
+          </select>
+        </label>
+
+        <label class="n13-field n13-switch">
+          <input type="checkbox" id="enabled">
+          <span class="n13-slider"></span>
+          <span class="n13-label" data-i18n="enableIntegration">Enable browser integration</span>
+        </label>
+
+        <label class="n13-field n13-switch">
+          <input type="checkbox" id="contextMenu">
+          <span class="n13-slider"></span>
+          <span class="n13-label" data-i18n="enableContextMenu">Show context menu</span>
+        </label>
+
+        <label class="n13-field n13-switch">
+          <input type="checkbox" id="detection">
+          <span class="n13-slider"></span>
+          <span class="n13-label" data-i18n="enableDetection">Enable download detection</span>
+        </label>
+
+        <label class="n13-field n13-switch">
+          <input type="checkbox" id="showButton">
+          <span class="n13-slider"></span>
+          <span class="n13-label" data-i18n="showDownloadButton">Show floating download button</span>
+        </label>
+
+        <label class="n13-field n13-switch">
+          <input type="checkbox" id="openN13">
+          <span class="n13-slider"></span>
+          <span class="n13-label" data-i18n="openN13WhenNeeded">Open N13 when needed</span>
+        </label>
+      </section>
+
+      <div class="n13-actions">
+        <button class="n13-btn n13-btn-primary" id="saveBtn" data-i18n="save">Save</button>
+        <span class="n13-save-hint" id="saveHint"></span>
+      </div>
+
+      <section class="n13-section n13-info">
+        <h2 data-i18n="about">About</h2>
+        <p data-i18n="aboutText">N13 Download Manager browser companion.</p>
+        <p class="n13-version"><span data-i18n="version">Version</span> <span id="versionText">—</span></p>
+      </section>
+    </main>
+  </div>
+
+  <script src="shared/i18n.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

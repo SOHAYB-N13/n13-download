@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark light">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: blob:;">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect width='40' height='40' rx='11' fill='%233B82F6'/><path d='M20 10v12m0 0-5-5m5 5 5-5M12.5 29h15' stroke='white' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+<link rel="icon" href="favicon.png">
 <title>N13 Download Manager</title>
 <script>
 /* Apply saved theme before first paint to avoid a flash. */
@@ -27,17 +27,7 @@ try {
   <aside id="sidebar" aria-label="Primary">
     <span class="nav-indicator" id="navIndicator" aria-hidden="true"></span>
     <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
-        <defs>
-          <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#3B82F6"/>
-            <stop offset="1" stop-color="#8B5CF6"/>
-          </linearGradient>
-        </defs>
-        <rect width="40" height="40" rx="11" fill="url(#brandGrad)"/>
-        <path d="M20 10v12m0 0-5-5m5 5 5-5" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        <path d="M12.5 29h15" stroke="#fff" stroke-width="2.6" stroke-linecap="round" opacity=".9"/>
-      </svg>
+      <img class="brand-mark" src="brand.png" alt="N13">
       <div class="brand-text">
         <strong>N13</strong>
         <span>Download Manager</span>

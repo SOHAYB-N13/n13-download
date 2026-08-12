@@ -13,7 +13,7 @@ const App = {
     sortDir: -1,
     search: "",
     theme: "dark",
-    accent: "#3B82F6",
+    accent: "#EF4444",
     sidebarCollapsed: false,
     serverRunning: false,
     settings: null,
@@ -32,7 +32,7 @@ const App = {
     logs:      { title: "Logs", sub: "Application activity" },
   },
 
-  accents: ["#3B82F6", "#8B5CF6", "#14B8A6", "#22C55E", "#F59E0B", "#EC4899"],
+  accents: ["#3B82F6", "#8B5CF6", "#14B8A6", "#22C55E", "#F59E0B", "#EC4899", "#EF4444"],
 
   // ══════════════════════════════════════════════════════════════════════
   //  Boot

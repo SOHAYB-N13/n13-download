@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Terminal Download Manager",
-  "version": "2.0.0",
-  "description": "Send downloads to Terminal Download Manager via authenticated Live Server",
+  "name": "N13 Download Manager",
+  "version": "3.0.0",
+  "description": "Send browser downloads to N13 Download Manager",
   "permissions": [
     "contextMenus",
     "notifications",
     "storage",
     "activeTab",
+    "tabs",
     "scripting"
   ],
   "host_permissions": [
@@ -19,25 +20,35 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "TDM",
+    "default_title": "N13 Download Manager",
     "default_icon": {
       "16": "icon16.png",
+      "32": "icon32.png",
       "48": "icon48.png",
       "128": "icon128.png"
     }
   },
   "icons": {
     "16": "icon16.png",
+    "32": "icon32.png",
     "48": "icon48.png",
     "128": "icon128.png"
   },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["shared/i18n.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
   "commands": {
     "download-current-page": {
       "suggested_key": {
         "default": "Ctrl+Shift+D",
         "mac": "Command+Shift+D"
       },
-      "description": "Download current page with TDM"
+      "description": "Download current page with N13"
     }
   }
 }

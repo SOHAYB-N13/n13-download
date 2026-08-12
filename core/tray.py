@@ -16,8 +16,10 @@ The tray runs its own hidden message window on a daemon thread and provides:
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 try:
@@ -67,6 +69,7 @@ class SystemTray:
         self._hwnd = None
         self._icon_id = 0
         self._thread: Optional[threading.Thread] = None
+        self._tray_icon = None
         self._tooltip = "N13"
         self._last_tip_at = 0.0
         self._cmd_map: dict = {}
@@ -156,14 +159,29 @@ class SystemTray:
         self._hwnd = win32gui.CreateWindow(
             _CLASS_NAME, "N13Tray", win32con.WS_OVERLAPPED, 0, 0, 0, 0, 0, 0, hinst, None
         )
-        icon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
+        icon = self._load_tray_icon()
         nid = (
             self._hwnd, self._icon_id,
             _NIF_MESSAGE | _NIF_ICON | _NIF_TIP,
             _TRAY_MSG, icon, self._tooltip,
         )
         win32gui.Shell_NotifyIcon(_NIM_ADD, nid)
+        self._tray_icon = icon  # keep the HICON alive for the tray lifetime
         win32gui.PumpMessages()
+
+    @staticmethod
+    def _load_tray_icon():
+        """Load the N13 icon for the system tray (falls back to the generic one)."""
+        try:
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+            ico = base / "assets" / "icon.ico"
+            if ico.exists():
+                return win32gui.LoadImage(
+                    0, str(ico), win32con.IMAGE_ICON, 32, 32, win32con.LR_LOADFROMFILE
+                )
+        except Exception:
+            pass
+        return win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         if msg == _TRAY_MSG:

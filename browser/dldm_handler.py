@@ -21,6 +21,7 @@ import tempfile
 import urllib.parse
 import uuid
 from pathlib import Path
+from typing import Optional
 
 
 def decode_url(arg: str) -> str:
@@ -43,11 +44,46 @@ def decode_url(arg: str) -> str:
     return prev.strip()
 
 
+def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = None) -> None:
+    """Launch N13. If *url_file* is provided, pass it as a browser download."""
+    main_script = project_root / "d.py"
+    if sys.platform == "win32":
+        bat_path = Path(tempfile.gettempdir()) / f"dldm_run_{uuid.uuid4().hex}.bat"
+        url_arg = f' --url-file "{url_file}"' if url_file else ""
+        bat_content = (
+            "@echo off\n"
+            "chcp 65001 >nul 2>&1\n"
+            f'"{python_exe}" "{main_script}"{url_arg}\n'
+            f'del "{url_file}" 2>nul\n' if url_file else ""
+            'del "%~f0" 2>nul\n'
+        )
+        bat_path.write_text(bat_content, encoding="utf-8")
+        subprocess.Popen(
+            ["cmd", "/c", str(bat_path)],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            cwd=str(project_root),
+        )
+    else:
+        args = [python_exe, str(main_script)]
+        if url_file:
+            args.extend(["--from-browser", "--url-file", str(url_file)])
+        subprocess.Popen(args, cwd=str(project_root))
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 1
 
     url = decode_url(sys.argv[1])
+
+    project_root = Path(__file__).resolve().parent.parent
+    python_exe = sys.executable
+
+    # Special launch signal from the extension's "Open N13" button.
+    if url == "launch":
+        _launch_n13(project_root, python_exe)
+        return 0
+
     if not url.startswith(("http://", "https://")):
         # Write a tiny diagnostic so silent failures can be traced.
         try:
@@ -58,35 +94,9 @@ def main() -> int:
             pass
         return 1
 
-    project_root = Path(__file__).resolve().parent.parent
-    main_script = project_root / "d.py"
-    python_exe = sys.executable
-
     url_file = Path(tempfile.gettempdir()) / f"dldm_url_{uuid.uuid4().hex}.txt"
     url_file.write_text(url, encoding="utf-8")
-
-    if sys.platform == "win32":
-        bat_path = Path(tempfile.gettempdir()) / f"dldm_run_{uuid.uuid4().hex}.bat"
-        # Quote paths defensively; % must be doubled inside a .bat file.
-        bat_content = (
-            "@echo off\n"
-            "chcp 65001 >nul 2>&1\n"
-            f'"{python_exe}" "{main_script}" --from-browser --url-file "{url_file}"\n'
-            f'del "{url_file}" 2>nul\n'
-            'del "%~f0" 2>nul\n'
-        )
-        bat_path.write_text(bat_content, encoding="utf-8")
-        subprocess.Popen(
-            ["cmd", "/c", str(bat_path)],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-            cwd=str(project_root),
-        )
-    else:
-        subprocess.Popen(
-            [python_exe, str(main_script), "--from-browser", "--url-file", str(url_file)],
-            cwd=str(project_root),
-        )
-
+    _launch_n13(project_root, python_exe, url_file)
     return 0
 
 

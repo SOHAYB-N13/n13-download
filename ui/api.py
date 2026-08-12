@@ -68,6 +68,7 @@ class Api:
             config=config,
         )
         self._manager.subscribe(self._on_task_event)
+        log.info("[7] TaskManager ready")
 
         # Scheduler: queue window gating + night speed override.
         from core.scheduler import Scheduler
@@ -93,8 +94,16 @@ class Api:
         if getattr(config, "auto_start_server", True):
             try:
                 self.start_live_server()
+                log.info("[6] Live server ready on %s:%s", config.live_server_host, config.live_server_port)
             except Exception:
                 pass
+
+        log.info("[8] Application READY")
+        # Cold-start handoff: process any URLs received via dldm:// while the
+        # application was still initialising.  They go through the exact same
+        # pipeline as a browser download (rules, categories, duplicate policy,
+        # queue, autostart) -- nothing is bypassed and nothing is dropped.
+        self._drain_startup_urls()
 
     def _sync_clipboard_monitor(self) -> None:
         """Start/stop the clipboard monitor to match the config."""
@@ -806,7 +815,7 @@ class Api:
         prefs = self._load_ui_prefs()
         return {
             "theme": prefs.get("theme", "dark"),
-            "accent": prefs.get("accent", "#4f8ef7"),
+            "accent": prefs.get("accent", "#EF4444"),
         }
 
     def save_theme_config(self, prefs: Dict[str, Any]) -> None:
@@ -1086,6 +1095,32 @@ class Api:
             else:
                 self._event_queue.put_nowait({"type": "browser_url", "url": url})
         return True
+
+    def _drain_startup_urls(self) -> None:
+        """Process URLs received via dldm:// while the app was starting.
+
+        Runs after TaskManager, rules and the Live Server are ready, so startup
+        URLs are added through the normal pipeline (validation, rules,
+        categories, duplicate policy, queue, autostart) and are never dropped.
+        Every URL either enters the queue or produces an explicit log entry.
+        """
+        try:
+            from core.startup import drain
+        except Exception:
+            return
+
+        for raw in drain():
+            url = normalize_url(raw or "").strip()
+            if not url or not validate_url(url):
+                log.error("[9][10] Startup URL rejected (invalid): %r", raw)
+                continue
+            try:
+                allow, resolve = self._duplicate_policy_args(url, "", "")
+                log.info("[9][10] Processing pending startup URL: %s", url)
+                self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve, autostart=True)
+                log.info("[11] Autostart requested for startup URL: %s", url)
+            except Exception as exc:
+                log.error("[9][10] Startup URL failed: %s (%s)", url, exc)
 
     # ── Shutdown ──────────────────────────────────────────────────
     # One authoritative shutdown path.  It is idempotent and thread-safe, and

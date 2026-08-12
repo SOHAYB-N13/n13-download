@@ -2,25 +2,54 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>TDM</title>
-  <style>
-    body { width: 380px; padding: 16px; font-family: Segoe UI, sans-serif; background: #1a1a2e; color: #eee; }
-    h2 { color: #00d4ff; font-size: 15px; margin: 0 0 10px; }
-    textarea, button { width: 100%; box-sizing: border-box; margin: 6px 0; padding: 9px; border-radius: 6px; border: 1px solid #333; }
-    textarea { background: #111; color: #eee; font-family: Consolas, monospace; resize: vertical; }
-    button { background: #0f3460; color: #00d4ff; cursor: pointer; }
-    .status { margin-top: 8px; font-size: 12px; display: none; word-break: break-all; }
-    .ok { color: #0f8; }
-    .err { color: #f66; }
-    .hint { font-size: 11px; color: #888; margin: 2px 0 4px; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N13</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <h2>Terminal Download Manager</h2>
-  <textarea id="urlInput" rows="5" placeholder="Paste one URL per line&#10;https://example.com/file1.zip&#10;https://example.com/file2.zip" autofocus></textarea>
-  <div class="hint">One per line — multiple links are sent as a batch.</div>
-  <button id="downloadBtn">Download</button>
-  <div id="status" class="status"></div>
+  <div class="n13-popup" id="app">
+    <header class="n13-header">
+      <img src="icon48.png" alt="N13" class="n13-logo">
+      <div class="n13-brand">
+        <div class="n13-title" data-i18n="popupTitle">N13 Download Manager</div>
+        <div class="n13-status" id="status">
+          <span class="n13-dot" id="statusDot"></span>
+          <span id="statusText">—</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="n13-card">
+      <div class="n13-input-wrap">
+        <textarea id="urlInput" rows="3" data-i18n-placeholder="downloadWithN13" placeholder="Paste URLs here, one per line"></textarea>
+      </div>
+      <button class="n13-btn n13-btn-primary" id="downloadBtn" data-i18n="downloadWithN13">Download with N13</button>
+      <div class="n13-msg" id="msg"></div>
+    </section>
+
+    <section class="n13-card n13-page-card">
+      <div class="n13-row">
+        <span class="n13-muted" data-i18n="currentPage">Current page</span>
+        <button class="n13-btn n13-btn-ghost n13-btn-sm" id="downloadPageBtn" data-i18n="downloadPage">Download page</button>
+      </div>
+    </section>
+
+    <section class="n13-card n13-recent" id="recentSection">
+      <div class="n13-row n13-recent-header">
+        <span class="n13-muted" data-i18n="recent">Recent</span>
+        <button class="n13-btn n13-btn-ghost n13-btn-sm" id="clearRecentBtn" data-i18n="clearRecent">Clear</button>
+      </div>
+      <ul class="n13-recent-list" id="recentList"></ul>
+    </section>
+
+    <footer class="n13-footer">
+      <button class="n13-btn n13-btn-ghost n13-btn-sm" id="openN13Btn" data-i18n="openN13">Open N13</button>
+      <button class="n13-btn n13-btn-ghost n13-btn-sm" id="settingsBtn" data-i18n="settings">Settings</button>
+      <button class="n13-btn n13-btn-ghost n13-btn-sm" id="aboutBtn" data-i18n="about">About</button>
+    </footer>
+  </div>
+
+  <script src="shared/i18n.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

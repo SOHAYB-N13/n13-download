@@ -1,39 +1,72 @@
-from PIL import Image, ImageDraw
+"""Generate the N13 icon asset set from the source artwork.
 
-def create_icon(size):
-    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    r = size // 6
-    for y in range(size):
-        for x in range(size):
-            nx = x / size
-            ny = y / size
-            t = (nx + ny) / 2
-            r_c = int(59 + (139 - 59) * t)
-            g_c = int(130 + (92 - 130) * t)
-            b_c = int(246 + (246 - 246) * t)
-            img.putpixel((x, y), (r_c, g_c, b_c, 255))
-    mask = Image.new('L', (size, size), 0)
-    mdraw = ImageDraw.Draw(mask)
-    mdraw.rounded_rectangle([0, 0, size - 1, size - 1], radius=r, fill=255)
-    img.putalpha(mask)
-    draw = ImageDraw.Draw(img)
-    shaft_w = max(2, size // 14)
-    cx = size // 2
-    shaft_top = int(size * 0.28)
-    shaft_bot = int(size * 0.52)
-    draw.rectangle([cx - shaft_w, shaft_top, cx + shaft_w, shaft_bot], fill=(255, 255, 255, 255))
-    head_top = shaft_bot
-    head_bot = int(size * 0.72)
-    head_w = int(size * 0.22)
-    draw.polygon([(cx, head_bot), (cx - head_w, head_top), (cx + head_w, head_top)], fill=(255, 255, 255, 255))
-    base_y = int(size * 0.79)
-    base_w = int(size * 0.34)
-    draw.rounded_rectangle([cx - base_w, base_y, cx + base_w, base_y + max(2, size // 18)],
-                           radius=max(1, size // 40), fill=(255, 255, 255, 230))
-    return img
+Reads ``icone.png`` at the repository root, center-crops it to a square, and
+writes:
 
-sizes = [16, 24, 32, 48, 64, 128, 256]
-imgs = [create_icon(s) for s in sizes]
-imgs[0].save('assets/icon.ico', format='ICO', sizes=[(s, s) for s in sizes], append_images=imgs[1:])
-print('Created assets/icon.ico')
+  assets/icon.png              1024x1024 master
+  assets/icons/icon-16.png
+  assets/icons/icon-20.png
+  assets/icons/icon-24.png
+  assets/icons/icon-32.png
+  assets/icons/icon-48.png
+  assets/icons/icon-64.png
+  assets/icons/icon-128.png
+  assets/icons/icon-256.png
+  assets/icon.ico              multi-resolution Windows icon
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parent.parent
+SOURCE = ROOT / "icone.png"
+SIZES = [16, 20, 24, 32, 48, 64, 128, 256]
+MASTER_SIZE = 1024
+
+
+def load_source() -> Image.Image:
+    """Open icone.png and center-crop it to a square."""
+    if not SOURCE.exists():
+        raise FileNotFoundError(f"Source artwork not found: {SOURCE}")
+    img = Image.open(SOURCE)
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+
+def main() -> int:
+    icons_dir = ROOT / "assets" / "icons"
+    icons_dir.mkdir(parents=True, exist_ok=True)
+
+    master = load_source().resize((MASTER_SIZE, MASTER_SIZE), Image.LANCZOS)
+    master.save(ROOT / "assets" / "icon.png", "PNG")
+
+    for s in SIZES:
+        scaled = master.resize((s, s), Image.LANCZOS)
+        scaled.save(icons_dir / f"icon-{s}.png", "PNG")
+        print(f"Created icon-{s}.png")
+
+    ico_sizes = [(s, s) for s in [16, 20, 24, 32, 48, 64, 128, 256]]
+    ico_images = [master.resize((s, s), Image.LANCZOS) for s, _ in ico_sizes]
+    # PIL's ICO writer skips any size larger than the FIRST image passed to
+    # save().  Pass the largest (256x256) first so every size is kept.
+    ico_images[-1].save(
+        ROOT / "assets" / "icon.ico",
+        format="ICO",
+        sizes=ico_sizes,
+        append_images=ico_images[:-1],
+    )
+    print("Created icon.ico")
+    print("Created icon.png")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
