@@ -1,15 +1,22 @@
-"""Lightweight GitHub-Releases based updater for N13.
+"""GitHub-Releases based updater for N13 — clean reinstall architecture.
 
-The updater is intentionally small and isolated from the UI:
+The updater never patches the running installation.  The flow is:
 
-* checks the configured GitHub repository for the latest stable release
-* compares semantic versions
-* downloads the official installer to a temporary location
-* verifies the SHA-256 checksum before executing anything
-* hands off to the existing Inno Setup installer and safe-shutdown path
+    check release -> download Setup -> <install>\\Update\\Setup.exe
+    -> copy Setup + a self-contained PowerShell updater to %TEMP%\\N13Updater\\
+    -> launch the updater -> N13 exits
+    -> updater waits for N13 to disappear
+    -> runs unins000.exe (silent) -> waits for uninstall
+    -> verifies the old install is gone -> deletes leftover install files
+    -> deletes %LOCALAPPDATA%\\N13 (user data)
+    -> verifies the downloaded Setup checksum
+    -> installs the new Setup into the SAME install directory
+    -> verifies N13.exe -> launches the new N13
+    -> updater exits
 
-All network failures are swallowed and returned as user-friendly errors so
-that an unreachable GitHub can never prevent N13 from working.
+The updater is a standalone PowerShell script with no dependency on Python or
+on files inside the install directory, so uninstalling the old install cannot
+break it.
 """
 
 from __future__ import annotations
@@ -20,11 +27,13 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 from urllib.error import URLError
@@ -38,6 +47,14 @@ CHECKSUM_NAME = INSTALLER_NAME + ".sha256.txt"
 GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases/latest"
 REQUEST_TIMEOUT = 15
 DOWNLOAD_TIMEOUT = 120
+UPDATER_DIR = "Update"
+
+_CREATE_FLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    | getattr(subprocess, "DETACHED_PROCESS", 0)
+    | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+)
 
 
 def get_current_version() -> str:
@@ -68,11 +85,16 @@ def fetch_latest_release(repo: str) -> Optional[Dict]:
     Returns a dict with ``version``, ``tag``, ``notes``, ``installer_url``,
     ``checksum_url`` and ``published_at`` on success, or ``None`` on any
     failure (network, parse, missing asset, etc.).
+
+    ``N13_UPDATE_BASE_URL`` (environment variable) overrides the GitHub API
+    base URL so the release JSON can be served locally during testing.
     """
     if not repo or "/" not in repo:
         return None
+    base = os.environ.get("N13_UPDATE_BASE_URL", "").strip().rstrip("/")
+    url = (base + "/releases/latest") if base else GITHUB_API_URL.format(repo=repo)
     try:
-        data = json.loads(_github_request(GITHUB_API_URL.format(repo=repo)).decode("utf-8"))
+        data = json.loads(_github_request(url).decode("utf-8"))
         if data.get("prerelease") or data.get("draft"):
             return None
         tag = (data.get("tag_name") or "").strip()
@@ -143,6 +165,11 @@ def download_installer(url: str, dest: Path, progress_cb: Optional[Callable[[int
     """
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
         _download(url, dest, progress_cb)
         return True
     except Exception as exc:
@@ -174,166 +201,263 @@ def verify_installer(path: Path, expected_checksum: Optional[str]) -> bool:
     return hmac.compare_digest(sha256_file(path).lower(), expected_checksum.lower())
 
 
+# --------------------------------------------------------------------------- #
+# Install-directory + staging paths
+# --------------------------------------------------------------------------- #
 
-def _default_update_dir() -> Path:
-    r"""Return a per-user temporary directory for update artifacts.
+def install_dir() -> Path:
+    """Return the directory N13 is installed into (parent of N13.exe)."""
+    exe = Path(sys.executable).resolve()
+    if exe.name.lower() == "n13.exe":
+        return exe.parent
+    # Development / test fallback: treat the project root as the install dir.
+    return Path(__file__).resolve().parent.parent
 
-    This is intentionally outside the installation directory and outside
-    ``%LOCALAPPDATA%\N13`` data folders.
-    """
-    d = Path(tempfile.gettempdir()) / "N13Updates"
+
+def update_dir(app_dir: Optional[Path] = None) -> Path:
+    """Return the ``<install>\\Update`` directory used to stage downloads."""
+    d = (app_dir or install_dir()) / UPDATER_DIR
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def make_update_path(version: str) -> Path:
-    """Return a unique temporary path for the installer of *version*."""
-    return _default_update_dir() / f"N13-Download-Manager-Setup-{version}.exe"
+def make_update_path(version: str, app_dir: Optional[Path] = None) -> Path:
+    """Return the staged installer path: ``<install>\\Update\\Setup.exe``."""
+    return update_dir(app_dir) / INSTALLER_NAME
 
 
-def cleanup_old_updates(keep: Optional[Path] = None) -> None:
-    """Delete update installers except the optionally-kept current one."""
-    try:
-        for f in _default_update_dir().glob("N13-Download-Manager-Setup-*.exe"):
-            if keep and f.resolve() == keep.resolve():
-                continue
-            try:
-                f.unlink()
-            except OSError:
-                pass
-    except OSError:
-        pass
+def _user_data_dir() -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+    return base / "N13"
 
 
-def _helper_log_path() -> Path:
-    return _default_update_dir() / "update_helper.log"
+# --------------------------------------------------------------------------- #
+# Independent updater
+# --------------------------------------------------------------------------- #
+
+def _ps_q(s: str) -> str:
+    """Escape a value for a single-quoted PowerShell string literal."""
+    return s.replace("'", "''")
 
 
-def launch_installer(installer_path: Path, app_dir: Optional[Path] = None, restart: bool = True) -> bool:
-    """Launch the verified installer from an independent helper process.
+_UPDATER_PS1 = r"""# N13 self-contained updater - uninstall + clean reinstall
+$ErrorActionPreference = 'Continue'
+$InstallDir    = '__INSTALL_DIR__'
+$SetupPath     = '__SETUP_PATH__'
+$ExpectedHash  = '__EXPECTED_HASH__'
+$UserData      = '__USER_DATA__'
+$LogFile       = '__LOG_FILE__'
 
-    A PowerShell helper is written to disk and started with breakaway flags so
-    it survives the N13 process exit. The helper waits for N13 to exit, runs
-    the Inno Setup installer, verifies the installed executable, and restarts
-    N13.
+function Log([string]$msg) {
+    try {
+        Add-Content -LiteralPath $LogFile -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) -ErrorAction Stop
+    } catch {}
+}
+
+Log 'STEP0 updater started'
+if (-not (Test-Path -LiteralPath $InstallDir)) {
+    Log ('STEP0 FATAL install dir missing: ' + $InstallDir)
+    exit 1
+}
+
+# 1) Wait until N13 has really exited (poll the process list).
+Log 'STEP1 waiting for N13 to exit'
+$deadline = (Get-Date).AddMinutes(3)
+while ($true) {
+    $p = Get-Process -Name 'N13' -ErrorAction SilentlyContinue
+    if (-not $p) { break }
+    if ((Get-Date) -gt $deadline) {
+        Log 'STEP1 TIMEOUT waiting for N13 to exit'
+        exit 1
+    }
+    Start-Sleep -Milliseconds 800
+}
+Log 'STEP1 N13 exited'
+
+# 2) Run the official Inno Setup uninstaller (never Remove-Item the app).
+$unins = Join-Path $InstallDir 'unins000.exe'
+if (-not (Test-Path -LiteralPath $unins)) {
+    Log ('STEP2 FATAL uninstaller not found: ' + $unins)
+    exit 1
+}
+Log 'STEP2 running uninstaller'
+$p = Start-Process -FilePath $unins -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+Log ('STEP2 uninstaller exit code=' + $p.ExitCode)
+
+# 3) Wait until the old installation is really gone.
+Log 'STEP3 verifying old installation removed'
+$deadline = (Get-Date).AddMinutes(2)
+while ($true) {
+    $exe = Test-Path -LiteralPath (Join-Path $InstallDir 'N13.exe')
+    $uni = Test-Path -LiteralPath (Join-Path $InstallDir 'unins000.exe')
+    if (-not $exe -and -not $uni) { break }
+    if ((Get-Date) -gt $deadline) {
+        Log 'STEP3 TIMEOUT waiting for uninstall to finish'
+        break
+    }
+    Start-Sleep -Milliseconds 800
+}
+Log 'STEP3 old installation removed'
+
+# 4) Clean any leftover files in the install directory (install dir only).
+if (Test-Path -LiteralPath $InstallDir) {
+    Log 'STEP4 removing leftover install files'
+    Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 5) Remove N13 user data (only %LOCALAPPDATA%\N13).
+if ($UserData -and (Test-Path -LiteralPath $UserData)) {
+    Log 'STEP5 removing user data'
+    Remove-Item -LiteralPath $UserData -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6) Verify the new installer checksum before running it.
+if (-not (Test-Path -LiteralPath $SetupPath)) {
+    Log ('STEP6 FATAL setup not found: ' + $SetupPath)
+    exit 1
+}
+try {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($SetupPath)
+    $bytes = $sha.ComputeHash($fs)
+    $fs.Dispose()
+    $sha.Dispose()
+} catch {
+    Log ('STEP6 FATAL could not hash setup: ' + $_)
+    exit 1
+}
+$actual = ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLower()
+if ($actual -ne $ExpectedHash) {
+    Log ('STEP6 FATAL checksum mismatch actual=' + $actual + ' expected=' + $ExpectedHash)
+    Remove-Item -LiteralPath $SetupPath -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+Log 'STEP6 checksum OK'
+
+# 7) Install the new version into the SAME install directory.
+$argLine = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=' + $InstallDir + '"'
+Log ('STEP7 running new installer -> ' + $InstallDir)
+$p = Start-Process -FilePath $SetupPath -ArgumentList $argLine -Wait -PassThru
+Log ('STEP7 installer exit code=' + $p.ExitCode)
+if ($p.ExitCode -ne 0) {
+    Log 'STEP7 FATAL new install failed'
+    exit 1
+}
+
+# 8) Verify the new executable exists.
+$newExe = Join-Path $InstallDir 'N13.exe'
+$deadline = (Get-Date).AddMinutes(2)
+while (-not (Test-Path -LiteralPath $newExe)) {
+    if ((Get-Date) -gt $deadline) {
+        Log 'STEP8 FATAL N13.exe not found after install'
+        exit 1
+    }
+    Start-Sleep -Milliseconds 800
+}
+$ver = (Get-ItemProperty -LiteralPath $newExe).VersionInfo.ProductVersion
+Log ('STEP8 new N13.exe present version=' + $ver)
+
+# 9) Launch the new N13.
+Start-Process -FilePath $newExe
+Log 'STEP9 launched new N13'
+Log 'STEP10 updater done'
+exit 0
+"""
+
+
+def render_updater_script(
+    install_dir_: str,
+    setup_path: str,
+    expected_checksum: str,
+    user_data: str,
+    log_file: str,
+) -> str:
+    """Render the standalone PowerShell updater script (used for tests too)."""
+    return (
+        _UPDATER_PS1.replace("__INSTALL_DIR__", _ps_q(install_dir_))
+        .replace("__SETUP_PATH__", _ps_q(setup_path))
+        .replace("__EXPECTED_HASH__", (expected_checksum or "").lower())
+        .replace("__USER_DATA__", _ps_q(user_data))
+        .replace("__LOG_FILE__", _ps_q(log_file))
+    )
+
+
+def launch_updater(
+    installer_path: Path,
+    app_dir: Optional[Path] = None,
+    expected_checksum: Optional[str] = None,
+) -> bool:
+    """Stage and launch the independent updater.
+
+    The installer (already verified in Python at download time) is ensured to be
+    inside ``<install>\\Update\\``, then both the installer and the updater script
+    are copied to a unique ``%TEMP%\\N13Updater\\<id>\\`` folder so uninstalling
+    the old install cannot remove them.
     """
     if not installer_path.exists():
         log.error("UPDATE: installer not found: %s", installer_path)
         return False
-    if not installer_path.is_absolute():
-        log.error("UPDATE: installer path is not absolute: %s", installer_path)
+
+    app_dir = (app_dir or install_dir()).resolve()
+    update_dir_path = update_dir(app_dir)
+
+    staged = update_dir_path / INSTALLER_NAME
+    if installer_path.resolve() != staged.resolve():
+        try:
+            shutil.copy2(installer_path, staged)
+        except OSError as exc:
+            log.error("UPDATE: failed to stage installer: %s", exc)
+            return False
+    installer_path = staged
+
+    if not installer_path.exists():
+        log.error("UPDATE: staged installer missing: %s", installer_path)
         return False
     if installer_path.stat().st_size == 0:
-        log.error("UPDATE: installer file is empty: %s", installer_path)
+        log.error("UPDATE: staged installer is empty: %s", installer_path)
         return False
 
-    current_pid = os.getpid()
-    log.info("UPDATE: installer path = %s", installer_path)
-    log.info("UPDATE: current N13 PID = %d", current_pid)
+    work_root = Path(tempfile.gettempdir()) / "N13Updater"
+    work_root.mkdir(parents=True, exist_ok=True)
+    work = work_root / uuid.uuid4().hex
+    work.mkdir(parents=True, exist_ok=True)
 
-    if not restart or not app_dir:
-        # Fallback: just launch the installer detached, do not restart.
-        try:
-            subprocess.Popen(
-                [str(installer_path), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                close_fds=True,
-                creationflags=(
-                    subprocess.CREATE_NO_WINDOW
-                    | subprocess.CREATE_NEW_PROCESS_GROUP
-                    | subprocess.DETACHED_PROCESS
-                    | getattr(__import__("subprocess"), "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
-                ),
-            )
-            return True
-        except Exception as exc:
-            log.error("UPDATE: failed to launch installer: %s", exc)
-            return False
+    setup_temp = work / INSTALLER_NAME
+    try:
+        shutil.copy2(installer_path, setup_temp)
+    except OSError as exc:
+        log.error("UPDATE: failed to copy installer to temp: %s", exc)
+        return False
 
-    n13_exe = app_dir / "N13.exe"
-    helper_dir = _default_update_dir()
-    helper_dir.mkdir(parents=True, exist_ok=True)
-    helper_script = helper_dir / "n13_update_helper.ps1"
-    helper_log = _helper_log_path()
-
-    # Use a PowerShell script file so quoting/lifetime is easier to control
-    # than an inline -Command string.
-    script = f"""# N13 independent update helper
-$ErrorActionPreference = "Stop"
-$log = "{helper_log}"
-function Write-Log($msg) {{
-    $line = "$(Get-Date -Format o) $msg"
-    Add-Content -Path $log -Value $line -ErrorAction SilentlyContinue
-}}
-
-try {{
-    Write-Log "UPDATE: helper started, PID=$PID"
-    Write-Log "UPDATE: waiting for N13 to exit (PID {current_pid})"
-    try {{
-        $n13 = Get-Process -Id {current_pid} -ErrorAction Stop
-        $n13.WaitForExit()
-        Write-Log "UPDATE: N13 exited"
-    }} catch {{
-        Write-Log "UPDATE: N13 already gone or error: $_"
-    }}
-
-    $installer = "{installer_path}"
-    if (-not (Test-Path $installer)) {{
-        Write-Log "UPDATE: installer not found: $installer"
-        exit 1
-    }}
-    $size = (Get-Item $installer).Length
-    Write-Log "UPDATE: installer size = $size"
-
-    Write-Log "UPDATE: launching installer = $installer"
-    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
-    $exit = $proc.ExitCode
-    Write-Log "UPDATE: installer exit code = $exit"
-    if ($exit -ne 0) {{
-        Write-Log "UPDATE: installer reported failure"
-        exit $exit
-    }}
-
-    Start-Sleep -Seconds 2
-    $n13path = "{n13_exe}"
-    if (-not (Test-Path $n13path)) {{
-        Write-Log "UPDATE: installed executable not found: $n13path"
-        exit 1
-    }}
-    $ver = (Get-ItemProperty $n13path).VersionInfo.ProductVersion
-    Write-Log "UPDATE: installed executable = $n13path"
-    Write-Log "UPDATE: installed version = $ver"
-
-    Write-Log "UPDATE: restarting N13 = $n13path"
-    Start-Process -FilePath $n13path
-    Write-Log "UPDATE: restart launched"
-}} catch {{
-    Write-Log "UPDATE: helper fatal error: $_"
-    exit 1
-}}
-"""
-    helper_script.write_text(script, encoding="utf-8")
-    log.info("UPDATE: helper script = %s", helper_script)
+    log_file = work / "updater.log"
+    script = render_updater_script(
+        install_dir_=str(app_dir),
+        setup_path=str(setup_temp),
+        expected_checksum=expected_checksum or "",
+        user_data=str(_user_data_dir()),
+        log_file=str(log_file),
+    )
+    script_path = work / "updater.ps1"
+    script_path.write_text(script, encoding="utf-8")
+    log.info("UPDATE: updater script = %s", script_path)
+    log.info("UPDATE: install dir = %s", app_dir)
 
     try:
         proc = subprocess.Popen(
             [
                 "powershell.exe",
+                "-NoProfile",
                 "-ExecutionPolicy", "Bypass",
                 "-WindowStyle", "Hidden",
-                "-File", str(helper_script),
+                "-File", str(script_path),
             ],
             close_fds=True,
-            creationflags=(
-                subprocess.CREATE_NO_WINDOW
-                | subprocess.CREATE_NEW_PROCESS_GROUP
-                | subprocess.DETACHED_PROCESS
-                | getattr(__import__("subprocess"), "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
-            ),
+            creationflags=_CREATE_FLAGS,
         )
-        log.info("UPDATE: helper PID = %s", proc.pid)
+        log.info("UPDATE: updater launched pid=%s", proc.pid)
         return True
     except Exception as exc:
-        log.error("UPDATE: failed to launch helper: %s", exc)
+        log.error("UPDATE: failed to launch updater: %s", exc)
         return False
 
 
@@ -437,7 +561,6 @@ class UpdateController:
             return
 
         dest = make_update_path(version)
-        cleanup_old_updates(keep=None)
         self._download_path = dest
         self._expected_checksum = fetch_checksum(checksum_url) if checksum_url else None
 
@@ -456,7 +579,7 @@ class UpdateController:
             self._set("error", error="Release checksum missing.")
             return
 
-        if not hmac.compare_digest(sha256_file(dest).lower(), self._expected_checksum.lower()):
+        if not verify_installer(dest, self._expected_checksum):
             try:
                 dest.unlink(missing_ok=True)
             except OSError:
@@ -468,18 +591,18 @@ class UpdateController:
 
         self._set("ready", info=info)
 
-    def install(self, app_dir: Optional[Path] = None, restart: bool = True) -> bool:
-        """Launch the verified installer.
+    def install(self, app_dir: Optional[Path] = None) -> bool:
+        """Stage and launch the independent updater (uninstall + reinstall).
 
         The caller is responsible for safe shutdown of the application after
-        this returns; the installer is launched detached so it survives the
+        this returns; the updater is launched detached so it survives the
         current process exit.
         """
         with self._lock:
             if self._state != "ready" or not self._download_path:
                 return False
             path = self._download_path
-        if not launch_installer(path, app_dir=app_dir, restart=restart):
+            checksum = self._expected_checksum
+        if not launch_updater(path, app_dir=app_dir, expected_checksum=checksum):
             return False
-        cleanup_old_updates(keep=path)
         return True

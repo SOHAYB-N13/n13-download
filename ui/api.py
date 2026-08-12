@@ -864,11 +864,11 @@ class Api:
         return self._updater.get_state()
 
     def install_update(self, restart: bool = True) -> Dict[str, Any]:
-        """Launch the verified installer and schedule safe shutdown.
+        """Stage and launch the independent updater, then shut N13 down.
 
-        The installer is started in a detached helper process so it survives
-        this process exiting. The helper waits for N13 to exit, runs the Inno
-        Setup installer, verifies the installed executable, and restarts N13.
+        The updater is a detached PowerShell process that waits for N13 to
+        exit, uninstalls the old version, deletes user data, installs the new
+        version into the same directory and relaunches N13.
         """
         import sys
         import threading
@@ -886,12 +886,12 @@ class Api:
                 # Give the JS response a moment to return before tearing down.
                 import time
                 time.sleep(0.3)
-                log.info("UPDATE: launching helper and preparing shutdown")
-                ok = self._updater.install(app_dir=app_dir, restart=restart)
+                log.info("UPDATE: launching updater and preparing shutdown")
+                ok = self._updater.install(app_dir=app_dir)
                 if not ok:
-                    log.error("UPDATE: helper launch failed")
+                    log.error("UPDATE: updater launch failed")
                     return
-                log.info("UPDATE: helper launched; shutting down N13")
+                log.info("UPDATE: updater launched; shutting down N13")
                 self.shutdown()
             except Exception as exc:
                 log.error("UPDATE: install thread failed: %s", exc)
