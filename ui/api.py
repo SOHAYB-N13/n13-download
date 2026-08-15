@@ -846,13 +846,13 @@ class Api:
     def check_for_updates(self, manual: bool = False) -> Dict[str, Any]:
         """Trigger a background update check.
 
-        Manual checks always fetch; automatic checks update the last-checked
-        timestamp and are used by the startup-once logic.
+        Both manual and automatic checks record the last-checked timestamp;
+        automatic checks are the startup-once background flow and never show
+        dialogs on their own.
         """
-        if not manual:
-            prefs = self._load_ui_prefs()
-            prefs["update_last_checked"] = datetime.now().isoformat()
-            self._save_ui_prefs(prefs)
+        prefs = self._load_ui_prefs()
+        prefs["update_last_checked"] = datetime.now().isoformat()
+        self._save_ui_prefs(prefs)
         self._updater.check()
         return self._updater.get_state()
 
@@ -863,35 +863,41 @@ class Api:
         self._updater.download()
         return self._updater.get_state()
 
-    def install_update(self, restart: bool = True) -> Dict[str, Any]:
-        """Stage and launch the independent updater, then shut N13 down.
+    def cancel_update_download(self) -> Dict[str, Any]:
+        """Cancel the in-progress installer download (state reset follows)."""
+        self._updater.cancel_download()
+        return self._updater.get_state()
 
-        The updater is a detached PowerShell process that waits for N13 to
-        exit, uninstalls the old version, deletes user data, installs the new
-        version into the same directory and relaunches N13.
+    def install_update(self, restart: bool = True) -> Dict[str, Any]:
+        """Hand the verified installer to the independent PowerShell updater.
+
+        Sequence: the updater script (update.ps1, staged in %TEMP%) is
+        launched detached via powershell.exe and must confirm it is alive
+        BEFORE N13 shuts down; only then does the normal safe-shutdown path
+        run and the process exit.  The PowerShell updater waits for N13 to
+        terminate, runs the real uninstaller (unins000.exe), verifies the old
+        installation is gone, deletes %LOCALAPPDATA%\\N13, installs the new
+        build into the SAME directory, verifies the new N13.exe version,
+        relaunches it and cleans up.  N13 itself never runs the installer.
         """
-        import sys
         import threading
 
         state = self._updater.get_state()
-        if state.get("state") != "ready":
+        if state.get("state") != "ready_to_install":
             log.warning("UPDATE: install requested but updater state is %s", state.get("state"))
-            return {"status": "not_ready"}
-
-        app_dir = Path(sys.executable).resolve().parent
-        log.info("UPDATE: app directory = %s", app_dir)
+            return {"status": "not_ready", "state": state}
 
         def _install_then_exit() -> None:
             try:
                 # Give the JS response a moment to return before tearing down.
                 import time
-                time.sleep(0.3)
-                log.info("UPDATE: launching updater and preparing shutdown")
-                ok = self._updater.install(app_dir=app_dir)
+                time.sleep(0.4)
+                log.info("UPDATE: launching PowerShell updater and preparing shutdown")
+                ok, err = self._updater.install()
                 if not ok:
-                    log.error("UPDATE: updater launch failed")
+                    log.error("UPDATE: updater launch failed (%s)", err)
                     return
-                log.info("UPDATE: updater launched; shutting down N13")
+                log.info("UPDATE: updater acknowledged; shutting down N13")
                 self.shutdown()
             except Exception as exc:
                 log.error("UPDATE: install thread failed: %s", exc)

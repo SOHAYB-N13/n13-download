@@ -1,22 +1,31 @@
-"""GitHub-Releases based updater for N13 — clean reinstall architecture.
+"""Auto-update system for N13 — GitHub Releases + deterministic Windows updater.
 
-The updater never patches the running installation.  The flow is:
+The running N13 process NEVER installs anything itself and NEVER modifies the
+installation directory.  The full flow is:
 
-    check release -> download Setup -> <install>\\Update\\Setup.exe
-    -> copy Setup + a self-contained PowerShell updater to %TEMP%\\N13Updater\\
-    -> launch the updater -> N13 exits
-    -> updater waits for N13 to disappear
-    -> runs unins000.exe (silent) -> waits for uninstall
-    -> verifies the old install is gone -> deletes leftover install files
-    -> deletes %LOCALAPPDATA%\\N13 (user data)
-    -> verifies the downloaded Setup checksum
-    -> installs the new Setup into the SAME install directory
-    -> verifies N13.exe -> launches the new N13
-    -> updater exits
+    check latest release
+    -> download N13-Download-Manager-Setup.exe into %TEMP%\\N13-Updater\\<id>\\
+    -> verify SHA-256 against the official release checksum
+    -> write the independent PowerShell updater (update.ps1) into the staging dir
+    -> launch powershell.exe (detached) with every required parameter
+    -> N13 performs its normal safe shutdown and exits completely
+    -> PowerShell waits for N13 to exit
+    -> PowerShell runs the real uninstaller (<InstallDir>\\unins000.exe)
+    -> PowerShell verifies the old installation is gone (and cleans leftovers)
+    -> PowerShell deletes %LOCALAPPDATA%\\N13
+    -> PowerShell runs the NEW installer into the EXACT same InstallDir
+    -> PowerShell verifies the new N13.exe exists and its version
+    -> PowerShell launches the NEW installed N13.exe
+    -> PowerShell cleans its temporary files and exits
 
-The updater is a standalone PowerShell script with no dependency on Python or
-on files inside the install directory, so uninstalling the old install cannot
-break it.
+The PowerShell updater (``update.ps1``, embedded in this module) is the ONLY
+component that touches the installer after shutdown.  It is fully independent
+of N13: no Python runtime, no WebView, no UI event loop, no N13 threads, and it
+executes entirely from %TEMP% so the uninstaller is free to remove the install
+directory.
+
+User data under ``%LOCALAPPDATA%\\N13`` is intentionally removed by this update
+flow (it is regenerated on the next launch).
 """
 
 from __future__ import annotations
@@ -32,42 +41,142 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import urllib.error
 import urllib.request
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional
-from urllib.error import URLError
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from core.version import VERSION, compare_versions
+from core.version import VERSION, compare_versions, parse_version
 
 log = logging.getLogger("n13")
 
+# --------------------------------------------------------------------------- #
+# Constants
+# --------------------------------------------------------------------------- #
+
+DEFAULT_REPO = "SOHYAB-N13/n13-download"
+GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases/latest"
 INSTALLER_NAME = "N13-Download-Manager-Setup.exe"
 CHECKSUM_NAME = INSTALLER_NAME + ".sha256.txt"
-GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases/latest"
-REQUEST_TIMEOUT = 15
-DOWNLOAD_TIMEOUT = 120
-UPDATER_DIR = "Update"
+PS1_NAME = "update.ps1"
+UPDATER_START_MARKER = "update.started"
+POWERSHELL = "powershell.exe"
+TEMP_ROOT_NAME = "N13-Updater"
 
-_CREATE_FLAGS = (
-    getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    | getattr(subprocess, "DETACHED_PROCESS", 0)
-    | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
-)
+REQUEST_TIMEOUT = 15          # seconds — API / metadata requests
+DOWNLOAD_READ_TIMEOUT = 60    # seconds — per-read timeout while downloading
+UPDATER_START_TIMEOUT = 20.0  # seconds — wait for the updater to confirm start
+
+# Environment overrides (used by tests / support diagnostics only):
+#   N13_UPDATE_API_URL      — full URL replacing the releases/latest endpoint
+#                             (file:// URLs are accepted for local fixtures)
+#   N13_UPDATE_INSTALL_DIR  — overrides the detected installation directory
+
+
+class UpdateState:
+    """Canonical updater states (serialised to the UI as strings)."""
+
+    IDLE = "idle"
+    CHECKING = "checking"
+    UP_TO_DATE = "up_to_date"
+    AVAILABLE = "available"
+    DOWNLOADING = "downloading"
+    VERIFYING = "verifying"
+    READY_TO_INSTALL = "ready_to_install"
+    INSTALLING = "installing"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+# Allowed transitions — keeps the model small and prevents impossible jumps.
+_TRANSITIONS: Dict[str, frozenset] = {
+    UpdateState.IDLE: frozenset({UpdateState.CHECKING}),
+    UpdateState.CHECKING: frozenset({
+        UpdateState.UP_TO_DATE, UpdateState.AVAILABLE, UpdateState.FAILED, UpdateState.IDLE,
+    }),
+    UpdateState.UP_TO_DATE: frozenset({UpdateState.CHECKING, UpdateState.IDLE}),
+    UpdateState.AVAILABLE: frozenset({
+        UpdateState.DOWNLOADING, UpdateState.CHECKING, UpdateState.IDLE,
+    }),
+    UpdateState.DOWNLOADING: frozenset({
+        UpdateState.DOWNLOADING,  # progress ticks (same-state updates)
+        UpdateState.VERIFYING, UpdateState.FAILED, UpdateState.CANCELLED,
+    }),
+    UpdateState.VERIFYING: frozenset({UpdateState.READY_TO_INSTALL, UpdateState.FAILED}),
+    UpdateState.READY_TO_INSTALL: frozenset({
+        UpdateState.INSTALLING, UpdateState.AVAILABLE, UpdateState.CHECKING, UpdateState.IDLE,
+    }),
+    UpdateState.INSTALLING: frozenset({UpdateState.FAILED, UpdateState.IDLE}),
+    UpdateState.FAILED: frozenset({
+        UpdateState.CHECKING, UpdateState.DOWNLOADING, UpdateState.AVAILABLE, UpdateState.IDLE,
+    }),
+    UpdateState.CANCELLED: frozenset({
+        UpdateState.DOWNLOADING, UpdateState.CHECKING, UpdateState.AVAILABLE, UpdateState.IDLE,
+    }),
+}
+
+
+class UpdateError:
+    """Stable error codes surfaced to the UI (never raw tracebacks)."""
+
+    NETWORK = "network"              # cannot reach GitHub / timeout
+    RATE_LIMITED = "rate_limited"    # GitHub API rate limit hit
+    NO_RELEASE = "no_release"        # no suitable stable release found
+    NO_INSTALLER = "no_installer"    # release has no installer asset
+    NO_CHECKSUM = "no_checksum"      # release has no checksum asset
+    CHECKSUM_MISMATCH = "checksum_mismatch"
+    DOWNLOAD_FAILED = "download_failed"
+    UPDATER_FAILED = "updater_failed"  # PowerShell updater could not be started
+    NOT_READY = "not_ready"
+    DEV_MODE = "dev_mode"            # install requested from a source checkout
+
+
+# --------------------------------------------------------------------------- #
+# Release metadata
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class ReleaseInfo:
+    """The relevant parts of a GitHub release."""
+
+    version: str
+    tag: str
+    name: str = ""
+    notes: str = ""
+    published_at: str = ""
+    html_url: str = ""
+    installer_url: str = ""
+    installer_size: int = 0
+    checksum_url: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": self.version,
+            "tag": self.tag,
+            "name": self.name,
+            "notes": self.notes,
+            "published_at": self.published_at,
+            "html_url": self.html_url,
+            "installer_url": self.installer_url,
+            "installer_size": self.installer_size,
+            "has_checksum": bool(self.checksum_url),
+        }
 
 
 def get_current_version() -> str:
-    """Return the installed application version."""
+    """Return the installed application version (authoritative source)."""
     return VERSION
 
 
 def is_newer(remote: str, current: str = VERSION) -> bool:
-    """Return True when *remote* is a newer semantic version than *current*."""
+    """True when *remote* is a newer semantic version than *current*."""
     return compare_versions(remote, current) > 0
 
 
-def _github_request(url: str) -> bytes:
+def _request(url: str, timeout: int = REQUEST_TIMEOUT) -> Tuple[bytes, Dict[str, str]]:
     req = urllib.request.Request(
         url,
         headers={
@@ -75,50 +184,126 @@ def _github_request(url: str) -> bytes:
             "User-Agent": f"N13-Updater/{VERSION}",
         },
     )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-        return resp.read()
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(), dict(resp.headers.items())
 
 
-def fetch_latest_release(repo: str) -> Optional[Dict]:
+def _api_url(repo: str) -> str:
+    override = os.environ.get("N13_UPDATE_API_URL", "").strip()
+    if override:
+        return override
+    return GITHUB_API_URL.format(repo=repo)
+
+
+def _pick_installer_asset(assets: Dict[str, str]) -> str:
+    """Locate the installer download URL among release assets, dynamically."""
+    if INSTALLER_NAME in assets:
+        return assets[INSTALLER_NAME]
+    exes = [name for name in assets if name.lower().endswith(".exe")]
+    setup_like = [n for n in exes if "setup" in n.lower() or "installer" in n.lower()]
+    if len(setup_like) == 1:
+        return assets[setup_like[0]]
+    if len(exes) == 1:
+        return assets[exes[0]]
+    return ""
+
+
+def _pick_checksum_asset(assets: Dict[str, str], installer_name: str) -> str:
+    """Locate the SHA-256 checksum asset for the installer, if published."""
+    if CHECKSUM_NAME in assets:
+        return assets[CHECKSUM_NAME]
+    base = installer_name.rsplit(".", 1)[0].lower()
+    for name, url in assets.items():
+        low = name.lower()
+        if low.endswith(".sha256.txt") or low.endswith(".sha256"):
+            if base in low:
+                return url
+    return ""
+
+
+def fetch_latest_release(repo: str) -> Tuple[Optional[ReleaseInfo], Optional[str]]:
     """Query the latest stable GitHub release for *repo*.
 
-    Returns a dict with ``version``, ``tag``, ``notes``, ``installer_url``,
-    ``checksum_url`` and ``published_at`` on success, or ``None`` on any
-    failure (network, parse, missing asset, etc.).
-
-    ``N13_UPDATE_BASE_URL`` (environment variable) overrides the GitHub API
-    base URL so the release JSON can be served locally during testing.
+    Returns ``(ReleaseInfo, None)`` on success or ``(None, error_code)`` on
+    failure.  Drafts and pre-releases are ignored.  Never raises.
     """
-    if not repo or "/" not in repo:
-        return None
-    base = os.environ.get("N13_UPDATE_BASE_URL", "").strip().rstrip("/")
-    url = (base + "/releases/latest") if base else GITHUB_API_URL.format(repo=repo)
+    repo = (repo or "").strip() or DEFAULT_REPO
+    if "/" not in repo:
+        return None, UpdateError.NO_RELEASE
+    url = _api_url(repo)
+    log.info("UPDATE: check started (repo=%s)", repo)
     try:
-        data = json.loads(_github_request(url).decode("utf-8"))
-        if data.get("prerelease") or data.get("draft"):
-            return None
-        tag = (data.get("tag_name") or "").strip()
-        version = re.sub(r"^v", "", tag, flags=re.IGNORECASE)
-        assets = {a.get("name", ""): a.get("browser_download_url", "") for a in data.get("assets", [])}
-        installer_url = assets.get(INSTALLER_NAME)
-        if not installer_url:
-            return None
-        checksum_url = assets.get(CHECKSUM_NAME)
-        return {
-            "version": version,
-            "tag": tag,
-            "notes": data.get("body", "") or "",
-            "installer_url": installer_url,
-            "checksum_url": checksum_url,
-            "published_at": data.get("published_at", "") or "",
-        }
-    except Exception as exc:
-        log.warning("Update check failed for %s: %s", repo, exc)
-        return None
+        raw, _headers = _request(url)
+    except urllib.error.HTTPError as exc:
+        remaining = exc.headers.get("X-RateLimit-Remaining") if exc.headers else None
+        if exc.code in (403, 429) and (remaining == "0" or exc.code == 429):
+            log.warning("UPDATE: GitHub rate limit hit (HTTP %s)", exc.code)
+            return None, UpdateError.RATE_LIMITED
+        log.warning("UPDATE: release query failed (HTTP %s)", exc.code)
+        return None, UpdateError.NETWORK
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.warning("UPDATE: release query failed: %s", exc)
+        return None, UpdateError.NETWORK
+
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        log.warning("UPDATE: could not parse release metadata: %s", exc)
+        return None, UpdateError.NO_RELEASE
+
+    if not isinstance(data, dict) or data.get("draft") or data.get("prerelease"):
+        return None, UpdateError.NO_RELEASE
+
+    tag = str(data.get("tag_name") or "").strip()
+    version = re.sub(r"^v", "", tag, flags=re.IGNORECASE)
+    if parse_version(version) is None:
+        log.warning("UPDATE: release tag %r is not a semantic version", tag)
+        return None, UpdateError.NO_RELEASE
+
+    assets = {
+        str(a.get("name", "")): str(a.get("browser_download_url", ""))
+        for a in data.get("assets", [])
+        if isinstance(a, dict) and a.get("browser_download_url")
+    }
+    sizes = {
+        str(a.get("name", "")): int(a.get("size", 0) or 0)
+        for a in data.get("assets", [])
+        if isinstance(a, dict)
+    }
+
+    installer_url = _pick_installer_asset(assets)
+    if not installer_url:
+        log.warning("UPDATE: release %s has no installer asset", tag)
+        return None, UpdateError.NO_INSTALLER
+    installer_name = INSTALLER_NAME if INSTALLER_NAME in assets else next(
+        (n for n, u in assets.items() if u == installer_url), INSTALLER_NAME
+    )
+    checksum_url = _pick_checksum_asset(assets, installer_name)
+
+    info = ReleaseInfo(
+        version=version,
+        tag=tag,
+        name=str(data.get("name") or ""),
+        notes=str(data.get("body") or ""),
+        published_at=str(data.get("published_at") or ""),
+        html_url=str(data.get("html_url") or ""),
+        installer_url=installer_url,
+        installer_size=sizes.get(installer_name, 0),
+        checksum_url=checksum_url,
+    )
+    log.info(
+        "UPDATE: latest release=%s current=%s checksum_asset=%s",
+        version, VERSION, "yes" if checksum_url else "no",
+    )
+    return info, None
 
 
-def _parse_checksum(text: str) -> Optional[str]:
-    """Extract the first 64-character hex string from a checksum file."""
+# --------------------------------------------------------------------------- #
+# Checksum + download primitives
+# --------------------------------------------------------------------------- #
+
+def parse_checksum(text: str) -> Optional[str]:
+    """Extract the first 64-character hex token from checksum file content."""
     if not text:
         return None
     for line in text.splitlines():
@@ -126,483 +311,831 @@ def _parse_checksum(text: str) -> Optional[str]:
         if not line:
             continue
         token = line.split()[0].lower()
-        if re.match(r"^[0-9a-f]{64}$", token):
+        if re.fullmatch(r"[0-9a-f]{64}", token):
             return token
     return None
 
 
 def fetch_checksum(checksum_url: str) -> Optional[str]:
-    """Download and parse the SHA-256 checksum file."""
+    """Download and parse the official SHA-256 checksum for the installer."""
     if not checksum_url:
         return None
     try:
-        return _parse_checksum(_github_request(checksum_url).decode("utf-8"))
+        raw, _ = _request(checksum_url)
     except Exception as exc:
-        log.warning("Checksum fetch failed: %s", exc)
+        log.warning("UPDATE: checksum download failed: %s", exc)
         return None
-
-
-def _download(url: str, dest: Path, progress_cb: Optional[Callable[[int, int], None]] = None) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": f"N13-Updater/{VERSION}"})
-    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
-        total = int(resp.headers.get("Content-Length", 0) or 0)
-        written = 0
-        with open(dest, "wb") as f:
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                written += len(chunk)
-                if progress_cb and total:
-                    progress_cb(written, total)
-
-
-def download_installer(url: str, dest: Path, progress_cb: Optional[Callable[[int, int], None]] = None) -> bool:
-    """Download the installer to *dest*.
-
-    Returns ``True`` on success. Any failure is logged and returns ``False``.
-    """
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists():
-            try:
-                dest.unlink()
-            except OSError:
-                pass
-        _download(url, dest, progress_cb)
-        return True
-    except Exception as exc:
-        log.error("Installer download failed: %s", exc)
-        try:
-            dest.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False
+        return parse_checksum(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None
 
 
 def sha256_file(path: Path) -> str:
     """Return the SHA-256 hex digest of *path*."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(64 * 1024), b""):
+        for chunk in iter(lambda: f.read(256 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
 def verify_installer(path: Path, expected_checksum: Optional[str]) -> bool:
-    """Verify *path* against *expected_checksum*.
+    """Verify *path* against the official checksum.
 
-    If no checksum is provided, returns ``False`` (a release without a
-    checksum cannot be trusted).
+    A missing/empty expected checksum always fails — an unverified installer
+    must never be executed.
     """
     if not expected_checksum:
         return False
-    return hmac.compare_digest(sha256_file(path).lower(), expected_checksum.lower())
+    actual = sha256_file(path)
+    ok = hmac.compare_digest(actual.lower(), expected_checksum.lower())
+    log.info("UPDATE: checksum verification %s (sha256=%s)", "OK" if ok else "MISMATCH", actual)
+    return ok
+
+
+class DownloadCancelled(Exception):
+    """Raised inside the download loop when the user cancels."""
+
+
+def download_file(
+    url: str,
+    dest: Path,
+    progress_cb: Optional[Callable[[int, int, float, float], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> None:
+    """Stream *url* to *dest* with progress + cancellation support.
+
+    ``progress_cb(written, total, speed_bps, eta_seconds)`` is invoked
+    periodically.  Raises :class:`DownloadCancelled` when *cancel_event* is
+    set; propagates network errors to the caller.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": f"N13-Updater/{VERSION}"})
+    written = 0
+    started = time.monotonic()
+    last_emit = 0.0
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_READ_TIMEOUT) as resp:
+        total = int(resp.headers.get("Content-Length", 0) or 0)
+        with open(dest, "wb") as f:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise DownloadCancelled()
+                chunk = resp.read(128 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+                now = time.monotonic()
+                if progress_cb and (now - last_emit >= 0.25 or written == total):
+                    last_emit = now
+                    elapsed = max(now - started, 1e-6)
+                    speed = written / elapsed
+                    eta = (total - written) / speed if (total and speed > 0) else 0.0
+                    progress_cb(written, total, speed, eta)
+    if total and written != total:
+        raise IOError(f"incomplete download ({written}/{total} bytes)")
 
 
 # --------------------------------------------------------------------------- #
-# Install-directory + staging paths
+# Paths — staging + install dir
 # --------------------------------------------------------------------------- #
 
-def install_dir() -> Path:
-    """Return the directory N13 is installed into (parent of N13.exe)."""
-    exe = Path(sys.executable).resolve()
-    if exe.name.lower() == "n13.exe":
-        return exe.parent
-    # Development / test fallback: treat the project root as the install dir.
-    return Path(__file__).resolve().parent.parent
-
-
-def update_dir(app_dir: Optional[Path] = None) -> Path:
-    """Return the ``<install>\\Update`` directory used to stage downloads."""
-    d = (app_dir or install_dir()) / UPDATER_DIR
+def temp_root() -> Path:
+    d = Path(tempfile.gettempdir()) / TEMP_ROOT_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def make_update_path(version: str, app_dir: Optional[Path] = None) -> Path:
-    """Return the staged installer path: ``<install>\\Update\\Setup.exe``."""
-    return update_dir(app_dir) / INSTALLER_NAME
+def create_staging_dir(version: str) -> Path:
+    """Dedicated per-update staging dir: ``%TEMP%\\N13-Updater\\<ver>-<id>\\``."""
+    safe = re.sub(r"[^0-9A-Za-z.\-]", "_", version or "unknown")
+    d = temp_root() / f"{safe}-{uuid.uuid4().hex[:8]}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def _user_data_dir() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-    return base / "N13"
+def installed_exe_path() -> Optional[Path]:
+    """The real path of the running installed N13.exe (None in a source tree)."""
+    override = os.environ.get("N13_UPDATE_INSTALL_DIR", "").strip()
+    if override:
+        return Path(override) / "N13.exe"
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve()
+    return None
+
+
+def install_dir() -> Optional[Path]:
+    """The real installation directory (parent of the installed N13.exe).
+
+    Returns ``None`` when running from a source checkout (no installation to
+    update), unless ``N13_UPDATE_INSTALL_DIR`` is set (support/testing).
+    """
+    override = os.environ.get("N13_UPDATE_INSTALL_DIR", "").strip()
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return None
+
+
+def uninstaller_path(install_dir: Path) -> Path:
+    """The Inno Setup uninstaller inside the installation directory."""
+    return Path(install_dir) / "unins000.exe"
 
 
 # --------------------------------------------------------------------------- #
-# Independent updater
+# The independent PowerShell updater (the ONLY post-shutdown updater)
 # --------------------------------------------------------------------------- #
 
-def _ps_q(s: str) -> str:
-    """Escape a value for a single-quoted PowerShell string literal."""
-    return s.replace("'", "''")
+POWERSHELL_UPDATER = r"""# N13 deterministic Windows updater.
+#
+# Runs fully independently of the N13 process: no Python runtime, no WebView,
+# no UI event loop, no N13 threads.  Executes entirely from %TEMP% so the
+# uninstaller is free to remove the installation directory.
+#
+# Flow: wait for N13 exit -> run the real uninstaller -> verify old install is
+# gone -> delete %LOCALAPPDATA%\N13 -> run the NEW installer into the SAME
+# directory -> verify the new N13.exe version -> relaunch -> clean up.
+#
+# Every stage is logged to update.log next to this script.  Any failure aborts
+# immediately with a stage name and exit code; nothing is ever faked.
+[CmdletBinding()]
+param(
+    [int]$N13Pid = 0,
+    [string]$ExePath = "",
+    [string]$InstallDir = "",
+    [string]$Uninstaller = "",
+    [string]$Installer = "",
+    [string]$ExpectedVersion = "",
+    [string]$ExpectedSha256 = ""
+)
 
+$ErrorActionPreference = "Stop"
+$WorkDir = $PSScriptRoot
+$LogFile = Join-Path $WorkDir "update.log"
+$AppExe = "N13.exe"
+$LocalAppData = [Environment]::GetFolderPath("LocalApplicationData")
+$UserDataDir = Join-Path $LocalAppData "N13"
+$N13ExitTimeout = 300
+$UninstallTimeout = 600
+$InstallTimeout = 900
 
-_UPDATER_PS1 = r"""# N13 self-contained updater - uninstall + clean reinstall
-$ErrorActionPreference = 'Continue'
-$InstallDir    = '__INSTALL_DIR__'
-$SetupPath     = '__SETUP_PATH__'
-$ExpectedHash  = '__EXPECTED_HASH__'
-$UserData      = '__USER_DATA__'
-$LogFile       = '__LOG_FILE__'
-
-function Log([string]$msg) {
-    try {
-        Add-Content -LiteralPath $LogFile -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg) -ErrorAction Stop
-    } catch {}
+function Write-Log([string]$Msg) {
+    $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $env:COMPUTERNAME, $Msg
+    try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch {}
 }
 
-Log 'STEP0 updater started'
-if (-not (Test-Path -LiteralPath $InstallDir)) {
-    Log ('STEP0 FATAL install dir missing: ' + $InstallDir)
-    exit 1
+function Exit-Fail([int]$Code, [string]$Stage, [string]$Msg) {
+    Write-Log "[$Stage] FAILED: $Msg (code=$Code)"
+    exit $Code
 }
 
-# 1) Wait until N13 has really exited (poll the process list).
-Log 'STEP1 waiting for N13 to exit'
-$deadline = (Get-Date).AddMinutes(3)
-while ($true) {
-    $p = Get-Process -Name 'N13' -ErrorAction SilentlyContinue
-    if (-not $p) { break }
-    if ((Get-Date) -gt $deadline) {
-        Log 'STEP1 TIMEOUT waiting for N13 to exit'
-        exit 1
+function Test-ProcessAlive([int]$Id) {
+    if ($Id -le 0) { return $false }
+    $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    return ($null -ne $p)
+}
+
+function Wait-ForProcessExit([int]$Id, [int]$TimeoutSec) {
+    # Poll until the exact PID is gone.  Never kills the process.
+    if ($Id -le 0) { return $true }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-ProcessAlive $Id)) { return $true }
+        Start-Sleep -Milliseconds 500
     }
-    Start-Sleep -Milliseconds 800
+    return (-not (Test-ProcessAlive $Id))
 }
-Log 'STEP1 N13 exited'
 
-# 2) Run the official Inno Setup uninstaller (never Remove-Item the app).
-$unins = Join-Path $InstallDir 'unins000.exe'
-if (-not (Test-Path -LiteralPath $unins)) {
-    Log ('STEP2 FATAL uninstaller not found: ' + $unins)
-    exit 1
-}
-Log 'STEP2 running uninstaller'
-$p = Start-Process -FilePath $unins -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
-Log ('STEP2 uninstaller exit code=' + $p.ExitCode)
-
-# 3) Wait until the old installation is really gone.
-Log 'STEP3 verifying old installation removed'
-$deadline = (Get-Date).AddMinutes(2)
-while ($true) {
-    $exe = Test-Path -LiteralPath (Join-Path $InstallDir 'N13.exe')
-    $uni = Test-Path -LiteralPath (Join-Path $InstallDir 'unins000.exe')
-    if (-not $exe -and -not $uni) { break }
-    if ((Get-Date) -gt $deadline) {
-        Log 'STEP3 TIMEOUT waiting for uninstall to finish'
-        break
+function Wait-ForFileUnlocked([string]$Path, [int]$TimeoutSec) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $fs = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+            $fs.Close()
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
     }
-    Start-Sleep -Milliseconds 800
-}
-Log 'STEP3 old installation removed'
-
-# 4) Clean any leftover files in the install directory (install dir only).
-if (Test-Path -LiteralPath $InstallDir) {
-    Log 'STEP4 removing leftover install files'
-    Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    return $false
 }
 
-# 5) Remove N13 user data (only %LOCALAPPDATA%\N13).
-if ($UserData -and (Test-Path -LiteralPath $UserData)) {
-    Log 'STEP5 removing user data'
-    Remove-Item -LiteralPath $UserData -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-# 6) Verify the new installer checksum before running it.
-if (-not (Test-Path -LiteralPath $SetupPath)) {
-    Log ('STEP6 FATAL setup not found: ' + $SetupPath)
-    exit 1
-}
-try {
+function Get-Sha256([string]$Path) {
+    # .NET-based SHA-256 — deliberately avoids Get-FileHash, which is broken
+    # on some machines because PSModulePath puts PowerShell 7 modules before
+    # the Windows PowerShell 5.1 modules (Get-FileHash then fails to load).
     $sha = [System.Security.Cryptography.SHA256]::Create()
-    $fs = [System.IO.File]::OpenRead($SetupPath)
-    $bytes = $sha.ComputeHash($fs)
-    $fs.Dispose()
-    $sha.Dispose()
-} catch {
-    Log ('STEP6 FATAL could not hash setup: ' + $_)
-    exit 1
-}
-$actual = ([System.BitConverter]::ToString($bytes) -replace '-', '').ToLower()
-if ($actual -ne $ExpectedHash) {
-    Log ('STEP6 FATAL checksum mismatch actual=' + $actual + ' expected=' + $ExpectedHash)
-    Remove-Item -LiteralPath $SetupPath -Force -ErrorAction SilentlyContinue
-    exit 1
-}
-Log 'STEP6 checksum OK'
-
-# 7) Install the new version into the SAME install directory.
-$argLine = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=' + $InstallDir + '"'
-Log ('STEP7 running new installer -> ' + $InstallDir)
-$p = Start-Process -FilePath $SetupPath -ArgumentList $argLine -Wait -PassThru
-Log ('STEP7 installer exit code=' + $p.ExitCode)
-if ($p.ExitCode -ne 0) {
-    Log 'STEP7 FATAL new install failed'
-    exit 1
-}
-
-# 8) Verify the new executable exists.
-$newExe = Join-Path $InstallDir 'N13.exe'
-$deadline = (Get-Date).AddMinutes(2)
-while (-not (Test-Path -LiteralPath $newExe)) {
-    if ((Get-Date) -gt $deadline) {
-        Log 'STEP8 FATAL N13.exe not found after install'
-        exit 1
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        $bytes = $sha.ComputeHash($stream)
+        $sb = New-Object System.Text.StringBuilder 64
+        foreach ($b in $bytes) { [void]$sb.Append($b.ToString("x2")) }
+        return $sb.ToString()
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        $sha.Dispose()
     }
-    Start-Sleep -Milliseconds 800
 }
-$ver = (Get-ItemProperty -LiteralPath $newExe).VersionInfo.ProductVersion
-Log ('STEP8 new N13.exe present version=' + $ver)
 
-# 9) Launch the new N13.
-Start-Process -FilePath $newExe
-Log 'STEP9 launched new N13'
-Log 'STEP10 updater done'
+function Get-VersionTuple([string]$V) {
+    $parts = @()
+    foreach ($p in ($V -replace '^v', '').Split('.')) {
+        $n = 0
+        if ([int]::TryParse($p, [ref]$n)) { $parts += $n } else { $parts += 0 }
+    }
+    while ($parts.Count -lt 4) { $parts += 0 }
+    return , $parts
+}
+
+function Compare-VersionLt([string]$A, [string]$B) {
+    $ta = Get-VersionTuple $A
+    $tb = Get-VersionTuple $B
+    for ($i = 0; $i -lt 4; $i++) {
+        if ($ta[$i] -lt $tb[$i]) { return $true }
+        if ($ta[$i] -gt $tb[$i]) { return $false }
+    }
+    return $false
+}
+
+function Get-ProductVersion([string]$Path) {
+    try {
+        $vi = (Get-Item -LiteralPath $Path).VersionInfo
+        if ($vi -and $vi.ProductVersion) { return [string]$vi.ProductVersion }
+    } catch {}
+    return ""
+}
+
+# --- argument sanity -----------------------------------------------------
+if (-not $InstallDir) { Exit-Fail 10 "UNINSTALL" "InstallDir not provided" }
+if (-not (Test-Path -LiteralPath $InstallDir)) { Exit-Fail 11 "UNINSTALL" "InstallDir does not exist: $InstallDir" }
+$AppExePath = Join-Path $InstallDir $AppExe
+if (-not (Test-Path -LiteralPath $Uninstaller)) { Exit-Fail 12 "UNINSTALL" "Uninstaller not found: $Uninstaller" }
+if (-not (Test-Path -LiteralPath $Installer)) { Exit-Fail 13 "VERIFY" "Installer not found: $Installer" }
+
+# --- startup marker so N13 knows the updater is alive and will take over ----
+try { Set-Content -LiteralPath (Join-Path $WorkDir "update.started") -Value "ok" -Encoding ASCII } catch {}
+
+Write-Log "UPDATER_START workdir=$WorkDir"
+Write-Log "UPDATER_START pid=$N13Pid"
+Write-Log "UPDATER_START exe=$ExePath"
+Write-Log "UPDATER_START installDir=$InstallDir"
+Write-Log "UPDATER_START uninstaller=$Uninstaller"
+Write-Log "UPDATER_START installer=$Installer"
+Write-Log "UPDATER_START expectedVersion=$ExpectedVersion"
+
+# --- verify installer checksum (mandatory; never run unverified) ----------
+if ($ExpectedSha256) {
+    $actual = Get-Sha256 $Installer
+    if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
+        Exit-Fail 14 "VERIFY" "Checksum mismatch: actual=$actual expected=$ExpectedSha256"
+    }
+    Write-Log "VERIFY checksum OK ($actual)"
+} else {
+    Exit-Fail 15 "VERIFY" "No checksum metadata available for this release"
+}
+
+# --- wait for N13 to exit --------------------------------------------------
+Write-Log "N13_EXIT waiting for pid=$N13Pid (timeout ${N13ExitTimeout}s)"
+if (-not (Wait-ForProcessExit $N13Pid $N13ExitTimeout)) {
+    Exit-Fail 20 "N13_EXIT" "N13 (pid $N13Pid) did not exit within ${N13ExitTimeout}s"
+}
+Write-Log "N13_EXIT ok"
+
+if (-not (Wait-ForFileUnlocked $AppExePath 120)) {
+    Exit-Fail 21 "N13_EXIT" "N13.exe remained locked after process exit"
+}
+
+# --- run the real uninstaller ----------------------------------------------
+Write-Log "UNINSTALL launching $Uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+try {
+    $null = Start-Process -FilePath $Uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru
+} catch {
+    Exit-Fail 22 "UNINSTALL" "Could not start uninstaller: $($_.Exception.Message)"
+}
+# Inno Setup uninstallers relaunch from a temp copy, so the started stub's
+# exit code is meaningless.  Completion is detected by the unins000 process
+# disappearing AND the old application files being gone.
+$unDone = $false
+$unDeadline = (Get-Date).AddSeconds($UninstallTimeout)
+while ((Get-Date) -lt $unDeadline) {
+    $still = Get-Process -Name "unins000" -ErrorAction SilentlyContinue
+    $appGone = (-not (Test-Path -LiteralPath $AppExePath)) -and (-not (Test-Path -LiteralPath $Uninstaller))
+    if ((-not $still) -and $appGone) { $unDone = $true; break }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $unDone) {
+    Exit-Fail 23 "UNINSTALL" "Uninstaller did not complete within ${UninstallTimeout}s"
+}
+Write-Log "UNINSTALL ok"
+
+# --- verify the old installation is really gone ----------------------------
+$residual = @()
+if (Test-Path -LiteralPath $InstallDir) {
+    $residual = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue)
+}
+if ($residual.Count -gt 0) {
+    Write-Log "UNINSTALL_VERIFY residual items: $($residual.Count) - cleaning the exact captured InstallDir"
+    $cleaned = $false
+    $cleanDeadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $cleanDeadline) {
+        try {
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction Stop
+            $cleaned = $true
+            break
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $cleaned) {
+        Exit-Fail 24 "UNINSTALL_VERIFY" "Could not remove residual old application files in $InstallDir"
+    }
+    Write-Log "UNINSTALL_VERIFY residual old files removed"
+}
+if (Test-Path -LiteralPath $AppExePath) {
+    Exit-Fail 25 "UNINSTALL_VERIFY" "Old N13.exe still exists: $AppExePath"
+}
+Write-Log "UNINSTALL_VERIFY ok (old installation removed)"
+
+# --- delete user data (intentional for this update flow) --------------------
+Write-Log "USER_DATA_DELETE removing $UserDataDir"
+if (Test-Path -LiteralPath $UserDataDir) {
+    try {
+        Remove-Item -LiteralPath $UserDataDir -Recurse -Force -ErrorAction Stop
+    } catch {
+        Exit-Fail 30 "USER_DATA_DELETE" "Could not remove $UserDataDir : $($_.Exception.Message)"
+    }
+}
+if (Test-Path -LiteralPath $UserDataDir) {
+    Exit-Fail 31 "USER_DATA_DELETE" "$UserDataDir still exists after removal attempt"
+}
+Write-Log "USER_DATA_DELETE ok"
+
+# --- run the NEW installer into the SAME installation directory -------------
+Write-Log "INSTALL launching $Installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /DIR=`"$InstallDir`""
+$iproc = $null
+try {
+    $iproc = Start-Process -FilePath $Installer -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL", "/DIR=`"$InstallDir`"") -Wait -PassThru
+} catch {
+    Exit-Fail 40 "INSTALL" "Could not start installer: $($_.Exception.Message)"
+}
+Write-Log "INSTALL installer exit code $($iproc.ExitCode)"
+if ($iproc.ExitCode -ne 0) {
+    Exit-Fail 41 "INSTALL" "Installer failed with exit code $($iproc.ExitCode)"
+}
+
+# --- verify the new installation --------------------------------------------
+if (-not (Test-Path -LiteralPath $AppExePath)) {
+    Exit-Fail 42 "INSTALL_VERIFY" "N13.exe not found after install: $AppExePath"
+}
+$installed = Get-ProductVersion $AppExePath
+Write-Log "INSTALL_VERIFY installedVersion=$installed expected=$ExpectedVersion"
+if ($ExpectedVersion -and (Compare-VersionLt $installed $ExpectedVersion)) {
+    Exit-Fail 43 "INSTALL_VERIFY" "Installed version $installed is older than expected $ExpectedVersion"
+}
+Write-Log "INSTALL_VERIFY ok (version $installed >= $ExpectedVersion)"
+
+# --- launch the NEW installed N13 --------------------------------------------
+try {
+    Start-Process -FilePath $AppExePath -WorkingDirectory $InstallDir | Out-Null
+    Write-Log "RESTART launched $AppExePath"
+} catch {
+    Exit-Fail 50 "RESTART" "Could not launch $AppExePath : $($_.Exception.Message)"
+}
+Start-Sleep -Seconds 3
+$started = Get-Process -Name "N13" -ErrorAction SilentlyContinue
+if ($started) {
+    Write-Log "RESTART ok (N13 running, pid $($started.Id))"
+} else {
+    Write-Log "RESTART warning: N13 process not detected after launch"
+}
+
+# --- clean temporary update files (best effort) ------------------------------
+try {
+    Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction Stop
+    Write-Log "CLEANUP removed $WorkDir"
+} catch {
+    Write-Log "CLEANUP warning: could not remove $WorkDir : $($_.Exception.Message)"
+}
+
+Write-Log "COMPLETE update to $ExpectedVersion succeeded"
 exit 0
 """
 
 
-def render_updater_script(
-    install_dir_: str,
-    setup_path: str,
-    expected_checksum: str,
-    user_data: str,
-    log_file: str,
-) -> str:
-    """Render the standalone PowerShell updater script (used for tests too)."""
-    return (
-        _UPDATER_PS1.replace("__INSTALL_DIR__", _ps_q(install_dir_))
-        .replace("__SETUP_PATH__", _ps_q(setup_path))
-        .replace("__EXPECTED_HASH__", (expected_checksum or "").lower())
-        .replace("__USER_DATA__", _ps_q(user_data))
-        .replace("__LOG_FILE__", _ps_q(log_file))
-    )
+# NOTE: DETACHED_PROCESS is intentionally NOT used — it breaks powershell.exe
+# (a console-subsystem process), which then exits code 0 without executing.
+# CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP are sufficient: the updater is a
+# separate process with no console and its own process group, so it survives
+# N13's exit and is not tied to N13's console/job.
+_CREATE_FLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+)
 
 
-def launch_updater(
+def launch_powershell_updater(
+    staging: Path,
     installer_path: Path,
-    app_dir: Optional[Path] = None,
-    expected_checksum: Optional[str] = None,
-) -> bool:
-    """Stage and launch the independent updater.
+    expected_checksum: str,
+    expected_version: str,
+    app_install_dir: Optional[Path] = None,
+    pid: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Write and launch the independent PowerShell updater; wait for its ack.
 
-    The installer (already verified in Python at download time) is ensured to be
-    inside ``<install>\\Update\\``, then both the installer and the updater script
-    are copied to a unique ``%TEMP%\\N13Updater\\<id>\\`` folder so uninstalling
-    the old install cannot remove them.
+    The updater script and the installer both live in *staging* (outside the
+    installation directory).  Returns ``(True, None)`` only after PowerShell
+    confirmed it is alive and will take over once N13 exits.  Never raises.
     """
-    if not installer_path.exists():
-        log.error("UPDATE: installer not found: %s", installer_path)
-        return False
+    try:
+        target_dir = app_install_dir or install_dir()
+        if target_dir is None:
+            log.error("UPDATE: installation directory unknown (source checkout?)")
+            return False, UpdateError.DEV_MODE
+        target_dir = target_dir.resolve()
+        target_dir = Path(os.path.normpath(target_dir))
 
-    app_dir = (app_dir or install_dir()).resolve()
-    update_dir_path = update_dir(app_dir)
+        exe_path = installed_exe_path() or (target_dir / "N13.exe")
+        uninstaller = uninstaller_path(target_dir)
+        if not uninstaller.is_file():
+            log.error("UPDATE: uninstaller not found: %s", uninstaller)
+            return False, UpdateError.UPDATER_FAILED
 
-    staged = update_dir_path / INSTALLER_NAME
-    if installer_path.resolve() != staged.resolve():
+        # The updater executes entirely from TEMP — never from InstallDir.
+        script = staging / PS1_NAME
+        script.write_text(POWERSHELL_UPDATER, encoding="utf-8")
+
+        ack_file = staging / UPDATER_START_MARKER
         try:
-            shutil.copy2(installer_path, staged)
-        except OSError as exc:
-            log.error("UPDATE: failed to stage installer: %s", exc)
-            return False
-    installer_path = staged
+            ack_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
-    if not installer_path.exists():
-        log.error("UPDATE: staged installer missing: %s", installer_path)
-        return False
-    if installer_path.stat().st_size == 0:
-        log.error("UPDATE: staged installer is empty: %s", installer_path)
-        return False
-
-    work_root = Path(tempfile.gettempdir()) / "N13Updater"
-    work_root.mkdir(parents=True, exist_ok=True)
-    work = work_root / uuid.uuid4().hex
-    work.mkdir(parents=True, exist_ok=True)
-
-    setup_temp = work / INSTALLER_NAME
-    try:
-        shutil.copy2(installer_path, setup_temp)
-    except OSError as exc:
-        log.error("UPDATE: failed to copy installer to temp: %s", exc)
-        return False
-
-    log_file = work / "updater.log"
-    script = render_updater_script(
-        install_dir_=str(app_dir),
-        setup_path=str(setup_temp),
-        expected_checksum=expected_checksum or "",
-        user_data=str(_user_data_dir()),
-        log_file=str(log_file),
-    )
-    script_path = work / "updater.ps1"
-    script_path.write_text(script, encoding="utf-8")
-    log.info("UPDATE: updater script = %s", script_path)
-    log.info("UPDATE: install dir = %s", app_dir)
-
-    try:
+        args = [
+            POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", str(script),
+            "-N13Pid", str(pid or os.getpid()),
+            "-ExePath", str(exe_path),
+            "-InstallDir", str(target_dir),
+            "-Uninstaller", str(uninstaller),
+            "-Installer", str(installer_path),
+            "-ExpectedVersion", expected_version,
+            "-ExpectedSha256", expected_checksum or "",
+        ]
+        log.info(
+            "UPDATE: launching PowerShell updater pid_target=%s install_dir=%s setup=%s",
+            pid or os.getpid(), target_dir, installer_path,
+        )
         proc = subprocess.Popen(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy", "Bypass",
-                "-WindowStyle", "Hidden",
-                "-File", str(script_path),
-            ],
+            args,
             close_fds=True,
             creationflags=_CREATE_FLAGS,
+            cwd=str(staging),
         )
-        log.info("UPDATE: updater launched pid=%s", proc.pid)
-        return True
-    except Exception as exc:
-        log.error("UPDATE: failed to launch updater: %s", exc)
-        return False
+        log.info("UPDATE: PowerShell updater started pid=%s", proc.pid)
 
+        # The updater must confirm it is alive BEFORE N13 shuts down.
+        deadline = time.monotonic() + UPDATER_START_TIMEOUT
+        while time.monotonic() < deadline:
+            if ack_file.is_file():
+                log.info("UPDATE: PowerShell updater acknowledged - safe to shut down")
+                return True, None
+            if proc.poll() is not None:
+                log.error("UPDATE: PowerShell updater exited early (code=%s)", proc.returncode)
+                return False, UpdateError.UPDATER_FAILED
+            time.sleep(0.1)
+        log.error("UPDATE: PowerShell updater did not start within %.0fs", UPDATER_START_TIMEOUT)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return False, UpdateError.UPDATER_FAILED
+    except Exception as exc:
+        log.error("UPDATE: failed to launch PowerShell updater: %s", exc)
+        return False, UpdateError.UPDATER_FAILED
+
+
+# --------------------------------------------------------------------------- #
+# UpdateController — UI-facing state machine (no UI dependencies)
+# --------------------------------------------------------------------------- #
 
 class UpdateController:
-    """UI-facing updater state machine.
+    """Thread-safe updater state machine.
 
-    Keeps the current check/download state and runs network work on a
-    background thread so the pywebview API never blocks.
+    All network/disk work runs on background threads; subscribers receive an
+    immutable snapshot dict on every change.  No UI imports — the bridge layer
+    (``ui/api.py``) forwards snapshots to the frontend.
     """
 
-    def __init__(self, config):
+    def __init__(self, config: Any = None):
         self._config = config
         self._lock = threading.Lock()
-        self._state = "idle"  # idle | checking | available | downloading | ready | error
-        self._progress = 0
-        self._info: Optional[Dict] = None
-        self._error: Optional[str] = None
-        self._download_path: Optional[Path] = None
+        self._state = UpdateState.IDLE
+        self._release: Optional[ReleaseInfo] = None
+        self._error: Optional[Dict[str, str]] = None
+        self._progress: Dict[str, Any] = {
+            "percent": 0, "downloaded_bytes": 0, "total_bytes": 0,
+            "speed_bps": 0.0, "eta_seconds": 0.0,
+        }
+        self._staging: Optional[Path] = None
+        self._installer_path: Optional[Path] = None
         self._expected_checksum: Optional[str] = None
-        self._listeners: list[Callable] = []
+        self._cancel = threading.Event()
+        self._workers: list[threading.Thread] = []
+        self._listeners: list[Callable[[Dict[str, Any]], None]] = []
+
+    # -- state plumbing ---------------------------------------------------- #
 
     @property
     def state(self) -> str:
         with self._lock:
             return self._state
 
-    def subscribe(self, callback: Callable) -> None:
-        self._listeners.append(callback)
+    def subscribe(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        with self._lock:
+            self._listeners.append(callback)
 
-    def _notify(self) -> None:
-        snapshot = self.get_state()
-        for cb in self._listeners:
+    def _notify(self, snapshot: Dict[str, Any]) -> None:
+        with self._lock:
+            listeners = list(self._listeners)
+        for cb in listeners:
             try:
                 cb(snapshot)
             except Exception:
                 pass
 
-    def _set(self, state: str, progress: Optional[int] = None, info: Optional[Dict] = None, error: Optional[str] = None) -> None:
+    def _transition(self, new_state: str, **updates: Any) -> bool:
         with self._lock:
-            self._state = state
-            if progress is not None:
-                self._progress = progress
-            if info is not None:
-                self._info = info
-            if error is not None:
-                self._error = error
-        self._notify()
+            allowed = _TRANSITIONS.get(self._state, frozenset())
+            if new_state not in allowed:
+                log.warning("UPDATE: ignored invalid transition %s -> %s", self._state, new_state)
+                return False
+            self._state = new_state
+            if "release" in updates:
+                self._release = updates["release"]
+            if "error" in updates:
+                self._error = updates["error"]
+            if new_state not in (UpdateState.FAILED,):
+                if "error" not in updates and new_state in (
+                    UpdateState.CHECKING, UpdateState.DOWNLOADING, UpdateState.VERIFYING,
+                    UpdateState.READY_TO_INSTALL, UpdateState.INSTALLING,
+                    UpdateState.UP_TO_DATE, UpdateState.AVAILABLE, UpdateState.CANCELLED,
+                ):
+                    self._error = None
+            if "progress" in updates:
+                self._progress.update(updates["progress"])
+            if new_state == UpdateState.CHECKING:
+                self._progress = {
+                    "percent": 0, "downloaded_bytes": 0, "total_bytes": 0,
+                    "speed_bps": 0.0, "eta_seconds": 0.0,
+                }
+            snapshot = self._snapshot_locked()
+        self._notify(snapshot)
+        return True
 
-    def get_state(self) -> Dict:
+    def _snapshot_locked(self) -> Dict[str, Any]:
+        return {
+            "state": self._state,
+            "current_version": get_current_version(),
+            "release": self._release.to_dict() if self._release else None,
+            "error": dict(self._error) if self._error else None,
+            "progress": dict(self._progress),
+            "download_path": str(self._installer_path) if self._installer_path else None,
+        }
+
+    def get_state(self) -> Dict[str, Any]:
         with self._lock:
-            return {
-                "state": self._state,
-                "progress": self._progress,
-                "info": self._info,
-                "error": self._error,
-                "current_version": get_current_version(),
-                "download_path": str(self._download_path) if self._download_path else None,
-            }
+            return self._snapshot_locked()
+
+    def _fail(self, code: str, message: str) -> None:
+        log.error("UPDATE: failed [%s] %s", code, message)
+        self._transition(UpdateState.FAILED, error={"code": code, "message": message})
+
+    def _spawn(self, target: Callable[..., None], *args: Any) -> None:
+        t = threading.Thread(target=target, args=args, daemon=True, name="n13-updater")
+        with self._lock:
+            self._workers.append(t)
+        t.start()
+
+    # -- check -------------------------------------------------------------- #
 
     def check(self) -> None:
-        """Start a background check. Idempotent while already checking."""
-        with self._lock:
-            if self._state == "checking":
-                return
-            self._state = "checking"
-            self._error = None
-            self._progress = 0
-        self._notify()
-        threading.Thread(target=self._do_check, daemon=True).start()
+        """Start a background check for the latest release (idempotent)."""
+        if not self._transition(UpdateState.CHECKING):
+            return
+        self._spawn(self._do_check)
 
     def _do_check(self) -> None:
-        repo = getattr(self._config, "update_repo", None)
-        info = fetch_latest_release(repo)
+        repo = getattr(self._config, "update_repo", None) or DEFAULT_REPO
+        info, err = fetch_latest_release(repo)
         if info is None:
-            self._set("error", error="Unable to connect to the update server.")
+            self._fail(err or UpdateError.NETWORK, _error_message(err or UpdateError.NETWORK))
             return
-        latest = info.get("version", "")
-        if not latest or not is_newer(latest, get_current_version()):
-            self._set("idle", info={"latest": latest, **info})
+        if not is_newer(info.version, get_current_version()):
+            log.info("UPDATE: up to date (current=%s latest=%s)", get_current_version(), info.version)
+            self._transition(UpdateState.UP_TO_DATE, release=info)
             return
-        self._set("available", info=info)
+        log.info("UPDATE: update available: %s -> %s", get_current_version(), info.version)
+        self._transition(UpdateState.AVAILABLE, release=info)
+
+    # -- download + verify -------------------------------------------------- #
 
     def download(self) -> None:
-        """Download the available installer in the background."""
+        """Download + verify the available installer in the background."""
         with self._lock:
-            if self._state != "available" or not self._info:
-                return
-            info = dict(self._info)
-            self._state = "downloading"
-            self._progress = 0
-            self._error = None
-        self._notify()
-        threading.Thread(target=self._do_download, args=(info,), daemon=True).start()
-
-    def _do_download(self, info: Dict) -> None:
-        version = info.get("version", "unknown")
-        url = info.get("installer_url", "")
-        checksum_url = info.get("checksum_url")
-        if not url:
-            self._set("error", error="Installer URL missing.")
+            release = self._release
+        if release is None:
             return
+        if not self._transition(UpdateState.DOWNLOADING):
+            return
+        self._cancel.clear()
+        self._spawn(self._do_download, release)
 
-        dest = make_update_path(version)
-        self._download_path = dest
-        self._expected_checksum = fetch_checksum(checksum_url) if checksum_url else None
+    def cancel_download(self) -> None:
+        """Cancel an in-progress installer download (no-op otherwise)."""
+        if self.state == UpdateState.DOWNLOADING:
+            log.info("UPDATE: download cancellation requested")
+            self._cancel.set()
 
-        def progress(written: int, total: int) -> None:
+    def _do_download(self, release: ReleaseInfo) -> None:
+        staging = create_staging_dir(release.version)
+        dest = staging / INSTALLER_NAME
+        with self._lock:
+            self._staging = staging
+            self._installer_path = None
+            self._expected_checksum = None
+        log.info("UPDATE: download started: %s -> %s", release.installer_url, dest)
+
+        def on_progress(written: int, total: int, speed: float, eta: float) -> None:
             pct = int(written * 100 / total) if total else 0
-            self._set("downloading", progress=pct)
+            self._transition(UpdateState.DOWNLOADING, progress={
+                "percent": pct,
+                "downloaded_bytes": written,
+                "total_bytes": total,
+                "speed_bps": speed,
+                "eta_seconds": eta,
+            })
 
-        if not download_installer(url, dest, progress):
-            self._download_path = None
-            self._expected_checksum = None
-            self._set("error", error="Installer download failed.")
+        try:
+            download_file(release.installer_url, dest, on_progress, self._cancel)
+        except DownloadCancelled:
+            log.info("UPDATE: download cancelled; removing partial file")
+            _safe_unlink(dest)
+            self._cleanup_staging()
+            self._transition(UpdateState.CANCELLED)
+            return
+        except Exception as exc:
+            log.error("UPDATE: download failed: %s", exc)
+            _safe_unlink(dest)
+            self._cleanup_staging()
+            self._fail(UpdateError.DOWNLOAD_FAILED, _error_message(UpdateError.DOWNLOAD_FAILED))
+            return
+        log.info("UPDATE: download complete (%d bytes)", dest.stat().st_size)
+
+        # Verification phase — mandatory, never skipped.
+        self._transition(UpdateState.VERIFYING)
+        expected = fetch_checksum(release.checksum_url) if release.checksum_url else None
+        if not expected:
+            log.error("UPDATE: release %s publishes no checksum — refusing to continue", release.tag)
+            _safe_unlink(dest)
+            self._cleanup_staging()
+            self._fail(UpdateError.NO_CHECKSUM, _error_message(UpdateError.NO_CHECKSUM))
+            return
+        if not verify_installer(dest, expected):
+            _safe_unlink(dest)
+            self._cleanup_staging()
+            self._fail(UpdateError.CHECKSUM_MISMATCH, _error_message(UpdateError.CHECKSUM_MISMATCH))
             return
 
-        if not self._expected_checksum:
-            self._download_path = None
-            self._set("error", error="Release checksum missing.")
-            return
+        with self._lock:
+            self._installer_path = dest
+            self._expected_checksum = expected
+        log.info("UPDATE: installer verified; ready to install")
+        self._transition(UpdateState.READY_TO_INSTALL, progress={"percent": 100})
 
-        if not verify_installer(dest, self._expected_checksum):
-            try:
-                dest.unlink(missing_ok=True)
-            except OSError:
-                pass
-            self._download_path = None
-            self._expected_checksum = None
-            self._set("error", error="Update verification failed.")
-            return
+    # -- install handoff ----------------------------------------------------- #
 
-        self._set("ready", info=info)
+    def install(self) -> Tuple[bool, Optional[str]]:
+        """Write + launch the independent PowerShell updater and confirm start.
 
-    def install(self, app_dir: Optional[Path] = None) -> bool:
-        """Stage and launch the independent updater (uninstall + reinstall).
-
-        The caller is responsible for safe shutdown of the application after
-        this returns; the updater is launched detached so it survives the
-        current process exit.
+        On success the caller MUST proceed with the normal safe shutdown — the
+        PowerShell updater waits for this process to exit before it uninstalls
+        and installs.
         """
         with self._lock:
-            if self._state != "ready" or not self._download_path:
-                return False
-            path = self._download_path
-            checksum = self._expected_checksum
-        if not launch_updater(path, app_dir=app_dir, expected_checksum=checksum):
-            return False
-        return True
+            if self._state != UpdateState.READY_TO_INSTALL or not self._installer_path:
+                return False, UpdateError.NOT_READY
+            staging = self._staging
+            installer = self._installer_path
+            checksum = self._expected_checksum or ""
+            version = self._release.version if self._release else ""
+        if not self._transition(UpdateState.INSTALLING):
+            return False, UpdateError.NOT_READY
+        ok, err = launch_powershell_updater(
+            staging=staging,
+            installer_path=installer,
+            expected_checksum=checksum,
+            expected_version=version,
+        )
+        if not ok:
+            self._fail(err or UpdateError.UPDATER_FAILED, _error_message(err or UpdateError.UPDATER_FAILED))
+            return False, err
+        return True, None
+
+    def _cleanup_staging(self) -> None:
+        with self._lock:
+            staging = self._staging
+            self._staging = None
+        if staging:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def reset(self) -> None:
+        """Return to IDLE (used when the user dismisses a finished flow)."""
+        with self._lock:
+            current = self._state
+        if current in (UpdateState.UP_TO_DATE, UpdateState.FAILED, UpdateState.CANCELLED):
+            self._transition(UpdateState.IDLE)
+
+
+# --------------------------------------------------------------------------- #
+# Headless update (N13.exe --update-now) — same flow as the UI buttons
+# --------------------------------------------------------------------------- #
+
+_ERROR_MESSAGES = {
+    UpdateError.NETWORK: "Unable to connect to the update server.",
+    UpdateError.RATE_LIMITED: "The update server is rate-limiting requests. Try again later.",
+    UpdateError.NO_RELEASE: "No stable release was found.",
+    UpdateError.NO_INSTALLER: "The latest release has no installer.",
+    UpdateError.NO_CHECKSUM: "Update verification data is unavailable for this release.",
+    UpdateError.CHECKSUM_MISMATCH: "Update verification failed.",
+    UpdateError.DOWNLOAD_FAILED: "The update download failed.",
+    UpdateError.UPDATER_FAILED: "The update updater could not be started.",
+    UpdateError.NOT_READY: "No verified update is ready to install.",
+    UpdateError.DEV_MODE: "Updates can only be installed from an installed build.",
+}
+
+
+def _error_message(code: str) -> str:
+    return _ERROR_MESSAGES.get(code, "Update failed.")
+
+
+def _await_state(controller: UpdateController, targets: set, timeout: float) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = controller.state
+        if state in targets:
+            return state
+        time.sleep(0.2)
+    return controller.state
+
+
+def run_headless_update(config: Any, out: Callable[[str], None] = print) -> int:
+    """Full update flow without the WebView: check -> download -> verify ->
+    handoff -> exit.  Used by ``N13.exe --update-now`` and by the end-to-end
+    update validation.  Returns a process exit code.
+    """
+    controller = UpdateController(config)
+    out(f"N13 {get_current_version()} — checking for updates…")
+    log.info("UPDATE: headless update requested")
+    controller.check()
+    state = _await_state(controller, {
+        UpdateState.UP_TO_DATE, UpdateState.AVAILABLE, UpdateState.FAILED,
+    }, timeout=90)
+    if state == UpdateState.UP_TO_DATE:
+        out("N13 is up to date.")
+        return 0
+    if state != UpdateState.AVAILABLE:
+        err = controller.get_state().get("error") or {}
+        out(f"Update check failed: {err.get('message', 'unknown error')}")
+        return 1
+
+    release = controller.get_state()["release"] or {}
+    out(f"Downloading update {release.get('version', '?')}…")
+    controller.download()
+    state = _await_state(controller, {
+        UpdateState.READY_TO_INSTALL, UpdateState.FAILED, UpdateState.CANCELLED,
+    }, timeout=3600)
+    if state != UpdateState.READY_TO_INSTALL:
+        err = controller.get_state().get("error") or {}
+        out(f"Update failed: {err.get('message', state)}")
+        return 1
+
+    out("Update verified. Handing off to the PowerShell updater…")
+    ok, err = controller.install()
+    if not ok:
+        out(f"Could not start the updater: {_error_message(err or UpdateError.UPDATER_FAILED)}")
+        return 1
+    out("Updater is ready — N13 will now close and the update will install.")
+    # Returning lets the caller exit; the PowerShell updater takes over.
+    return 0
+
+
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass

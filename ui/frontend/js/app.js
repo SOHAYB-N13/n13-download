@@ -514,13 +514,17 @@ const App = {
     } else if (evt.type === "update_state") {
       this._applyUpdateState(evt.state);
       const st = evt.state;
-      if (st.state === "available" && st.info?.version) {
+      if (st.state === "available" && st.release?.version) {
         const skipped = this.state.updateSettings?.skipped_version;
-        if (st.info.version !== skipped && this._updateNotifiedFor !== st.info.version) {
-          this._updateNotifiedFor = st.info.version;
-          Components.toast(I18N.t("update.notify_title", "N13 Update Available"), I18N.fmt("update.notify_body", { version: st.info.version }), "info", 6000);
-          // Also open the dialog so the user can act immediately.
-          this._showUpdateDialog(st.info);
+        if (st.release.version !== skipped && this._updateNotifiedFor !== st.release.version) {
+          this._updateNotifiedFor = st.release.version;
+          // Subtle notification — the user explicitly chooses to view or defer.
+          Components.toast(
+            I18N.t("update.notify_title", "N13 Update Available"),
+            I18N.fmt("update.notify_body", { version: st.release.version }),
+            "info", 10000,
+            { label: I18N.t("update.view_update", "View Update"), onClick: () => this._showUpdateDialog(st.release) },
+          );
         }
       }
     }
@@ -1761,15 +1765,23 @@ const App = {
       ctl = `<div class="update-panel" id="updatePanel">
         <div class="update-meta">
           <div class="update-version-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong id="upCurrentVersion">—</strong></div>
+          <div class="update-version-row"><span>${I18N.t("update.latest_version", "Latest version")}:</span> <strong id="upLatestVersion">—</strong></div>
           <div class="update-status" id="upStatus">${I18N.t("update.check", "Check for updates")}</div>
-          <div class="update-test" data-i18n="update.test_indicator">${I18N.t("update.test_indicator", "Update System Test • 1.0.2")}</div>
           <div class="update-last" id="upLastChecked"></div>
+          <div class="update-skipped" id="upSkippedRow" hidden>
+            <span id="upSkippedText"></span>
+            <button class="btn btn-ghost btn-xs" id="btnResetSkipped">${I18N.t("update.reset_skipped", "Reset skipped updates")}</button>
+          </div>
         </div>
         <div class="update-progress-wrap" id="upProgressWrap" hidden>
           <div class="update-progress-bar" id="upProgressBar" style="--p:0%"></div>
         </div>
+        <div class="update-progress-details" id="upProgressDetails" hidden></div>
         <div class="update-actions">
           <button class="btn btn-ghost" id="btnCheckUpdates">${Utils.icon("refresh", 14)} <span>${I18N.t("update.check", "Check for updates")}</span></button>
+          <button class="btn btn-primary" id="btnDownloadUpdate" hidden>${Utils.icon("download", 14)} <span>${I18N.t("update.download", "Download Update")}</span></button>
+          <button class="btn btn-primary" id="btnInstallUpdate" hidden>${Utils.icon("refresh", 14)} <span>${I18N.t("update.install", "Install Update")}</span></button>
+          <button class="btn btn-ghost" id="btnCancelUpdate" hidden>${Utils.icon("x", 14)} <span>${I18N.t("update.cancel", "Cancel")}</span></button>
           <label class="switch-row update-auto">
             <span class="switch"><input type="checkbox" id="upAutoCheck"><span class="switch-track"></span></span>
             <span class="switch-text"><strong>${I18N.t("update.auto_check", "Automatic update checking")}</strong></span>
@@ -2038,36 +2050,41 @@ const App = {
     }
     const settings = this.state.updateSettings || {};
     Utils.$id("upCurrentVersion").textContent = settings.current_version || "—";
-    Utils.$id("upLastChecked").textContent = settings.last_checked
-      ? I18N.t("update.last_checked", "Last checked") + ": " + new Date(settings.last_checked).toLocaleString()
-      : I18N.t("update.last_checked", "Last checked") + ": " + I18N.t("update.never", "Never");
+    this._renderSkippedRow();
+
     const autoInp = Utils.$id("upAutoCheck");
     if (autoInp) autoInp.checked = !!settings.auto_update_check;
-
-    const statusEl = Utils.$id("upStatus");
-    const btn = Utils.$id("btnCheckUpdates");
-    const progressWrap = Utils.$id("upProgressWrap");
-    const progressBar = Utils.$id("upProgressBar");
-
-    const setStatus = (text) => { if (statusEl) statusEl.textContent = text; };
-    const setBusy = (busy) => {
-      if (btn) { btn.disabled = busy; btn.querySelector("span").textContent = busy ? I18N.t("update.checking", "Checking for updates…") : I18N.t("update.check", "Check for updates"); }
-    };
 
     // Auto toggle
     autoInp?.addEventListener("change", async () => {
       await API.setAutoUpdateCheck(autoInp.checked);
-      if (settings) settings.auto_update_check = autoInp.checked;
+      if (this.state.updateSettings) this.state.updateSettings.auto_update_check = autoInp.checked;
     });
 
     // Manual check
-    btn?.addEventListener("click", async () => {
-      setBusy(true);
-      setStatus(I18N.t("update.checking", "Checking for updates…"));
+    Utils.$id("btnCheckUpdates")?.addEventListener("click", async () => {
       await API.checkForUpdates(true);
-      // State will arrive via events; also fetch immediate state.
       const st = await API.getUpdateState();
       this._applyUpdateState(st, { manual: true });
+    });
+
+    Utils.$id("btnDownloadUpdate")?.addEventListener("click", async () => {
+      await API.downloadUpdate();
+    });
+
+    Utils.$id("btnCancelUpdate")?.addEventListener("click", async () => {
+      await API.cancelUpdateDownload();
+    });
+
+    Utils.$id("btnInstallUpdate")?.addEventListener("click", async () => {
+      await this._confirmInstallUpdate();
+    });
+
+    Utils.$id("btnResetSkipped")?.addEventListener("click", async () => {
+      await API.clearSkippedUpdate();
+      if (this.state.updateSettings) this.state.updateSettings.skipped_version = "";
+      this._renderSkippedRow();
+      Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.skipped_reset", "Skipped updates reset"), "info", 2000);
     });
 
     // Initial state
@@ -2075,134 +2092,258 @@ const App = {
     this._applyUpdateState(initial, { manual: false });
   },
 
+  _renderSkippedRow() {
+    const row = Utils.$id("upSkippedRow");
+    if (!row) return;
+    const skipped = this.state.updateSettings?.skipped_version;
+    row.hidden = !skipped;
+    if (skipped) {
+      const txt = Utils.$id("upSkippedText");
+      if (txt) txt.textContent = I18N.t("update.skipped", "Skipped version") + ": v" + skipped;
+    }
+  },
+
+  _updateErrorText(err) {
+    const code = err?.code || "";
+    const key = {
+      network: "update.unavailable",
+      rate_limited: "update.rate_limited",
+      no_release: "update.no_release",
+      no_installer: "update.no_installer",
+      no_checksum: "update.verification_unavailable",
+      checksum_mismatch: "update.verification_failed",
+      download_failed: "update.download_failed",
+      updater_failed: "update.updater_failed",
+      dev_mode: "update.dev_mode",
+    }[code];
+    if (key) return I18N.t(key, err?.message || "Update failed.");
+    return err?.message || I18N.t("update.failed", "Update failed.");
+  },
+
+  _updateProgressText(p) {
+    const pct = p.percent || 0;
+    const done = Utils.formatSize(p.downloaded_bytes || 0);
+    const total = p.total_bytes ? Utils.formatSize(p.total_bytes) : "—";
+    const speed = p.speed_bps ? Utils.formatSpeed(p.speed_bps) : "";
+    const eta = p.eta_seconds ? Utils.formatETA(Math.max(0, Math.round(p.eta_seconds))) : "";
+    let text = `${pct}% · ${done} / ${total}`;
+    if (speed) text += ` · ${speed}`;
+    if (eta) text += ` · ${I18N.t("update.eta", "ETA")} ${eta}`;
+    return text;
+  },
+
   _applyUpdateState(state, { manual = false } = {}) {
     if (!state) return;
     this.state.updateState = state;
     const panel = Utils.$id("updatePanel");
-    if (!panel) return;
+    if (!panel) { this._syncUpdateDialog(state); return; }
 
     const statusEl = Utils.$id("upStatus");
-    const btn = Utils.$id("btnCheckUpdates");
+    const btnCheck = Utils.$id("btnCheckUpdates");
+    const btnDownload = Utils.$id("btnDownloadUpdate");
+    const btnInstall = Utils.$id("btnInstallUpdate");
+    const btnCancel = Utils.$id("btnCancelUpdate");
     const progressWrap = Utils.$id("upProgressWrap");
     const progressBar = Utils.$id("upProgressBar");
+    const progressDetails = Utils.$id("upProgressDetails");
+    const latestEl = Utils.$id("upLatestVersion");
+    const lastEl = Utils.$id("upLastChecked");
 
     const setStatus = (text) => { if (statusEl) statusEl.textContent = text; };
-    const setBusy = (busy) => {
-      if (btn) { btn.disabled = busy; if (btn.querySelector("span")) btn.querySelector("span").textContent = busy ? I18N.t("update.checking", "Checking for updates…") : I18N.t("update.check", "Check for updates"); }
+    const show = (el, on) => { if (el) el.hidden = !on; };
+    const setCheckBusy = (busy) => {
+      if (btnCheck) {
+        btnCheck.disabled = busy;
+        const span = btnCheck.querySelector("span");
+        if (span) span.textContent = busy ? I18N.t("update.checking", "Checking for updates…") : I18N.t("update.check", "Check for updates");
+      }
     };
 
-    if (state.state === "checking") {
-      setBusy(true);
-      setStatus(I18N.t("update.checking", "Checking for updates…"));
-      if (progressWrap) progressWrap.hidden = true;
-    } else if (state.state === "downloading") {
-      setBusy(true);
-      setStatus(I18N.t("update.downloading", "Downloading update…") + " " + I18N.fmt("update.download_progress", { pct: state.progress || 0 }));
-      if (progressWrap) { progressWrap.hidden = false; progressBar.style.setProperty("--p", (state.progress || 0) + "%"); }
-    } else if (state.state === "ready") {
-      setBusy(false);
-      setStatus(I18N.t("update.title", "Update available") + ": v" + (state.info?.version || ""));
-      if (progressWrap) progressWrap.hidden = true;
-      if (manual) this._showUpdateDialog(state.info);
-    } else if (state.state === "available") {
-      setBusy(false);
-      setStatus(I18N.t("update.title", "Update available") + ": v" + (state.info?.version || ""));
-      if (progressWrap) progressWrap.hidden = true;
-      if (manual) this._showUpdateDialog(state.info);
-    } else if (state.state === "error") {
-      setBusy(false);
-      setStatus(I18N.t("update.error", "Update check failed") + (state.error ? ": " + state.error : ""));
-      if (progressWrap) progressWrap.hidden = true;
-      if (manual) Components.toast(I18N.t("update.error", "Update check failed"), I18N.t("update.unavailable", "Unable to connect to the update server."), "error");
-    } else {
-      // idle / up-to-date
-      setBusy(false);
-      const latest = state.info?.version;
-      if (latest && latest === state.current_version) {
-        setStatus(I18N.t("update.up_to_date", "You're up to date.") + " v" + latest);
-      } else {
-        setStatus(I18N.t("update.check", "Check for updates"));
-      }
-      if (progressWrap) progressWrap.hidden = true;
-      if (manual && (!latest || latest === state.current_version)) {
-        Components.toast(I18N.t("update.up_to_date", "You're up to date."), "v" + (state.current_version || ""), "success", 2200);
-      }
+    const release = state.release || null;
+    if (latestEl) latestEl.textContent = release?.version ? "v" + release.version : "—";
+    if (lastEl) {
+      const lc = this.state.updateSettings?.last_checked;
+      lastEl.textContent = lc
+        ? I18N.t("update.last_checked", "Last checked") + ": " + new Date(lc).toLocaleString()
+        : I18N.t("update.last_checked", "Last checked") + ": " + I18N.t("update.never", "Never");
     }
+
+    const p = state.progress || {};
+    // Reset button visibility; each state enables what it needs.
+    show(btnDownload, false); show(btnInstall, false); show(btnCancel, false);
+    show(progressWrap, false); show(progressDetails, false);
+
+    switch (state.state) {
+      case "checking":
+        setCheckBusy(true);
+        setStatus(I18N.t("update.checking", "Checking for updates…"));
+        break;
+      case "downloading":
+        setCheckBusy(false);
+        setStatus(I18N.t("update.downloading", "Downloading update…"));
+        show(progressWrap, true); show(progressDetails, true); show(btnCancel, true);
+        if (progressBar) progressBar.style.setProperty("--p", (p.percent || 0) + "%");
+        if (progressDetails) progressDetails.textContent = this._updateProgressText(p);
+        break;
+      case "verifying":
+        setStatus(I18N.t("update.verifying", "Verifying update…"));
+        show(progressWrap, true);
+        if (progressBar) progressBar.style.setProperty("--p", "100%");
+        break;
+      case "ready_to_install":
+        setCheckBusy(false);
+        setStatus(I18N.t("update.ready", "Update ready to install."));
+        show(btnInstall, true);
+        break;
+      case "available":
+        setCheckBusy(false);
+        setStatus(I18N.t("update.available", "New update available") + (release?.version ? ": v" + release.version : ""));
+        show(btnDownload, true);
+        if (manual) this._showUpdateDialog(release);
+        break;
+      case "installing":
+        setStatus(I18N.t("update.installing", "Installing update…"));
+        break;
+      case "failed": {
+        setCheckBusy(false);
+        const msg = this._updateErrorText(state.error);
+        setStatus(I18N.t("update.failed", "Update failed.") + " " + msg);
+        if (release) show(btnDownload, true);
+        if (manual) Components.toast(I18N.t("update.failed", "Update failed."), msg, "error");
+        break;
+      }
+      case "cancelled":
+        setCheckBusy(false);
+        setStatus(I18N.t("update.cancelled", "Download cancelled."));
+        if (release) show(btnDownload, true);
+        break;
+      case "up_to_date":
+        setCheckBusy(false);
+        setStatus(I18N.t("update.up_to_date", "You're up to date."));
+        if (manual) Components.toast(I18N.t("update.up_to_date", "You're up to date."), "v" + (state.current_version || ""), "success", 2200);
+        break;
+      default: // idle
+        setCheckBusy(false);
+        setStatus(I18N.t("update.check", "Check for updates"));
+        break;
+    }
+    this._syncUpdateDialog(state);
   },
 
-  async _showUpdateDialog(info) {
-    if (!info || !info.version) return;
-    if (this._updateDialogOpenFor === info.version) return;
-    this._updateDialogOpenFor = info.version;
+  async _showUpdateDialog(release) {
+    if (!release || !release.version) return;
+    // Already open for this flow: just refresh its content.
+    if (this._updateDialog) { this._syncUpdateDialog(this.state.updateState); return; }
 
-    const notesHtml = Utils.escapeHtml(info.notes || I18N.t("update.no_notes", "No release notes provided.")).replace(/\n/g, "<br>");
+    const notesHtml = Utils.escapeHtml(release.notes || I18N.t("update.no_notes", "No release notes provided.")).replace(/\n/g, "<br>");
     const dlg = Components.showModal(`
       <div class="update-dialog-body">
-        <div class="update-dialog-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong>v${Utils.escapeHtml(this.state.updateState?.current_version || "")}</strong></div>
-        <div class="update-dialog-row"><span>${I18N.t("update.new_version", "New version")}:</span> <strong>v${Utils.escapeHtml(info.version)}</strong></div>
+        <div class="update-dialog-row"><span>${I18N.t("update.current_version", "Current version")}:</span> <strong>v${Utils.escapeHtml(this.state.updateState?.current_version || this.state.updateSettings?.current_version || "")}</strong></div>
+        <div class="update-dialog-row"><span>${I18N.t("update.new_version", "New version")}:</span> <strong>v${Utils.escapeHtml(release.version)}</strong></div>
         <div class="update-dialog-label">${I18N.t("update.release_notes", "Release notes")}</div>
         <div class="update-notes">${notesHtml}</div>
-      </div>`, { title: I18N.t("update.title", "Update available"), width: 480 });
-
-    dlg.setFooter(`
-      <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
-      <button class="btn btn-ghost" id="upSkip">${I18N.t("update.skip", "Skip this version")}</button>
-      <button class="btn btn-primary" id="upNow">${I18N.t("update.update_now", "Update now")}</button>`);
-
-    dlg.qs("#upLater").addEventListener("click", () => { this._updateDialogOpenFor = null; dlg.close(); });
-    dlg.qs("#upSkip").addEventListener("click", async () => {
-      await API.skipUpdateVersion(info.version);
-      if (this.state.updateSettings) this.state.updateSettings.skipped_version = info.version;
-      this._updateDialogOpenFor = null;
-      dlg.close();
-      Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.skipped", "Skipped version") + " v" + info.version, "info", 2000);
+        <div class="update-dialog-progress" id="upDlgProgress" hidden>
+          <div class="update-progress-wrap"><div class="update-progress-bar" id="upDlgProgressBar" style="--p:0%"></div></div>
+          <div class="update-progress-details" id="upDlgProgressDetails"></div>
+        </div>
+        <div class="update-dialog-error" id="upDlgError" hidden></div>
+      </div>`, {
+      title: I18N.t("update.title", "Update available"), width: 480,
+      onClose: () => { this._updateDialog = null; },
     });
-    dlg.qs("#upNow").addEventListener("click", async () => {
-      dlg.qs("#upNow").disabled = true;
-      dlg.qs("#upNow").textContent = I18N.t("update.downloading", "Downloading update…");
-      await API.downloadUpdate();
-      this._waitForUpdateReady(dlg);
-    });
+    this._updateDialog = dlg;
+    dlg._renderedState = null;
+    this._syncUpdateDialog(this.state.updateState);
   },
 
-  async _waitForUpdateReady(dlg) {
-    let attempts = 0;
-    const tick = async () => {
-      attempts++;
-      const st = await API.getUpdateState();
-      this._applyUpdateState(st);
-      if (st.state === "ready") {
-        this._updateDialogOpenFor = null;
+  _syncUpdateDialog(state) {
+    const dlg = this._updateDialog;
+    if (!dlg || !state || !state.release) return;
+    const release = state.release;
+    const p = state.progress || {};
+    const progressBox = dlg.qs("#upDlgProgress");
+    const bar = dlg.qs("#upDlgProgressBar");
+    const details = dlg.qs("#upDlgProgressDetails");
+    const errorBox = dlg.qs("#upDlgError");
+    const st = state.state;
+
+    // Live progress updates don't rebuild the footer (would break clicks).
+    if (st === "downloading" || st === "verifying") {
+      if (progressBox) progressBox.hidden = false;
+      if (bar) bar.style.setProperty("--p", (st === "verifying" ? 100 : (p.percent || 0)) + "%");
+      if (details) details.textContent = st === "verifying"
+        ? I18N.t("update.verifying", "Verifying update…")
+        : this._updateProgressText(p);
+      if (dlg._renderedState !== "progress") {
+        dlg._renderedState = "progress";
+        if (errorBox) errorBox.hidden = true;
+        dlg.setFooter(`<button class="btn btn-ghost" id="upDlgCancel">${I18N.t("update.cancel", "Cancel")}</button>`);
+        dlg.qs("#upDlgCancel")?.addEventListener("click", async () => { await API.cancelUpdateDownload(); });
+      }
+      return;
+    }
+
+    if (dlg._renderedState === st) return;
+    dlg._renderedState = st;
+    if (progressBox) progressBox.hidden = true;
+
+    if (st === "ready_to_install") {
+      if (errorBox) errorBox.hidden = true;
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
+        <button class="btn btn-primary" id="upNow">${I18N.t("update.install", "Install Update")}</button>`);
+      dlg.qs("#upLater").addEventListener("click", () => dlg.close());
+      dlg.qs("#upNow").addEventListener("click", async () => { dlg.close(); await this._confirmInstallUpdate(); });
+    } else if (st === "failed") {
+      if (errorBox) { errorBox.hidden = false; errorBox.textContent = this._updateErrorText(state.error); }
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
+        <button class="btn btn-primary" id="upNow">${I18N.t("update.download", "Download Update")}</button>`);
+      dlg.qs("#upLater").addEventListener("click", () => dlg.close());
+      dlg.qs("#upNow").addEventListener("click", async () => { await API.downloadUpdate(); });
+    } else if (st === "cancelled") {
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
+        <button class="btn btn-primary" id="upNow">${I18N.t("update.download", "Download Update")}</button>`);
+      dlg.qs("#upLater").addEventListener("click", () => dlg.close());
+      dlg.qs("#upNow").addEventListener("click", async () => { await API.downloadUpdate(); });
+    } else if (st === "installing") {
+      dlg.setFooter(`<button class="btn btn-primary" disabled>${I18N.t("update.installing", "Installing update…")}</button>`);
+    } else {
+      // available / default
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="upLater">${I18N.t("update.later", "Later")}</button>
+        <button class="btn btn-ghost" id="upSkip">${I18N.t("update.skip", "Skip this version")}</button>
+        <button class="btn btn-primary" id="upNow">${I18N.t("update.download", "Download Update")}</button>`);
+      dlg.qs("#upLater").addEventListener("click", () => dlg.close());
+      dlg.qs("#upSkip").addEventListener("click", async () => {
+        await API.skipUpdateVersion(release.version);
+        if (this.state.updateSettings) this.state.updateSettings.skipped_version = release.version;
+        this._renderSkippedRow();
         dlg.close();
-        await this._confirmInstallUpdate();
-        return;
-      }
-      if (st.state === "error" || attempts > 120) {
-        this._updateDialogOpenFor = null;
-        dlg.qs("#upNow").disabled = false;
-        dlg.qs("#upNow").textContent = I18N.t("update.update_now", "Update now");
-        Components.toast(I18N.t("update.error", "Update check failed"), st.error || I18N.t("update.unavailable", "Unable to connect to the update server."), "error");
-        return;
-      }
-      setTimeout(tick, 500);
-    };
-    tick();
+        Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.skipped", "Skipped version") + " v" + release.version, "info", 2000);
+      });
+      dlg.qs("#upNow").addEventListener("click", async () => { await API.downloadUpdate(); });
+    }
   },
 
   async _confirmInstallUpdate() {
     const stats = await API.getStats();
-    const hasActive = (stats?.running || 0) > 0;
-    if (hasActive) {
+    const active = stats?.running || 0;
+    if (active > 0) {
       const ok = await Components.confirm({
         title: I18N.t("update.title", "Update available"),
-        message: I18N.t("update.install_blocked_active", "Downloads are currently active. Updating N13 requires closing the application."),
-        okText: I18N.t("update.update_now", "Update now"),
+        message: I18N.fmt("update.install_blocked_active", { count: active }),
+        okText: I18N.t("update.update_anyway", "Update Anyway"),
         cancelText: I18N.t("confirm.cancel", "Cancel"),
       });
       if (!ok) return;
     }
     Components.toast(I18N.t("update.title", "Update available"), I18N.t("update.installing", "Installing update…"), "info", 3000);
-    await API.installUpdate(true);
+    const res = await API.installUpdate(true);
+    if (res && res.status === "not_ready") {
+      Components.toast(I18N.t("update.failed", "Update failed."), this._updateErrorText(res.state?.error), "error");
+    }
   },
 
   async _maybeCheckUpdates() {

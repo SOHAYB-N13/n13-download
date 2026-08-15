@@ -138,6 +138,7 @@ const API = {
   async checkForUpdates(manual) { return this._call("check_for_updates", !!manual); },
   async getUpdateState() { return this._call("get_update_state"); },
   async downloadUpdate() { return this._call("download_update"); },
+  async cancelUpdateDownload() { return this._call("cancel_update_download"); },
   async installUpdate(restart) { return this._call("install_update", restart !== false); },
   async skipUpdateVersion(version) { return this._call("skip_update_version", String(version)); },
   async clearSkippedUpdate() { return this._call("clear_skipped_update"); },

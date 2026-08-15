@@ -6,7 +6,7 @@ const Components = {
 
   // ── Toast ──────────────────────────────────────────────────────────
 
-  toast(title, message = "", type = "info", duration = 4200) {
+  toast(title, message = "", type = "info", duration = 4200, action = null) {
     const stack = Utils.$id("toastStack");
     if (!stack) return;
     // Cap the stack — drop the oldest when flooded.
@@ -22,6 +22,7 @@ const Components = {
       <div class="toast-body">
         <div class="toast-title">${Utils.escapeHtml(title)}</div>
         ${message ? `<div class="toast-msg">${Utils.escapeHtml(message)}</div>` : ""}
+        ${action && action.label ? `<button class="toast-action">${Utils.escapeHtml(action.label)}</button>` : ""}
       </div>
       <button class="toast-close icon-btn" aria-label="${I18N.t("toast.dismiss", "Dismiss notification")}">${Utils.icon("x", 14)}</button>
       <span class="toast-life" style="animation-duration:${duration}ms"></span>`;
@@ -32,6 +33,10 @@ const Components = {
       setTimeout(() => el.remove(), 260);
     };
     el.querySelector(".toast-close").addEventListener("click", kill);
+    const actionBtn = el.querySelector(".toast-action");
+    if (actionBtn && action && typeof action.onClick === "function") {
+      actionBtn.addEventListener("click", () => { kill(); action.onClick(); });
+    }
     el.addEventListener("click", (e) => { if (!e.target.closest("button")) kill(); });
     stack.appendChild(el);
     setTimeout(kill, duration);
