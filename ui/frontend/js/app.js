@@ -20,6 +20,9 @@ const App = {
     maximized: false,
     highlightId: null,
     listSig: "",
+    // Explorer-style multi-selection for the Downloads list.
+    selectedIds: new Set(),   // Set of selected task ids
+    selAnchor: null,          // anchor task id for Shift+Click range selection
   },
 
   pages: {
@@ -386,7 +389,11 @@ const App = {
     window.addEventListener("resize", () => Components.hideContextMenu());
 
     document.addEventListener("keydown", (e) => {
-      const typing = /^(input|textarea|select)$/i.test(document.activeElement?.tagName || "");
+      const ae = document.activeElement;
+      const typing = !!(ae && (
+        /^(input|textarea|select)$/i.test(ae.tagName || "") ||
+        ae.isContentEditable ||
+        ae.getAttribute?.("contenteditable") === "true"));
       if (e.ctrlKey && !e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault(); this.openNewDownload();
       } else if (e.ctrlKey && e.key === ",") {
@@ -395,6 +402,18 @@ const App = {
         e.preventDefault(); Utils.$id("globalSearch").focus();
       } else if (e.key === "Escape" && !typing) {
         Components.hideContextMenu();
+        if (this.state.page === "downloads" && this.state.selectedIds.size) {
+          this.state.selectedIds.clear();
+          this.state.selAnchor = null;
+          this._syncSelection();
+        }
+      } else if (e.ctrlKey && (e.key === "a" || e.key === "A") && !typing && this.state.page === "downloads") {
+        e.preventDefault();
+        const vis = this._filteredTasks();
+        this.state.selectedIds.clear();
+        vis.forEach((t) => this.state.selectedIds.add(t.id));
+        this.state.selAnchor = vis.length ? vis[0].id : null;
+        this._syncSelection();
       }
     });
 
@@ -476,6 +495,8 @@ const App = {
       const had = !!this.state.downloads[t.id];
       if (evt.event === "removed") {
         delete this.state.downloads[t.id];
+        this.state.selectedIds.delete(t.id);
+        if (!this.state.selectedIds.size) this.state.selAnchor = null;
         this._removeRow(t.id);
       } else {
         this.state.downloads[t.id] = t;
@@ -548,6 +569,7 @@ const App = {
   // ══════════════════════════════════════════════════════════════════════
 
   rowCallbacks: {
+    onRowSelect(id, e) { App._onRowSelect(id, e); },
     onPause(id) { API.pauseDownload(id); },
     onResume(id) { API.resumeDownload(id); },
     onStart(id) { API.startTask(id); },
@@ -637,6 +659,73 @@ const App = {
 
   _taskArray() { return Object.values(this.state.downloads); },
 
+  // ══════════════════════════════════════════════════════════════════════
+  //  Downloads list multi-selection (Windows File Explorer style)
+  // ══════════════════════════════════════════════════════════════════════
+
+  _onRowSelect(id, e) {
+    const sel = this.state.selectedIds;
+    const ctrl = !!(e && (e.ctrlKey || e.metaKey));
+    const shift = !!(e && e.shiftKey);
+
+    // Current visual order of the rendered list (range selection follows it).
+    const order = Array.from(Utils.$qa("#downloadList .dl-row")).map((r) => r.dataset.id);
+    const clicked = order.indexOf(id);
+
+    if (shift && this.state.selAnchor != null && clicked !== -1) {
+      const a = order.indexOf(this.state.selAnchor);
+      if (a !== -1) {
+        const [lo, hi] = a <= clicked ? [a, clicked] : [clicked, a];
+        const range = new Set(order.slice(lo, hi + 1));
+        if (ctrl) {
+          // Ctrl+Shift: add the range to the current selection (no duplicates).
+          range.forEach((x) => sel.add(x));
+        } else {
+          // Shift: replace the selection with the range.
+          sel.clear();
+          range.forEach((x) => sel.add(x));
+        }
+        // Anchor stays the same across Shift ranges.
+      } else {
+        sel.clear(); sel.add(id);
+        this.state.selAnchor = id;
+      }
+    } else if (ctrl) {
+      // Ctrl+Click: toggle the item, keep the rest of the selection.
+      if (sel.has(id)) sel.delete(id); else sel.add(id);
+      this.state.selAnchor = id;
+    } else {
+      // Normal click: clear previous selection, select only this item.
+      sel.clear(); sel.add(id);
+      this.state.selAnchor = id;
+    }
+    if (!sel.size) this.state.selAnchor = null;
+    this._syncSelection();
+  },
+
+  _syncSelection() {
+    const sel = this.state.selectedIds;
+    const visible = new Set();
+    Utils.$qa("#downloadList .dl-row").forEach((row) => {
+      const id = row.dataset.id;
+      visible.add(id);
+      const on = sel.has(id);
+      row.classList.toggle("sel", on);
+      if (on) row.setAttribute("aria-selected", "true");
+      else row.removeAttribute("aria-selected");
+    });
+    // Drop stale ids / anchor that are no longer in the current view.
+    let pruned = false;
+    sel.forEach((id) => { if (!visible.has(id)) { sel.delete(id); pruned = true; } });
+    if (pruned && !sel.size) this.state.selAnchor = null;
+    if (this.state.selAnchor != null && !visible.has(this.state.selAnchor)) this.state.selAnchor = null;
+  },
+
+  _clearSelection() {
+    this.state.selectedIds.clear();
+    this.state.selAnchor = null;
+  },
+
   _filteredTasks() {
     const { filter, search, sortKey, sortDir } = this.state;
     let list = this._taskArray();
@@ -695,6 +784,7 @@ const App = {
     if (!this._taskArray().length) {
       headEl.hidden = true;
       listEl.innerHTML = "";
+      this._clearSelection();
       emptyEl.replaceChildren(Components.emptyState({
         icon: "download",
         title: I18N.t("empty.no_downloads", "No downloads yet"),
@@ -709,6 +799,7 @@ const App = {
     if (!tasks.length) {
       headEl.hidden = true;
       listEl.innerHTML = "";
+      this._clearSelection();
       emptyEl.replaceChildren(Components.emptyState({
         icon: "search",
         title: I18N.t("empty.nothing_matches", "Nothing matches"),
@@ -723,6 +814,7 @@ const App = {
     const frag = document.createDocumentFragment();
     tasks.forEach((t) => frag.appendChild(Components.renderRow(t, this.rowCallbacks)));
     listEl.replaceChildren(frag);
+    this._syncSelection();
 
     if (this.state.highlightId) {
       const row = listEl.querySelector(`[data-id="${this.state.highlightId}"]`);

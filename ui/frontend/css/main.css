@@ -867,6 +867,12 @@ body.sidebar-collapsed .nav-indicator { left: 4px; }
   background: var(--bg-card);
   box-shadow: var(--shadow-sm);
 }
+.dl-row.sel,
+.dl-row.sel:hover {
+  border-color: var(--accent-ring);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-card));
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 4px 18px var(--accent-ring);
+}
 .dl-row.flash { animation: flash 1.6s var(--ease-out); }
 
 .dl-ico {

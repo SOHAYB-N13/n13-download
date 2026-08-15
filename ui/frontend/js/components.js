@@ -442,7 +442,11 @@ const Components = {
   _wireRow(row, task, cb) {
     row.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-act]");
-      if (!btn) return;
+      if (!btn) {
+        // Plain row click (not a control): hand it to the selection handler.
+        if (cb && typeof cb.onRowSelect === "function") cb.onRowSelect(task.id, e);
+        return;
+      }
       const act = btn.dataset.act;
       if (act === "pause") cb.onPause(task.id);
       else if (act === "resume") cb.onResume(task.id);
