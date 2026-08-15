@@ -420,8 +420,8 @@ const App = {
       if (urls.length === 1) {
         this.openNewDownload(urls[0]);
       } else {
-        const dir = (this.state.settings && this.state.settings.download_dir) || "";
-        const n = await API.addBatch(urls, dir);
+        // No explicit folder: the backend routes each URL to its category dir.
+        const n = await API.addBatch(urls, "");
         Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${n} ${I18N.t("batch.queued", "queued")}`, "success");
         this.navigate("downloads");
       }
@@ -1398,7 +1398,8 @@ const App = {
         Components.toast(I18N.t("toast.no_urls", "No URLs"), I18N.t("batch.no_urls_msg", "Paste at least one valid http(s) link"), "warning");
         return;
       }
-      const dir = Utils.$id("batchDir").value.trim() || this.state.settings?.download_dir || "";
+      // Empty folder => backend applies per-file category routing.
+      const dir = Utils.$id("batchDir").value.trim();
       const count = await API.addBatch(urls, dir);
       Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
       area.value = "";
@@ -1418,7 +1419,7 @@ const App = {
         Components.toast(I18N.t("toast.invalid_pattern", "Invalid pattern"), I18N.t("batch.invalid_pattern_msg", "Use * where the number goes, e.g. file-*.zip"), "warning");
         return;
       }
-      const dir = Utils.$id("patternDir").value.trim() || this.state.settings?.download_dir || "";
+      const dir = Utils.$id("patternDir").value.trim();
       const start = parseInt(Utils.$id("patternStart").value, 10) || 1;
       const padding = parseInt(Utils.$id("patternPadding").value, 10) || 2;
       const btn = Utils.$id("btnPatternScan");

@@ -8,6 +8,8 @@ integration, and security defaults.  Values are persisted to JSON via
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,26 @@ def _default_download_dir() -> str:
         except OSError:
             continue
     return str(Path.home())
+
+
+def _safe_category_dirname(category: str) -> Optional[str]:
+    """Return *category* as a single safe directory name, or None.
+
+    Guards against path traversal / separator injection coming from arbitrary
+    rule category values, while allowing the built-in category names (and
+    simple custom names containing letters, digits, spaces, hyphens,
+    underscores or dots).
+    """
+    name = (category or "").strip()
+    if not name or name in (".", ".."):
+        return None
+    if "/" in name or "\\" in name or "\x00" in name:
+        return None
+    if Path(name).name != name:
+        return None
+    if re.search(r'[<>:"|?*]', name):
+        return None
+    return name
 
 
 @dataclass
@@ -272,16 +294,25 @@ class AppConfig:
             return None
 
     def resolve_category_dir(self, category: Optional[str], base_dir: str) -> str:
-        """Return the per-category destination directory override, if any.
+        """Return the destination directory for *category*.
 
-        Falls back to *base_dir* when the category has no configured override
-        (or the category is empty/General).  The returned directory is *not*
-        created here — the download engine creates it on demand.
+        Precedence:
+        1. An explicit per-category override in ``category_dirs``.
+        2. Automatic category routing: ``<base_dir>/<category>`` (e.g.
+           ``Downloads/Videos``) for any safe, non-``General`` category.
+        3. ``base_dir`` itself (no category / General / unsafe category name).
+
+        The returned directory is *not* created here — the download engine
+        creates it on demand.
         """
         cat = (category or "").strip()
         overrides = self.category_dirs or {}
-        if cat and cat != "General" and overrides.get(cat):
-            return overrides[cat]
+        if cat and cat != "General":
+            if overrides.get(cat):
+                return overrides[cat]
+            name = _safe_category_dirname(cat)
+            if name and base_dir:
+                return os.path.join(base_dir, name)
         return base_dir or ""
 
     def set_schedule_datetime(self, value: Optional[datetime]) -> None:
