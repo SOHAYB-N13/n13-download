@@ -41,10 +41,10 @@ def _main_script_path() -> Path:
     return _project_root() / "d.py"
 
 
-def create_chrome_extension() -> Path:
+def create_chrome_extension(dst: Optional[Path] = None) -> Path:
     """Copy extension template to chrome_extension/ with icons and token placeholder."""
     src = _project_root() / "extension"
-    dst = _project_root() / "chrome_extension"
+    dst = dst or (_project_root() / "chrome_extension")
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
@@ -61,7 +61,7 @@ def token_file_payload(config: AppConfig) -> str:
 
 
 def sync_extension_token(config: AppConfig, ext_dir: Optional[Path] = None) -> Optional[Path]:
-    """Write the current live-server token into the extension's ``token.json``.
+    """Ensure the installable ``chrome_extension/`` exists and has the right token.
 
     The token is stable in ``config.json`` (``config/loader._ensure_token``), but
     the extension's ``token.json`` is a snapshot created by
@@ -69,13 +69,18 @@ def sync_extension_token(config: AppConfig, ext_dir: Optional[Path] = None) -> O
     foreign config), the browser extension reports "authorization failed".
 
     This idempotent sync is the reliable recovery mechanism: it is run every
-    time the Live Server starts, so the installable ``chrome_extension/`` copy
-    always carries the token the running server actually validates.  It never
-    invents or rotates the token — it only mirrors the existing credential.
+    time the Live Server starts.  If the extension copy does not exist yet it is
+    generated from the bundled template first, so a fresh install always ends up
+    with a loadable, correctly-authenticated extension (no manual "Create
+    Chrome extension copy" step required).  It never invents or rotates the
+    token — it only mirrors the existing credential.
     """
     ext_dir = ext_dir or (_project_root() / "chrome_extension")
     if not ext_dir.is_dir():
-        return None
+        try:
+            ext_dir = create_chrome_extension(ext_dir)
+        except Exception:
+            return None
     try:
         token_path = ext_dir / "token.json"
         token_path.write_text(token_file_payload(config), encoding="utf-8")
