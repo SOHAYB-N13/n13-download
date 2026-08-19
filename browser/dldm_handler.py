@@ -45,7 +45,13 @@ def decode_url(arg: str) -> str:
 
 
 def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = None) -> None:
-    """Launch N13. If *url_file* is provided, pass it as a browser download."""
+    """Launch N13 in GUI mode (which auto-starts the authenticated Live Server).
+
+    If *url_file* is provided, pass it as a cold-start browser download (the GUI
+    drains it once ready).  The GUI is used for both the ``dldm://launch`` signal
+    and the ``dldm://<url>`` flow so the browser extension can always reach the
+    authenticated local API after startup.
+    """
     main_script = project_root / "d.py"
     if sys.platform == "win32":
         bat_path = Path(tempfile.gettempdir()) / f"dldm_run_{uuid.uuid4().hex}.bat"
@@ -53,7 +59,7 @@ def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = 
         bat_content = (
             "@echo off\n"
             "chcp 65001 >nul 2>&1\n"
-            f'"{python_exe}" "{main_script}"{url_arg}\n'
+            f'"{python_exe}" "{main_script}" --gui{url_arg}\n'
             f'del "{url_file}" 2>nul\n' if url_file else ""
             'del "%~f0" 2>nul\n'
         )
@@ -64,7 +70,7 @@ def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = 
             cwd=str(project_root),
         )
     else:
-        args = [python_exe, str(main_script)]
+        args = [python_exe, str(main_script), "--gui"]
         if url_file:
             args.extend(["--from-browser", "--url-file", str(url_file)])
         subprocess.Popen(args, cwd=str(project_root))

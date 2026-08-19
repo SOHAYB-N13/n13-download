@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N13 Link Grabber</title>
+  <link rel="stylesheet" href="grabber.css">
+</head>
+<body>
+  <div class="n13-grabber">
+    <header class="n13-header">
+      <img src="icon128.png" alt="N13" class="n13-logo">
+      <div>
+        <h1 data-i18n="linkGrabber">N13 Link Grabber</h1>
+        <p class="n13-subtitle" data-i18n="extDescription">Send browser downloads to N13 Download Manager</p>
+      </div>
+    </header>
+
+    <div class="n13-grab-summary" id="summary"></div>
+
+    <div class="n13-grab-toolbar">
+      <button class="n13-btn n13-btn-ghost" id="selectAllBtn" data-i18n="selectAll">Select All</button>
+      <button class="n13-btn n13-btn-ghost" id="clearBtn" data-i18n="deselectAll">Clear</button>
+      <span class="n13-grab-count" id="count">—</span>
+    </div>
+
+    <div class="n13-grab-list" id="list"></div>
+    <div class="n13-grab-empty" id="empty" hidden></div>
+
+    <div class="n13-grab-footer">
+      <button class="n13-btn n13-btn-ghost" id="closeBtn" data-i18n="close">Close</button>
+      <button class="n13-btn n13-btn-primary" id="addBtn" data-i18n="addToQueue">Add to Download Queue</button>
+    </div>
+    <div class="n13-msg" id="msg"></div>
+  </div>
+
+  <script src="shared/i18n.js"></script>
+  <script src="grabber.js"></script>
+</body>
+</html>

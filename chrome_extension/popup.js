@@ -1,4 +1,4 @@
-/** N13 extension popup. */
+/** N13 extension popup — status + actions. */
 (function () {
   "use strict";
 
@@ -7,9 +7,20 @@
 
   const $ = (id) => document.getElementById(id);
 
+  function sendMessage(msg) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(msg, (r) => {
+          if (chrome.runtime.lastError) return resolve({});
+          resolve(r || {});
+        });
+      } catch (e) { resolve({}); }
+    });
+  }
+
   async function init() {
     const res = await sendMessage({ action: "settings_get" });
-    settings = res?.settings || { language: "en" };
+    settings = res.settings || { language: "en" };
     i18n = new N13_I18N(settings.language);
     document.documentElement.setAttribute("dir", i18n.isRtl() ? "rtl" : "ltr");
     applyTranslations();
@@ -19,73 +30,78 @@
     fillCurrentPage();
   }
 
-  function sendMessage(msg) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage(msg, (response) => {
-        if (chrome.runtime.lastError) return resolve({});
-        resolve(response || {});
-      });
-    });
-  }
-
   function applyTranslations() {
     document.querySelectorAll("[data-i18n]").forEach((el) => {
-      const key = el.getAttribute("data-i18n");
-      el.textContent = i18n.t(key);
+      el.textContent = i18n.t(el.getAttribute("data-i18n"));
     });
     document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
-      const key = el.getAttribute("data-i18n-placeholder");
-      el.placeholder = i18n.t(key);
+      el.placeholder = i18n.t(el.getAttribute("data-i18n-placeholder"));
     });
   }
 
-  function showMsg(text, ok) {
-    const el = $("msg");
+  function showMsg(el, text, ok) {
+    if (!el) return;
     el.textContent = text;
     el.className = "n13-msg visible " + (ok ? "ok" : "err");
-    setTimeout(() => el.classList.remove("visible"), 3200);
+    clearTimeout(showMsg._t);
+    showMsg._t = setTimeout(() => el.classList.remove("visible"), 3200);
   }
 
   async function refreshStatus() {
-    const res = await sendMessage({ action: "health", timeout: 1500 });
-    const connected = !!res?.ok;
+    const res = await sendMessage({ action: "status_get" });
+    const state = (res && res.state) || "disconnected";
+    let label, connected = false;
+    if (state === "ready" || state === "authorized" || state === "connected") {
+      label = i18n.t("statusConnected"); connected = true;
+    } else if (state === "connecting" || state === "authenticating" || state === "reconnecting") {
+      label = i18n.t("statusConnecting");
+    } else if (state === "unauthorized") {
+      label = i18n.t("statusAuthError");
+    } else {
+      label = i18n.t("statusNotRunning");
+    }
     $("statusDot").classList.toggle("connected", connected);
-    $("statusText").textContent = i18n.t(connected ? "statusConnected" : "statusNotRunning");
+    $("statusText").textContent = label;
   }
 
   async function fillCurrentPage() {
     const res = await sendMessage({ action: "get_current_tab_url" });
-    const url = res?.url || "";
+    const url = (res && res.url) || "";
     $("downloadPageBtn").disabled = !/^https?:\/\//i.test(url);
   }
 
   function extractUrls(text) {
-    return text.split("\n").map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+    return String(text || "").split("\n").map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
   }
 
   async function sendUrls(urls) {
-    if (!urls.length) {
-      showMsg(i18n.t("noLinksFound"), false);
-      return;
-    }
+    if (!urls.length) { showMsg($("msg"), i18n.t("noLinksFound"), false); return; }
     $("downloadBtn").disabled = true;
-    const msg = urls.length === 1
+    const res = await sendMessage(urls.length === 1
       ? { action: "download", url: urls[0] }
-      : { action: "download_many", urls: urls, label: "popup" };
-    const res = await sendMessage(msg);
+      : { action: "download_many", urls: urls, label: "popup" });
     $("downloadBtn").disabled = false;
-    if (res?.status === "sent") {
-      showMsg(i18n.t("sentToQueue"), true);
+    if (res.status === "sent" && res.partial) {
+      showMsg($("msg"), i18n.t("grabberPartial")
+        .replace("{n}", String(res.accepted || 0))
+        .replace("{total}", String(res.total || urls.length))
+        .replace("{rejected}", String(res.rejected || 0)), false);
       $("urlInput").value = "";
       loadRecent();
+    } else if (res.status === "sent") {
+      showMsg($("msg"), i18n.t("sentToQueue"), true);
+      $("urlInput").value = "";
+      loadRecent();
+    } else if (res.reason === "unauthorized") {
+      showMsg($("msg"), i18n.t("authFailed"), false);
     } else {
-      showMsg(i18n.t("failedToSend"), false);
+      showMsg($("msg"), i18n.t("failedToSend"), false);
     }
   }
 
   async function loadRecent() {
     const res = await sendMessage({ action: "recent_get" });
-    const list = res?.recent || [];
+    const list = (res && res.recent) || [];
     const ul = $("recentList");
     ul.innerHTML = "";
     if (!list.length) {
@@ -96,53 +112,47 @@
     list.slice(0, 8).forEach((item) => {
       const li = document.createElement("li");
       li.title = item.url;
-      li.innerHTML = `<span class="n13-url">${escapeHtml(item.url)}</span>`;
+      const span = document.createElement("span");
+      span.className = "n13-url";
+      span.textContent = item.url;
+      li.appendChild(span);
       li.addEventListener("click", () => sendUrls([item.url]));
       ul.appendChild(li);
     });
     $("recentSection").style.display = "block";
   }
 
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
+  async function openGrabber() {
+    showMsg($("grabMsg"), i18n.t("scanning"), true);
+    const res = await sendMessage({ action: "grab_links" });
+    if (res && res.ok && res.urls.length) {
+      await sendMessage({ action: "open_grabber", urls: res.urls });
+      showMsg($("grabMsg"), "", true);
+    } else {
+      showMsg($("grabMsg"), i18n.t("grabbedNone"), false);
+    }
   }
 
   function bindEvents() {
     $("downloadBtn").addEventListener("click", () => sendUrls(extractUrls($("urlInput").value)));
     $("urlInput").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendUrls(extractUrls($("urlInput").value));
-      }
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendUrls(extractUrls($("urlInput").value)); }
     });
-
     $("downloadPageBtn").addEventListener("click", async () => {
       const res = await sendMessage({ action: "get_current_tab_url" });
-      if (res?.url) sendUrls([res.url]);
+      if (res && res.url) sendUrls([res.url]);
     });
-
+    $("grabBtn").addEventListener("click", openGrabber);
     $("clearRecentBtn").addEventListener("click", async () => {
       await sendMessage({ action: "recent_clear" });
       loadRecent();
     });
-
-    $("openN13Btn").addEventListener("click", () => {
-      // Prefer the dldm:// protocol to launch the app; a harmless URL triggers it.
-      chrome.tabs.create({ url: "dldm://launch", active: true }).catch(() => {});
-    });
-
-    $("settingsBtn").addEventListener("click", () => {
-      chrome.runtime.openOptionsPage();
-    });
-
+    $("openN13Btn").addEventListener("click", () => sendMessage({ action: "open_n13" }));
+    $("settingsBtn").addEventListener("click", () => chrome.runtime.openOptionsPage());
     $("aboutBtn").addEventListener("click", () => {
       const manifest = chrome.runtime.getManifest();
-      showMsg(`${i18n.t("aboutText")} ${i18n.t("version")} ${manifest.version}`, true);
+      showMsg($("msg"), `${i18n.t("aboutText")} ${i18n.t("version")} ${manifest.version}`, true);
     });
-
-    // Refresh connection status every 4s while popup is open.
     setInterval(refreshStatus, 4000);
   }
 

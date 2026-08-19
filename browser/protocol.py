@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
 import urllib.parse
 import webbrowser
 from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -48,6 +50,38 @@ def create_chrome_extension() -> Path:
     shutil.copytree(src, dst)
     ensure_extension_icons(dst)
     return dst
+
+
+def token_file_payload(config: AppConfig) -> str:
+    """The exact token.json content the extension expects for *config*."""
+    return json.dumps({
+        "live_server_url": f"http://127.0.0.1:{config.live_server_port}/download",
+        "token": config.live_server_token,
+    })
+
+
+def sync_extension_token(config: AppConfig, ext_dir: Optional[Path] = None) -> Optional[Path]:
+    """Write the current live-server token into the extension's ``token.json``.
+
+    The token is stable in ``config.json`` (``config/loader._ensure_token``), but
+    the extension's ``token.json`` is a snapshot created by
+    ``create_chrome_extension``.  If the two ever drift (a regenerated or
+    foreign config), the browser extension reports "authorization failed".
+
+    This idempotent sync is the reliable recovery mechanism: it is run every
+    time the Live Server starts, so the installable ``chrome_extension/`` copy
+    always carries the token the running server actually validates.  It never
+    invents or rotates the token — it only mirrors the existing credential.
+    """
+    ext_dir = ext_dir or (_project_root() / "chrome_extension")
+    if not ext_dir.is_dir():
+        return None
+    try:
+        token_path = ext_dir / "token.json"
+        token_path.write_text(token_file_payload(config), encoding="utf-8")
+        return token_path
+    except OSError:
+        return None
 
 
 def register_protocol() -> bool:

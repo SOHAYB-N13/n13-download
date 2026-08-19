@@ -374,6 +374,14 @@ def run_live_server(config: AppConfig, session: SessionManager) -> None:
     if not server.start():
         return
 
+    # Keep the installable extension's token.json in sync with the real token
+    # this server now validates (idempotent; never rotates the credential).
+    try:
+        from browser.protocol import sync_extension_token
+        sync_extension_token(config)
+    except Exception:
+        pass
+
     port = config.live_server_port
     host = config.live_server_host or "127.0.0.1"
     console.print(

@@ -570,30 +570,50 @@ const App = {
 
   rowCallbacks: {
     onRowSelect(id, e) { App._onRowSelect(id, e); },
-    onPause(id) { API.pauseDownload(id); },
-    onResume(id) { API.resumeDownload(id); },
-    onStart(id) { API.startTask(id); },
-    onRetry(id) { API.retryDownload(id); },
-    async onCancel(id) {
+    // Resolve the action target list for a right-clicked task (context menu).
+    targetsFor(id) { return App._actionTargetIds(id); },
+
+    onPause(x) { App._forEachId(App._asIds(x), (id) => API.pauseDownload(id)); },
+    onResume(x) { App._forEachId(App._asIds(x), (id) => API.resumeDownload(id)); },
+    onStart(x) { App._forEachId(App._asIds(x), (id) => API.startTask(id)); },
+    onRetry(x) { App._forEachId(App._asIds(x), (id) => API.retryDownload(id)); },
+    async onCancel(x) {
+      const ids = App._asIds(x);
+      const n = ids.length;
       const ok = await Components.confirm({
         title: I18N.t("confirm.cancel_download", "Cancel download"),
-        message: I18N.t("confirm.cancel_download_msg", "Stop this download? Progress is saved so you can resume later."),
+        message: n > 1
+          ? I18N.t("confirm.cancel_download_multi", "Cancel {n} downloads?").replace("{n}", n)
+          : I18N.t("confirm.cancel_download_msg", "Stop this download? Progress is saved so you can resume later."),
         okText: I18N.t("act.cancel", "Cancel"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true,
       });
-      if (ok) API.cancelDownload(id);
+      if (ok) App._forEachId(ids, (id) => API.cancelDownload(id));
     },
-    async onRemove(id) {
+    async onRemove(x) {
+      const ids = App._asIds(x);
+      const n = ids.length;
       const ok = await Components.confirm({
         title: I18N.t("confirm.remove_download", "Remove download"),
-        message: I18N.t("confirm.remove_download_msg", "Remove this entry from the list? The file on disk is kept."),
+        message: n > 1
+          ? I18N.t("confirm.remove_download_multi", "Remove {n} selected downloads?").replace("{n}", n)
+          : I18N.t("confirm.remove_download_msg", "Remove this entry from the list? The file on disk is kept."),
         okText: I18N.t("act.remove", "Remove"), cancelText: I18N.t("confirm.keep", "Keep"), danger: true,
       });
-      if (ok) API.removeDownload(id);
+      if (ok) App._forEachId(ids, (id) => API.removeDownload(id));
     },
     onOpenFolder(id) { API.openFolder(id); },
     onOpenFile(id) { API.openFile(id); },
     onRedownload(id) { API.redownload(id); },
-    onMove(id, delta) { API.moveTask(id, delta); },
+    onMove(x, delta) {
+      const ids = App._asIds(x);
+      if (ids.length <= 1) { API.moveTask(ids[0], delta); return; }
+      // Move the selected group together, preserving its internal order:
+      // forward for up, reverse for down (relative to the displayed order).
+      const order = Array.from(Utils.$qa("#downloadList .dl-row")).map((r) => r.dataset.id);
+      const sorted = ids.filter((id) => order.includes(id)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const seq = delta < 0 ? sorted : sorted.slice().reverse();
+      seq.forEach((id) => API.moveTask(id, delta));
+    },
     async onCopyPath(task) {
       const p = `${task.directory}\\${task.filename || Utils.fileName(task)}`;
       try {
@@ -615,10 +635,21 @@ const App = {
         else Components.toast(I18N.t("toast.delete_failed", "Delete failed"), I18N.t("toast.delete_failed_msg", "The file could not be deleted"), "error");
       }
     },
-    async onCopyUrl(url) {
+    async onCopyUrl(x) {
+      const ids = App._asIds(x);
+      const urls = ids
+        .map((id) => (App.state.downloads && App.state.downloads[id]) || null)
+        .filter((t) => t && t.url)
+        .map((t) => t.url);
+      if (!urls.length) return;
+      const text = urls.join("\n");
       try {
-        await navigator.clipboard.writeText(url);
-        Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_url", "Download URL copied to clipboard"), "info", 2200);
+        await navigator.clipboard.writeText(text);
+        if (urls.length > 1) {
+          Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_urls", "{n} URLs copied to clipboard").replace("{n}", urls.length), "info", 2200);
+        } else {
+          Components.toast(I18N.t("toast.copied", "Copied"), I18N.t("toast.copied_url", "Download URL copied to clipboard"), "info", 2200);
+        }
       } catch {
         Components.toast(I18N.t("toast.copy_failed", "Copy failed"), I18N.t("toast.copy_failed_msg", "Clipboard is unavailable"), "error");
       }
@@ -724,6 +755,33 @@ const App = {
   _clearSelection() {
     this.state.selectedIds.clear();
     this.state.selAnchor = null;
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Context-menu action targeting (Windows File Explorer rule)
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // If the right-clicked task is part of the current multi-selection, the
+  // action applies to the WHOLE selection.  Otherwise it applies only to the
+  // right-clicked task.  This keeps `selectedIds` (selection) and `contextId`
+  // (right-clicked task) as separate concepts.
+
+  _actionTargetIds(contextId) {
+    const sel = this.state.selectedIds;
+    if (contextId && sel.has(contextId) && sel.size > 1) return Array.from(sel);
+    return contextId ? [contextId] : [];
+  },
+
+  _asIds(x) {
+    return Array.isArray(x) ? x : [x];
+  },
+
+  // Run a single-task async action over every id, never letting one failure
+  // stop the rest.
+  async _forEachId(ids, fn) {
+    for (const id of ids) {
+      try { await fn(id); } catch (e) { API.logJs("batch action: " + String(e)); }
+    }
   },
 
   _filteredTasks() {

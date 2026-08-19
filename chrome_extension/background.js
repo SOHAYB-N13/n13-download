@@ -1,18 +1,24 @@
 /**
- * N13 Chrome Extension — background service worker.
+ * N13 Extension Core — background service worker (MV3).
  *
- * Responsibilities:
- *   - Load shared i18n + API helpers.
- *   - Create context menus based on user language.
- *   - Dispatch URLs to the local N13 app (Live Server or dldm:// fallback).
- *   - Keep a small recent-sends log for the popup.
- *   - Handle keyboard shortcuts.
+ * The central coordinator:
+ *   - owns the single N13Bridge (the only N13 communication layer)
+ *   - connection/authentication state + reconnect/backoff
+ *   - message routing (content script, popup, grabber)
+ *   - Link Grabber coordination (scan → stash → open grabber.html)
+ *   - download delivery (single + batch) with launch-and-recover ONLY when the
+ *     N13 server is genuinely unreachable
+ *   - tab-lifecycle-safe Chrome API usage (no unhandled rejections)
+ *
+ * The dldm:// protocol is used ONLY to LAUNCH N13 when it is not running.  It
+ * is never used as a per-URL delivery transport, and delivery always goes
+ * through the authenticated local HTTP API after N13 is ready.
  */
-importScripts("shared/i18n.js", "shared/api.js");
+importScripts("shared/i18n.js", "shared/download-detector.js", "shared/n13-bridge.js");
 
-const FILE_EXT_RE = /\.(zip|rar|7z|tar|gz|bz2|xz|iso|exe|msi|apk|dmg|deb|rpm|pdf|docx?|xlsx?|pptx?|txt|md|mp4|mkv|avi|mov|webm|flv|mp3|flac|wav|ogg|m4a|jpg|jpe?g|png|gif|webp|svg|ico|torrent)(\?|#|$)/i;
 const MAX_BATCH = 100;
 const MAX_RECENT = 20;
+const MAX_STARTUP_WAIT_MS = 30000;
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -23,22 +29,35 @@ const DEFAULT_SETTINGS = {
   language: "en",
 };
 
-let api = null;
 let i18n = null;
+let bridge = new N13Bridge();
+let lastGrab = null;        // most recent Link Grabber payload (fallback)
 let _menuSetupPromise = Promise.resolve();
+let _connectPromise = null; // avoid duplicate simultaneous connects
+let _launchPromise = null;  // avoid duplicate simultaneous N13 launches
 
-async function getSettings() {
+function bgDbg(...args) {
+  try { console.log("[N13]", ...args); } catch (e) { /* ignore */ }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isGoodState(state) {
+  return state === "ready" || state === "authorized" || state === "connected";
+}
+
+// ---------------------------------------------------------------------------
+// Settings / i18n
+// ---------------------------------------------------------------------------
+
+function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(DEFAULT_SETTINGS, (items) => {
-      resolve({ ...DEFAULT_SETTINGS, ...items });
-    });
+    chrome.storage.local.get(DEFAULT_SETTINGS, (items) => resolve({ ...DEFAULT_SETTINGS, ...items }));
   });
 }
 
-async function setSettings(patch) {
-  const current = await getSettings();
-  const next = { ...current, ...patch };
-  return new Promise((resolve) => chrome.storage.local.set(next, resolve));
+function setSettings(patch) {
+  return getSettings().then((cur) => new Promise((resolve) => chrome.storage.local.set({ ...cur, ...patch }, resolve)));
 }
 
 async function initI18n() {
@@ -46,195 +65,179 @@ async function initI18n() {
   i18n = new N13_I18N(settings.language);
 }
 
-async function ensureAPI() {
-  if (!api) api = new N13_API();
-  await api.loadConfig();
-}
-
 function menuTitle(key) {
   return i18n ? i18n.t(key, key) : key;
 }
 
+// ---------------------------------------------------------------------------
+// Context menus
+// ---------------------------------------------------------------------------
+
 async function setupContextMenus() {
   await initI18n();
   const settings = await getSettings();
-
-  // Chain menu updates so concurrent calls (install + startup + settings change)
-  // never race and create duplicate IDs.
   _menuSetupPromise = _menuSetupPromise.then(
-    () =>
-      new Promise((resolve) => {
-        chrome.contextMenus.removeAll(() => {
-          if (chrome.runtime.lastError) {
-            console.warn("removeAll:", chrome.runtime.lastError.message);
-          }
-          if (!settings.contextMenu || !settings.enabled) {
-            resolve();
-            return;
-          }
-
-          const onCreated = () => {
-            if (chrome.runtime.lastError) {
-              console.warn("create menu:", chrome.runtime.lastError.message);
-            }
-          };
-
-          chrome.contextMenus.create(
-            {
-              id: "n13-download-link",
-              title: menuTitle("downloadWithN13"),
-              contexts: ["link"],
-            },
-            onCreated
-          );
-          chrome.contextMenus.create(
-            {
-              id: "n13-download-media",
-              title: menuTitle("downloadWithN13"),
-              contexts: ["image", "video", "audio"],
-            },
-            onCreated
-          );
-          chrome.contextMenus.create(
-            {
-              id: "n13-download-page",
-              title: menuTitle("downloadPage"),
-              contexts: ["page", "frame"],
-            },
-            onCreated
-          );
-          chrome.contextMenus.create(
-            {
-              id: "n13-download-selection",
-              title: menuTitle("downloadSelection"),
-              contexts: ["selection"],
-            },
-            onCreated
-          );
-
-          // Allow create callbacks to fire before resolving.
-          setTimeout(resolve, 50);
-        });
-      })
+    () => new Promise((resolve) => {
+      chrome.contextMenus.removeAll(() => {
+        if (settings.contextMenu && settings.enabled) {
+          const created = () => { if (chrome.runtime.lastError) console.warn("[N13]", chrome.runtime.lastError.message); };
+          chrome.contextMenus.create({ id: "n13-download-link", title: menuTitle("downloadWithN13"), contexts: ["link"] }, created);
+          chrome.contextMenus.create({ id: "n13-download-media", title: menuTitle("downloadWithN13"), contexts: ["image", "video", "audio"] }, created);
+          chrome.contextMenus.create({ id: "n13-download-page", title: menuTitle("downloadPage"), contexts: ["page", "frame"] }, created);
+          chrome.contextMenus.create({ id: "n13-download-selection", title: menuTitle("downloadSelection"), contexts: ["selection"] }, created);
+        }
+        setTimeout(resolve, 50);
+      });
+    })
   );
   return _menuSetupPromise;
 }
 
 chrome.runtime.onInstalled.addListener(() => setupContextMenus().catch(() => {}));
-chrome.runtime.onStartup.addListener(() => setupContextMenus().catch(() => {}));
+chrome.runtime.onStartup.addListener(() => { setupContextMenus().catch(() => {}); connect().catch(() => {}); });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.contextMenu || changes.enabled || changes.language)) {
-    setupContextMenus();
-  }
+  if (area === "local" && (changes.contextMenu || changes.enabled || changes.language)) setupContextMenus();
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  const settings = await getSettings();
-  if (!settings.enabled) return;
-
-  const id = info.menuItemId;
-  const safe = (p) => p && p.catch && p.catch((e) => console.warn("[N13]", e));
-  if (id === "n13-download-link") {
-    const url = info.linkUrl || info.srcUrl || info.frameUrl || info.pageUrl;
-    if (url) safe(sendToN13(url));
-  } else if (id === "n13-download-media") {
-    const url = info.srcUrl || info.linkUrl || info.pageUrl;
-    if (url) safe(sendToN13(url));
-  } else if (id === "n13-download-page") {
-    const url = info.frameUrl || info.pageUrl;
-    if (url) safe(sendToN13(url));
-  } else if (id === "n13-download-selection") {
-    const urls = await extractSelectionUrls(tab);
-    if (urls.length) safe(sendBatch(urls, i18n.t("downloadSelection")));
-    else notify(i18n.t("noLinksFound"), i18n.t("noLinksFoundDetail"));
+  try {
+    const settings = await getSettings();
+    if (!settings.enabled) return;
+    const id = info.menuItemId;
+    if (id === "n13-download-link") {
+      const url = info.linkUrl || info.srcUrl || info.frameUrl || info.pageUrl;
+      if (url) await deliverSingle(url);
+    } else if (id === "n13-download-media") {
+      const url = info.srcUrl || info.linkUrl || info.pageUrl;
+      if (url) await deliverSingle(url);
+    } else if (id === "n13-download-page") {
+      const url = info.frameUrl || info.pageUrl;
+      if (url) await deliverSingle(url);
+    } else if (id === "n13-download-selection") {
+      const urls = await extractSelectionUrls(tab);
+      if (urls.length) await deliverBatch(urls, i18n.t("downloadSelection"));
+    }
+  } catch (err) {
+    bgDbg("context menu error:", err);
   }
 });
 
 chrome.commands.onCommand.addListener((command) => {
   if (command !== "download-current-page") return;
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]?.url) sendToN13(tabs[0].url).catch((e) => console.warn("[N13]", e));
-  });
+  chrome.tabs.query({ active: true, currentWindow: true })
+    .then((tabs) => { if (tabs[0] && tabs[0].url) return deliverSingle(tabs[0].url); })
+    .catch(() => {});
 });
 
 // ---------------------------------------------------------------------------
-// Page scanning helpers (executed in the target tab)
+// Connection state
 // ---------------------------------------------------------------------------
 
-async function extractSelectionUrls(tab) {
-  if (!tab?.id) return [];
-  try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const text = window.getSelection ? window.getSelection().toString() : "";
-        return [...new Set((text.match(/https?:\/\/[^\s"'<>]+/g) || []))];
-      },
-    });
-    return res?.result || [];
-  } catch (_) {
-    return [];
+function connect() {
+  if (!_connectPromise) {
+    _connectPromise = bridge.connect().catch(() => bridge.getStatus()).finally(() => { _connectPromise = null; });
   }
+  return _connectPromise;
+}
+
+/** Launch N13 exactly once (guarded). Never used to deliver URLs. */
+function launchN13() {
+  if (!_launchPromise) {
+    _launchPromise = bridge.launchApp().finally(() => { _launchPromise = null; });
+  }
+  return _launchPromise;
+}
+
+/**
+ * Launch N13 (if needed) and wait for its authenticated API to become ready.
+ * Returns true only when the bridge reaches an authenticated+reachable state.
+ */
+async function launchAndWait(timeoutMs = MAX_STARTUP_WAIT_MS) {
+  await launchN13();
+  const status = await bridge.waitUntilReady(timeoutMs);
+  return isGoodState(status.state);
+}
+
+/** True when the last send failed because the server was genuinely down. */
+function isUnreachable(res) {
+  return res && (res.reason === "network" || res.reason === "timeout");
 }
 
 // ---------------------------------------------------------------------------
-// Sending
+// Delivery
 // ---------------------------------------------------------------------------
 
-async function sendToN13(url) {
+/** One-way progress broadcast to the grabber/popup (never awaited, never errors). */
+function emitProgress(requestId, phase, extra) {
+  if (!requestId) return;
+  try {
+    chrome.runtime.sendMessage({ action: "delivery_progress", requestId, phase, ...(extra || {}) }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
+/** Single URL: authenticated HTTP only. Launch-and-recover when N13 is down. */
+async function deliverSingle(url, requestId) {
   url = String(url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
     notify(i18n.t("unsupportedLink"), i18n.t("onlyHttpSupported"));
-    return { ok: false };
+    return { ok: false, accepted: 0, rejected: 1, total: 1, reason: "unsupported" };
   }
-
-  await ensureAPI();
-  const res = await api.send([url]);
+  emitProgress(requestId, "connecting");
+  await connect();
+  emitProgress(requestId, "authenticating");
+  let res = await bridge.sendDownload(url);
+  if (isUnreachable(res)) {
+    bgDbg("N13 unreachable — launching and waiting");
+    emitProgress(requestId, "launching");
+    const ready = await launchAndWait();
+    if (ready) res = await bridge.sendDownload(url);
+  }
+  emitProgress(requestId, "done", { accepted: res.accepted, rejected: res.rejected, total: res.total, reason: res.reason });
   if (res.ok) {
     notify(i18n.t("sentToQueue"), url.slice(0, 80));
     await addRecent(url);
-    return { ok: true, count: 1 };
+  } else if (res.reason === "unauthorized") {
+    notify(i18n.t("authFailed"), i18n.t("failedToSendDetail"));
+  } else if (isUnreachable(res)) {
+    notify(i18n.t("serverUnavailable"), i18n.t("failedToSendDetail"));
+  } else {
+    notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
   }
-
-  // Fallback to protocol handler (also wakes/launches N13 if registered).
-  const protocolOk = await api.sendViaProtocol(url);
-  if (protocolOk) {
-    notify(i18n.t("sentToQueue"), url.slice(0, 80));
-    await addRecent(url);
-    return { ok: true, count: 1 };
-  }
-
-  notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
-  return { ok: false };
+  return res;
 }
 
-async function sendBatch(urls, label) {
-  const unique = [...new Set(urls.map((u) => (u || "").trim()).filter((u) => /^https?:\/\//i.test(u)))].slice(0, MAX_BATCH);
-  if (!unique.length) return { ok: false };
+/** Batch URLs: authenticated HTTP only. The dldm:// protocol is NEVER used. */
+async function deliverBatch(urls, label, requestId) {
+  const unique = Array.from(new Set((urls || []).map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u)))).slice(0, MAX_BATCH);
+  if (!unique.length) return { ok: false, accepted: 0, rejected: 0, total: 0, reason: "no_urls" };
 
-  await ensureAPI();
-  const res = await api.send(unique);
+  bgDbg("delivery batch urls=" + unique.length + " label=" + label);
+  emitProgress(requestId, "connecting");
+  await connect();
+  emitProgress(requestId, "sending", { count: unique.length });
+  let res = await bridge.sendBatch(unique);
+  if (isUnreachable(res)) {
+    bgDbg("N13 unreachable — launching and waiting for its server");
+    emitProgress(requestId, "launching");
+    const ready = await launchAndWait();
+    if (ready) {
+      emitProgress(requestId, "sending", { count: unique.length });
+      res = await bridge.sendBatch(unique);
+    }
+  }
+  bgDbg("delivery result accepted=" + res.accepted + " rejected=" + res.rejected + "/" + res.total + " reason=" + res.reason);
+  emitProgress(requestId, "done", { accepted: res.accepted, rejected: res.rejected, total: res.total, reason: res.reason });
   if (res.ok) {
-    notify(i18n.t("batchQueued"), `${unique.length} · ${label || ""}`);
+    notify(i18n.t("batchQueued"), `${res.accepted}/${res.total} · ${label || ""}`);
     for (const u of unique) await addRecent(u);
-    return { ok: true, count: unique.length };
+  } else if (res.reason === "unauthorized") {
+    notify(i18n.t("authFailed"), i18n.t("failedToSendDetail"));
+  } else if (isUnreachable(res)) {
+    notify(i18n.t("serverUnavailable"), i18n.t("failedToSendDetail"));
+  } else {
+    notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
   }
-
-  // Fallback: send each URL via protocol, limited to a few to avoid tab spam.
-  let sent = 0;
-  for (const u of unique.slice(0, 3)) {
-    const ok = await api.sendViaProtocol(u);
-    if (!ok) break;
-    sent++;
-    await addRecent(u);
-  }
-  if (sent) {
-    notify(i18n.t("batchQueued"), `${sent}/${unique.length} · ${label || ""}`);
-    return { ok: true, count: sent };
-  }
-
-  notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
-  return { ok: false };
+  return res;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +246,7 @@ async function sendBatch(urls, label) {
 
 async function addRecent(url) {
   const data = await new Promise((resolve) => chrome.storage.local.get({ recent: [] }, resolve));
-  const list = data.recent || [];
+  const list = (data.recent || []).filter((x) => x.url !== url);
   list.unshift({ url, time: Date.now() });
   while (list.length > MAX_RECENT) list.pop();
   return new Promise((resolve) => chrome.storage.local.set({ recent: list }, resolve));
@@ -254,53 +257,122 @@ async function getRecent() {
   return data.recent || [];
 }
 
-async function clearRecent() {
-  return new Promise((resolve) => chrome.storage.local.set({ recent: [] }, resolve));
-}
-
-// ---------------------------------------------------------------------------
-// Notifications
-// ---------------------------------------------------------------------------
-
 function notify(title, message) {
   try {
-    chrome.notifications.create({
-      type: "basic",
-      iconUrl: "icon128.png",
-      title: title || "N13",
-      message: message || "",
-      priority: 1,
-    });
-  } catch (_) {}
+    chrome.notifications.create({ type: "basic", iconUrl: "icon128.png", title: title || "N13", message: message || "", priority: 1 });
+  } catch (e) { /* ignore */ }
 }
 
 // ---------------------------------------------------------------------------
-// Message API for popup / content scripts
+// Link Grabber
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-  const reply = (payload) => {
-    try {
-      sendResponse(payload);
-    } catch (_) {}
-  };
+async function extractSelectionUrls(tab) {
+  if (!tab || !tab.id) return [];
+  // Prefer the content engine's real DOM-range selection scan.
+  try {
+    const res = await chrome.tabs.sendMessage(tab.id, { action: "scan_selection" }, { frameId: 0 });
+    if (res && Array.isArray(res.urls) && res.urls.length) return res.urls.map((u) => u.url || u).filter(Boolean);
+  } catch (e) { /* content script unavailable; fall back below */ }
+  // Fallback: extract http(s) URLs from the raw selected text.
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const t = window.getSelection ? window.getSelection().toString() : "";
+        return Array.from(new Set((t.match(/https?:\/\/[^\s"'<>]+/g) || [])));
+      },
+    });
+    return r && r.result ? r.result : [];
+  } catch (e) { return []; }
+}
 
+/** Scan the active tab's page (popup "Grab Download Links"). */
+async function grabPageLinks(tabId) {
+  if (!tabId) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabId = tab ? tab.id : 0;
+    } catch (e) { tabId = 0; }
+  }
+  if (!tabId) return { ok: false, urls: [], reason: "no_tab" };
+  try {
+    const res = await chrome.tabs.sendMessage(tabId, { action: "scan_page" }, { frameId: 0 });
+    if (res && Array.isArray(res.urls)) return { ok: true, urls: res.urls };
+  } catch (e) { /* content script unavailable; inject below */ }
+  try {
+    const [res] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: N13_SCAN_PAGE });
+    const urls = res && res.result && Array.isArray(res.result.urls) ? res.result.urls : null;
+    if (urls) return { ok: true, urls };
+  } catch (e) { /* restricted page / tab gone */ }
+  return { ok: false, urls: [], reason: "unavailable" };
+}
+
+/** Open the Link Grabber with the provided context-aware scan result. */
+async function openGrabber(tabId, primaryUrl, urls) {
+  const payload = {
+    ok: Array.isArray(urls) && urls.length > 0,
+    urls: Array.isArray(urls) ? urls : [],
+    primaryUrl: primaryUrl || "",
+    reason: Array.isArray(urls) && urls.length ? "" : "no_group",
+  };
+  lastGrab = payload;
+  bgDbg("open_grabber tab=" + tabId + " links=" + payload.urls.length);
+  try {
+    await chrome.storage.session.set({ n13Grabber: payload });
+  } catch (e) { bgDbg("session.set failed (in-memory fallback):", e); }
+  try {
+    await chrome.tabs.create({ url: chrome.runtime.getURL("grabber.html"), active: true });
+  } catch (e) { bgDbg("open grabber tab failed:", e); }
+}
+
+// ---------------------------------------------------------------------------
+// Message API
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  const reply = (p) => { try { sendResponse(p); } catch (e) { /* ignore */ } };
+
+  if (request.action === "status_get") {
+    connect().then((s) => reply(s)).catch(() => reply({ state: "error", server: "" }));
+    return true;
+  }
   if (request.action === "download") {
-    sendToN13(request.url)
-      .then((r) => reply({ status: r.ok ? "sent" : "failed" }))
-      .catch((e) => { console.warn("[N13]", e); reply({ status: "failed" }); });
+    deliverSingle(request.url, request.requestId).then((r) => reply({
+      status: r.ok ? "sent" : "failed",
+      accepted: r.accepted != null ? r.accepted : (r.ok ? 1 : 0),
+      rejected: r.rejected != null ? r.rejected : 0,
+      total: r.total != null ? r.total : 1,
+      partial: !!r.partial,
+      reason: r.reason || "",
+    })).catch((e) => { bgDbg("download error:", e); reply({ status: "failed", reason: "error" }); });
     return true;
   }
   if (request.action === "download_many") {
-    sendBatch(request.urls || [], request.label || "popup")
-      .then((r) => reply({ status: r.ok ? "sent" : "failed", count: r.count || 0 }))
-      .catch((e) => { console.warn("[N13]", e); reply({ status: "failed" }); });
+    deliverBatch(request.urls, request.label || "grabber", request.requestId).then((r) => reply({
+      status: r.ok ? "sent" : "failed",
+      accepted: r.accepted || 0,
+      rejected: r.rejected != null ? r.rejected : Math.max(0, (request.urls || []).length - (r.accepted || 0)),
+      total: r.total != null ? r.total : (request.urls || []).length,
+      partial: !!r.partial,
+      reason: r.reason || "",
+    })).catch((e) => { bgDbg("download_many error:", e); reply({ status: "failed", reason: "error" }); });
     return true;
   }
-  if (request.action === "health") {
-    ensureAPI().then(() => api.isConnected(request.timeout || 1200))
-      .then((ok) => reply({ ok }))
-      .catch(() => reply({ ok: false }));
+  if (request.action === "grab_links") {
+    grabPageLinks(request.tabId).then((r) => reply({ ok: r.ok, urls: r.urls || [], reason: r.reason || "" }))
+      .catch(() => reply({ ok: false, urls: [], reason: "unavailable" }));
+    return true;
+  }
+  if (request.action === "open_grabber") {
+    // Content script supplies the context-aware scan (selection/group) in request.urls.
+    const tabId = (sender && sender.tab && sender.tab.id) || request.tabId || 0;
+    openGrabber(tabId, request.primaryUrl || "", request.urls);
+    reply({ ok: true });
+    return true;
+  }
+  if (request.action === "grab_get") {
+    reply({ ok: true, payload: lastGrab });
     return true;
   }
   if (request.action === "settings_get") {
@@ -317,16 +389,19 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     return true;
   }
   if (request.action === "recent_clear") {
-    clearRecent().then(() => reply({ ok: true }));
+    chrome.storage.local.set({ recent: [] }, () => reply({ ok: true }));
+    return true;
+  }
+  if (request.action === "open_n13") {
+    connect().then(() => { if (!isGoodState(bridge.getState())) launchN13(); reply({ ok: true }); });
     return true;
   }
   if (request.action === "get_current_tab_url") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      reply({ url: tabs[0]?.url || "" });
-    });
+    chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => reply({ url: (tabs[0] && tabs[0].url) || "" }))
+      .catch(() => reply({ url: "" }));
     return true;
   }
 });
 
-// Initialise i18n on load so context menus are ready quickly.
-initI18n().then(setupContextMenus);
+initI18n().then(setupContextMenus).catch(() => {});
+connect().catch(() => {});

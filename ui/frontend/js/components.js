@@ -345,17 +345,23 @@ const Components = {
     const s = task.state;
     const name = Utils.fileName(task);
     const L = (k, f) => (typeof I18N !== "undefined" ? I18N.t(k, f) : f);
+    // Action targets follow the File Explorer rule: if the right-clicked task
+    // is part of the current selection, act on the whole selection; otherwise
+    // act on just the right-clicked task.
+    const targets = (cb && typeof cb.targetsFor === "function") ? cb.targetsFor(task.id) : [task.id];
+    const multi = targets.length > 1;
+    const cnt = multi ? ` (${targets.length})` : "";
     const items = [];
     const active = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
-    if (s === "Downloading") items.push({ label: L("act.pause", "Pause"), icon: "pause", action: () => cb.onPause(task.id) });
-    if (s === "Paused") items.push({ label: L("act.resume", "Resume"), icon: "play", action: () => cb.onResume(task.id) });
-    if (s === "Queued") items.push({ label: L("act.start_now", "Start now"), icon: "play", action: () => cb.onStart(task.id) });
+    if (s === "Downloading") items.push({ label: L("act.pause", "Pause") + cnt, icon: "pause", action: () => cb.onPause(targets) });
+    if (s === "Paused") items.push({ label: L("act.resume", "Resume") + cnt, icon: "play", action: () => cb.onResume(targets) });
+    if (s === "Queued") items.push({ label: L("act.start_now", "Start now") + cnt, icon: "play", action: () => cb.onStart(targets) });
     if (active.includes(s) || s === "Paused" || s === "Queued")
-      items.push({ label: L("act.cancel", "Cancel"), icon: "xCircle", action: () => cb.onCancel(task.id) });
+      items.push({ label: L("act.cancel", "Cancel") + cnt, icon: "xCircle", action: () => cb.onCancel(targets) });
     if (s === "Failed" || s === "Cancelled" || s === "Stopped")
-      items.push({ label: L("act.retry", "Retry"), icon: "retry", action: () => cb.onRetry(task.id) });
+      items.push({ label: L("act.retry", "Retry") + cnt, icon: "retry", action: () => cb.onRetry(targets) });
     if (items.length) items.push({ separator: true });
-    items.push({ label: L("act.copy_url", "Copy URL"), icon: "copy", action: () => cb.onCopyUrl(task.url) });
+    items.push({ label: L("act.copy_url", "Copy URL") + cnt, icon: "copy", action: () => cb.onCopyUrl(targets) });
     if (s === "Complete") {
       items.push({ label: L("act.open_file", "Open file"), icon: "external", action: () => cb.onOpenFile(task.id) });
       items.push({ label: L("act.open_folder", "Open folder"), icon: "folderOpen", action: () => cb.onOpenFolder(task.id) });
@@ -364,10 +370,10 @@ const Components = {
       items.push({ label: L("act.delete_file", "Delete file"), icon: "trash", danger: true, action: () => cb.onDeleteFile(task.id, name) });
     }
     items.push({ separator: true });
-    items.push({ label: L("act.move_up", "Move up"), icon: "arrowUp", action: () => cb.onMove(task.id, -1) });
-    items.push({ label: L("act.move_down", "Move down"), icon: "arrowDown", action: () => cb.onMove(task.id, 1) });
+    items.push({ label: L("act.move_up", "Move up") + cnt, icon: "arrowUp", action: () => cb.onMove(targets, -1) });
+    items.push({ label: L("act.move_down", "Move down") + cnt, icon: "arrowDown", action: () => cb.onMove(targets, 1) });
     items.push({ separator: true });
-    items.push({ label: L("act.remove", "Remove from list"), icon: "x", danger: true, action: () => cb.onRemove(task.id) });
+    items.push({ label: L("act.remove", "Remove from list") + cnt, icon: "x", danger: true, action: () => cb.onRemove(targets) });
     return items;
   },
 

@@ -1025,6 +1025,13 @@ class Api:
         )
         if server.start():
             self._live_server = server
+            # Keep the installable extension's token.json in sync with the real
+            # token the server now validates (reliable auth recovery).
+            try:
+                from browser.protocol import sync_extension_token
+                sync_extension_token(self._config)
+            except Exception:
+                pass
             return True
         return False
 

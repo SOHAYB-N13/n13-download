@@ -37,7 +37,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["shared/i18n.js", "content.js"],
+      "js": ["shared/i18n.js", "shared/download-detector.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": false
     }
