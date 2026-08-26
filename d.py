@@ -59,6 +59,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--unregister", action="store_true", help="Unregister dldm:// protocol")
     parser.add_argument("--create-extension", action="store_true", help="Copy Chrome extension")
     parser.add_argument("--gui", action="store_true", help="Launch the graphical interface")
+    parser.add_argument(
+        "--update-now",
+        action="store_true",
+        help="Check, download, verify and install the latest update headlessly, then restart",
+    )
     return parser.parse_args()
 
 
@@ -162,6 +167,12 @@ def main() -> None:
         sys.exit(1)
 
     try:
+        if args.update_now:
+            # Headless update: same check -> download -> verify -> handoff flow
+            # as Settings -> Updates, without opening the WebView.  Requires
+            # being the only running instance (guarded above).
+            from core.updater import run_headless_update
+            sys.exit(run_headless_update(config))
         _run(config, args, session)
     finally:
         release_single_instance()
@@ -170,6 +181,16 @@ def main() -> None:
 
 def _run(config: AppConfig, args: argparse.Namespace, session: SessionManager) -> None:
     if args.gui:
+        # A cold-start dldm://<url> launch passes --url-file; park the URL in the
+        # startup pipeline so the GUI drains it once the Live Server is ready
+        # (it is never POSTed to a server that is not ready yet).
+        if args.url_file:
+            try:
+                from core.startup import store
+                store(Path(args.url_file).read_text(encoding="utf-8").strip())
+                Path(args.url_file).unlink(missing_ok=True)
+            except OSError:
+                pass
         launch_app(config, session)
         return
 

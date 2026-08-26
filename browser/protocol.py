@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,162 @@ def sync_extension_token(config: AppConfig, ext_dir: Optional[Path] = None) -> O
         return token_path
     except OSError:
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Native Messaging host (silent extension → app launch, no Chrome dialog)      #
+# --------------------------------------------------------------------------- #
+
+NATIVE_HOST_NAME = "com.n13.download_manager"
+
+
+def _native_host_dir() -> Path:
+    return _project_root() / "build" / "native_host"
+
+
+def _unpacked_extension_ids(ext_dir: Path) -> list[str]:
+    """Candidate extension IDs Chrome derives for an *unpacked* extension.
+
+    Chrome computes the ID as the first 32 hex chars of SHA-256 over the
+    absolute path, mapped 0-9a-f → a-p.  Case handling differs across
+    platforms/versions, so we register both the native-case and lower-case
+    variants — extra origins in allowed_origins are harmless.
+    """
+    import hashlib
+
+    try:
+        native = str(ext_dir.resolve())
+    except OSError:
+        return []
+
+    def to_id(path: str) -> str:
+        digest = hashlib.sha256(path.encode("utf-8")).hexdigest()[:32]
+        return "".join(chr(ord("a") + int(c, 16)) for c in digest)
+
+    ids = [to_id(native)]
+    lowered = native.lower()
+    if lowered != native:
+        ids.append(to_id(lowered))
+    return ids
+
+
+def _discover_loaded_extension_ids() -> list[str]:
+    """IDs of N13 unpacked extensions actually loaded in Chrome/Edge profiles.
+
+    Modern Chrome builds no longer derive unpacked IDs from the folder path in
+    a predictable way, so the only reliable source is the browser's own
+    Preferences / Secure Preferences.  We scan every profile for unpacked
+    extensions whose path or manifest name looks like the N13 extension and
+    return their IDs.  Read-only; missing browsers are simply skipped.
+    """
+    ids: list[str] = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    if not local:
+        return ids
+    browsers = (
+        os.path.join(local, "Google", "Chrome", "User Data"),
+        os.path.join(local, "Microsoft", "Edge", "User Data"),
+    )
+    for browser_dir in browsers:
+        if not os.path.isdir(browser_dir):
+            continue
+        pref_files: list[str] = []
+        for profile in os.listdir(browser_dir):
+            for name in ("Secure Preferences", "Preferences"):
+                candidate = os.path.join(browser_dir, profile, name)
+                if os.path.isfile(candidate):
+                    pref_files.append(candidate)
+        for pref_file in pref_files:
+            try:
+                with open(pref_file, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            settings = (data.get("extensions") or {}).get("settings") or {}
+            for ext_id, info in settings.items():
+                if not isinstance(info, dict) or not info.get("path"):
+                    continue
+                manifest = info.get("manifest") or {}
+                name = str(manifest.get("name", ""))
+                path_l = str(info.get("path", "")).lower()
+                if (
+                    path_l.endswith("chrome_extension")
+                    or "n13" in name.lower()
+                    or "download manager" in name.lower()
+                ):
+                    if ext_id and ext_id not in ids:
+                        ids.append(ext_id)
+    return ids
+
+
+def register_native_host() -> bool:
+    """Register the native messaging host for the current user (HKCU only).
+
+    Writes the host manifest + launcher .bat under ``build/native_host`` and
+    points Chrome (and Edge) at it via the registry.  This lets the extension
+    start the N13 GUI silently — no "Open N13 Download Manager?" dialog.
+    Idempotent: safe to call on every app startup.
+    """
+    host_dir = _native_host_dir()
+    host_script = _project_root() / "browser" / "native_host.py"
+    if not host_script.is_file():
+        console.print(f"[red]Native host script missing: {host_script}[/red]")
+        return False
+
+    try:
+        host_dir.mkdir(parents=True, exist_ok=True)
+
+        # Prefer pythonw (no console flash when Chrome spawns the host).
+        python_exe = Path(sys.executable)
+        pythonw = python_exe.with_name("pythonw.exe")
+        runner = pythonw if pythonw.is_file() else python_exe
+
+        bat_path = host_dir / "n13_native_host.bat"
+        bat_path.write_text(
+            "@echo off\n"
+            f'"{runner}" "{host_script}"\n',
+            encoding="utf-8",
+        )
+
+        # Register for every known unpacked-extension location plus the IDs
+        # actually loaded in installed browsers (the reliable source).
+        origins: list[str] = []
+        candidates: list[str] = []
+        for ext_dir in (_project_root() / "chrome_extension", _project_root() / "extension"):
+            candidates.extend(_unpacked_extension_ids(ext_dir))
+        candidates.extend(_discover_loaded_extension_ids())
+        for ext_id in candidates:
+            origin = f"chrome-extension://{ext_id}/"
+            if origin not in origins:
+                origins.append(origin)
+
+        manifest = {
+            "name": NATIVE_HOST_NAME,
+            "description": "N13 Download Manager silent launcher",
+            "path": str(bat_path),
+            "type": "stdio",
+            "allowed_origins": origins,
+        }
+        manifest_path = host_dir / f"{NATIVE_HOST_NAME}.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        if not WINDOWS:
+            console.print("[yellow]Native messaging registry setup is Windows-only; "
+                          f"manifest written to {manifest_path}[/yellow]")
+            return True
+
+        for reg_path in (
+            "Software\\Google\\Chrome\\NativeMessagingHosts\\" + NATIVE_HOST_NAME,
+            "Software\\Microsoft\\Edge\\NativeMessagingHosts\\" + NATIVE_HOST_NAME,
+        ):
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_path) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(manifest_path))
+
+        console.print(f"[green]Native messaging host registered ({len(origins)} extension origin(s)).[/green]")
+        return True
+    except OSError as exc:
+        console.print(f"[red]Failed to register native messaging host: {exc}[/red]")
+        return False
 
 
 def register_protocol() -> bool:

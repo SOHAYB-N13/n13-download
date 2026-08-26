@@ -9,7 +9,8 @@
     "storage",
     "activeTab",
     "tabs",
-    "scripting"
+    "scripting",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "http://127.0.0.1:6868/*",
@@ -37,7 +38,18 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["shared/i18n.js", "shared/download-detector.js", "content.js"],
+      "js": [
+        "shared/i18n.js",
+        "shared/mime-analyzer.js",
+        "shared/header-analyzer.js",
+        "shared/filename-resolver.js",
+        "shared/url-analyzer.js",
+        "shared/deduplicator.js",
+        "shared/scoring-engine.js",
+        "shared/network-detector.js",
+        "shared/download-detector.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

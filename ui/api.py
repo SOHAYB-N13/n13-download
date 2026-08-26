@@ -1032,6 +1032,13 @@ class Api:
                 sync_extension_token(self._config)
             except Exception:
                 pass
+            # Keep the native-messaging host registered so the extension can
+            # launch the app silently (no Chrome protocol dialog). Idempotent.
+            try:
+                from browser.protocol import register_native_host
+                register_native_host()
+            except Exception:
+                pass
             return True
         return False
 

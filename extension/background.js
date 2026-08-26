@@ -14,11 +14,12 @@
  * is never used as a per-URL delivery transport, and delivery always goes
  * through the authenticated local HTTP API after N13 is ready.
  */
-importScripts("shared/i18n.js", "shared/download-detector.js", "shared/n13-bridge.js");
+importScripts("shared/i18n.js", "shared/mime-analyzer.js", "shared/header-analyzer.js", "shared/filename-resolver.js", "shared/url-analyzer.js", "shared/deduplicator.js", "shared/scoring-engine.js", "shared/download-detector.js", "shared/n13-bridge.js");
 
 const MAX_BATCH = 100;
 const MAX_RECENT = 20;
 const MAX_STARTUP_WAIT_MS = 30000;
+const RELAUNCH_WAIT_MS = 15000; // wait for a cold N13 launch before giving up
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -175,7 +176,53 @@ function emitProgress(requestId, phase, extra) {
   } catch (e) { /* ignore */ }
 }
 
-/** Single URL: authenticated HTTP only. Launch-and-recover when N13 is down. */
+/**
+ * Silent launch via the registered Native Messaging host (no Chrome dialog).
+ * Resolves false when the host is not registered (extension was loaded before
+ * the app ever ran) — callers then fall back to the dldm:// protocol launch.
+ */
+function nativeLaunch() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage("com.n13.download_manager", { action: "launch" }, (resp) => {
+        if (chrome.runtime.lastError) {
+          bgDbg("native launch unavailable:", chrome.runtime.lastError.message);
+          resolve(false);
+          return;
+        }
+        bgDbg("native launch response:", JSON.stringify(resp));
+        resolve(!!(resp && resp.ok));
+      });
+    } catch (e) {
+      bgDbg("native launch error:", e);
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * When delivery fails because N13 is unreachable, launch it — silently via
+ * native messaging when available, otherwise via the dldm:// protocol (which
+ * may show Chrome's one-time "Open N13 Download Manager?" dialog) — and wait
+ * for its API.  Returns null when the caller should retry the send.
+ */
+async function recoverUnreachable(res, requestId) {
+  if (!isUnreachable(res)) return res;
+  const settings = await getSettings();
+  if (!settings.openN13) return res;
+  bgDbg("N13 unreachable — attempting launch and retry");
+  emitProgress(requestId, "launching");
+  const launchedSilently = await nativeLaunch();
+  if (!launchedSilently) await launchN13(); // fallback: dldm:// protocol
+  const ready = await bridge.waitUntilReady(RELAUNCH_WAIT_MS).then((s) => isGoodState(s.state)).catch(() => false);
+  if (!ready) {
+    bgDbg("N13 did not become ready after launch");
+    return res;
+  }
+  return null; // caller should retry the send
+}
+
+/** Single URL: authenticated HTTP only. Auto-launches N13 if unreachable. */
 async function deliverSingle(url, requestId) {
   url = String(url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
@@ -187,10 +234,17 @@ async function deliverSingle(url, requestId) {
   emitProgress(requestId, "authenticating");
   let res = await bridge.sendDownload(url);
   if (isUnreachable(res)) {
-    bgDbg("N13 unreachable — launching and waiting");
-    emitProgress(requestId, "launching");
-    const ready = await launchAndWait();
-    if (ready) res = await bridge.sendDownload(url);
+    const retry = await recoverUnreachable(res, requestId);
+    if (retry === null) {
+      emitProgress(requestId, "sending");
+      res = await bridge.sendDownload(url);
+    }
+  }
+  if (isUnreachable(res)) {
+    bgDbg("N13 still unreachable after launch attempt");
+    notify(i18n.t("n13NotRunning"), i18n.t("startN13Manually"));
+    emitProgress(requestId, "done", { accepted: 0, rejected: 1, total: 1, reason: "unreachable" });
+    return res;
   }
   emitProgress(requestId, "done", { accepted: res.accepted, rejected: res.rejected, total: res.total, reason: res.reason });
   if (res.ok) {
@@ -198,15 +252,13 @@ async function deliverSingle(url, requestId) {
     await addRecent(url);
   } else if (res.reason === "unauthorized") {
     notify(i18n.t("authFailed"), i18n.t("failedToSendDetail"));
-  } else if (isUnreachable(res)) {
-    notify(i18n.t("serverUnavailable"), i18n.t("failedToSendDetail"));
   } else {
     notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
   }
   return res;
 }
 
-/** Batch URLs: authenticated HTTP only. The dldm:// protocol is NEVER used. */
+/** Batch URLs: authenticated HTTP only. Auto-launches N13 if unreachable. */
 async function deliverBatch(urls, label, requestId) {
   const unique = Array.from(new Set((urls || []).map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u)))).slice(0, MAX_BATCH);
   if (!unique.length) return { ok: false, accepted: 0, rejected: 0, total: 0, reason: "no_urls" };
@@ -217,13 +269,17 @@ async function deliverBatch(urls, label, requestId) {
   emitProgress(requestId, "sending", { count: unique.length });
   let res = await bridge.sendBatch(unique);
   if (isUnreachable(res)) {
-    bgDbg("N13 unreachable — launching and waiting for its server");
-    emitProgress(requestId, "launching");
-    const ready = await launchAndWait();
-    if (ready) {
+    const retry = await recoverUnreachable(res, requestId);
+    if (retry === null) {
       emitProgress(requestId, "sending", { count: unique.length });
       res = await bridge.sendBatch(unique);
     }
+  }
+  if (isUnreachable(res)) {
+    bgDbg("N13 still unreachable after launch attempt");
+    notify(i18n.t("n13NotRunning"), i18n.t("startN13Manually"));
+    emitProgress(requestId, "done", { accepted: 0, rejected: unique.length, total: unique.length, reason: "unreachable" });
+    return res;
   }
   bgDbg("delivery result accepted=" + res.accepted + " rejected=" + res.rejected + "/" + res.total + " reason=" + res.reason);
   emitProgress(requestId, "done", { accepted: res.accepted, rejected: res.rejected, total: res.total, reason: res.reason });
@@ -232,8 +288,6 @@ async function deliverBatch(urls, label, requestId) {
     for (const u of unique) await addRecent(u);
   } else if (res.reason === "unauthorized") {
     notify(i18n.t("authFailed"), i18n.t("failedToSendDetail"));
-  } else if (isUnreachable(res)) {
-    notify(i18n.t("serverUnavailable"), i18n.t("failedToSendDetail"));
   } else {
     notify(i18n.t("failedToSend"), i18n.t("failedToSendDetail"));
   }

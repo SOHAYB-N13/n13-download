@@ -56,13 +56,19 @@ def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = 
     if sys.platform == "win32":
         bat_path = Path(tempfile.gettempdir()) / f"dldm_run_{uuid.uuid4().hex}.bat"
         url_arg = f' --url-file "{url_file}"' if url_file else ""
-        bat_content = (
-            "@echo off\n"
-            "chcp 65001 >nul 2>&1\n"
-            f'"{python_exe}" "{main_script}" --gui{url_arg}\n'
-            f'del "{url_file}" 2>nul\n' if url_file else ""
-            'del "%~f0" 2>nul\n'
-        )
+        # Build line-by-line: a single chained ``x if cond else y`` expression
+        # here once silently dropped the launch command entirely (implicit
+        # string concatenation binds tighter than the conditional), leaving a
+        # bat file that only deleted itself — the infamous console flash.
+        bat_lines = [
+            "@echo off",
+            "chcp 65001 >nul 2>&1",
+            f'"{python_exe}" "{main_script}" --gui{url_arg}',
+        ]
+        if url_file:
+            bat_lines.append(f'del "{url_file}" 2>nul')
+        bat_lines.append('del "%~f0" 2>nul')
+        bat_content = "\n".join(bat_lines) + "\n"
         bat_path.write_text(bat_content, encoding="utf-8")
         subprocess.Popen(
             ["cmd", "/c", str(bat_path)],
