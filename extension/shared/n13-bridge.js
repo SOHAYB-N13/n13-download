@@ -363,35 +363,63 @@
 
   /**
    * Controlled protocol launch used ONLY to START N13 when it is genuinely
-   * unavailable.  It is never used to deliver a download URL.  The launch tab
-   * is closed shortly after to avoid leaking a blank tab.
+   * unavailable.  It is never used to deliver a download URL.
+   *
+   * Silent by design — no new tab is EVER opened:
+   *   1. primary: a hidden iframe injected by the page's content script
+   *      (dldm://launch).  Chrome suppresses the external-protocol prompt
+   *      for iframe navigations, and removing the iframe after
+   *      LAUNCH_TAB_LINGER_MS dismisses any prompt that did appear.
+   *   2. fallback (restricted pages / no content script): reuses the CURRENT
+   *      tab via chrome.tabs.update — never chrome.tabs.create — and
+   *      restores the original page after LAUNCH_TAB_LINGER_MS, which also
+   *      cancels the pending prompt.
    */
   N13Bridge.prototype.launchApp = function () {
+    var self = this;
     return new Promise(function (resolve) {
       try {
-        chrome.tabs.create({ url: PROTOCOL + "://launch", active: false }, function (tab) {
-          if (chrome.runtime.lastError) {
+        chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
+          var tab = tabs && tabs[0];
+          if (!tab || tab.id == null) { resolve(false); return; }
+          chrome.tabs.sendMessage(tab.id, { action: "protocol_navigate", url: PROTOCOL + "://launch" }, function (resp) {
+            var iframeOk = !chrome.runtime.lastError && resp && resp.ok;
             void chrome.runtime.lastError;
-            resolve(false);
-            return;
-          }
-          if (!tab || !tab.id) {
-            resolve(false);
-            return;
-          }
-          // The protocol launch may dismiss/close the tab itself; the linger
-          // cleanup must tolerate the tab already being gone (never surface an
-          // "Unchecked runtime.lastError: No tab with id").
-          setTimeout(function () {
-            chrome.tabs.remove(tab.id, function () {
-              void chrome.runtime.lastError; // tab may already be gone
-            });
-          }, LAUNCH_TAB_LINGER_MS);
-          resolve(true);
-        });
+            if (iframeOk) { resolve(true); return; }
+            self._launchViaCurrentTab(tab, resolve);
+          });
+        }).catch(function () { resolve(false); });
       } catch (e) {
         resolve(false);
       }
+    });
+  };
+
+  /**
+   * Fallback launch: dispatch the protocol URL through the CURRENT tab, then
+   * restore the original page.  The restore navigation also cancels Chrome's
+   * external-protocol prompt, so nothing stays on screen.
+   */
+  N13Bridge.prototype._launchViaCurrentTab = function (tab, resolve) {
+    var tabId = tab && tab.id != null ? tab.id : null;
+    var previousUrl = tab && tab.url ? String(tab.url) : "";
+    if (tabId == null) { resolve(false); return; }
+    chrome.tabs.update(tabId, { url: PROTOCOL + "://launch" }, function (updated) {
+      if (chrome.runtime.lastError || !updated) {
+        void chrome.runtime.lastError;
+        resolve(false);
+        return;
+      }
+      setTimeout(function () {
+        if (previousUrl && /^https?:\/\//i.test(previousUrl)) {
+          chrome.tabs.update(tabId, { url: previousUrl }, function () { void chrome.runtime.lastError; });
+        } else {
+          try {
+            chrome.tabs.goBack(tabId, function () { void chrome.runtime.lastError; });
+          } catch (e) { /* ignore */ }
+        }
+      }, LAUNCH_TAB_LINGER_MS);
+      resolve(true);
     });
   };
 

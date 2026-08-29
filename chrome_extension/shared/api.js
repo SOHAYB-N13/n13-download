@@ -94,24 +94,42 @@
       }
     }
 
-    /** Fallback: send a single URL via the dldm:// custom protocol. */
+    /**
+     * Legacy fallback: dispatch a single URL via the dldm:// protocol.
+     * Silent by design — a hidden iframe first, the CURRENT tab as fallback
+     * (never chrome.tabs.create).  The current architecture delivers via the
+     * authenticated HTTP API; this exists only for historical compatibility.
+     */
     async sendViaProtocol(url) {
       url = (url || "").trim();
       if (!/^https?:\/\//i.test(url)) return false;
-      const encoded = encodeURIComponent(url);
-      const protocolUrl = `${PROTOCOL}://${encoded}`;
+      const protocolUrl = `${PROTOCOL}://${encodeURIComponent(url)}`;
 
+      // 1) hidden iframe via the active page's content script
       try {
-        const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-        if (!tab || !tab.id) throw new Error("No tab");
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab && tab.id != null) {
+          const resp = await new Promise((resolve) => {
+            chrome.tabs.sendMessage(tab.id, { action: "protocol_navigate", url: protocolUrl }, (r) => {
+              resolve(chrome.runtime.lastError ? null : r);
+            });
+          });
+          if (resp && resp.ok) return true;
+        }
+      } catch (err) { /* fall through to the tab fallback */ }
+
+      // 2) fallback: reuse the current tab, restore the original page after
+      //    a few seconds (the restore also cancels any prompt).
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || tab.id == null) return false;
+        const previousUrl = tab.url || "";
         await chrome.tabs.update(tab.id, { url: protocolUrl });
-        // Navigating a tab to a custom protocol can make Chrome close that tab.
-        // chrome.tabs.remove() returns a Promise whose rejection is NOT caught
-        // by try/catch; handle it so a gone tab never becomes an uncaught
-        // "No tab with id" promise rejection.
         setTimeout(() => {
-          chrome.tabs.remove(tab.id).catch(() => {});
-        }, 1500);
+          if (previousUrl && /^https?:\/\//i.test(previousUrl)) {
+            chrome.tabs.update(tab.id, { url: previousUrl }).catch(() => {});
+          }
+        }, 3000);
         return true;
       } catch (err) {
         console.warn("Protocol dispatch failed", err);

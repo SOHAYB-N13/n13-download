@@ -480,6 +480,31 @@
       sendResponse({ ok: true });
       return false;
     }
+    if (request.action === "protocol_navigate") {
+      // Silent dispatch of a custom-protocol URL (e.g. dldm://launch).
+      // A hidden iframe never opens a new tab, and removing it after a few
+      // seconds dismisses Chrome's external-protocol prompt automatically.
+      var url = String(request.url || "");
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+        sendResponse({ ok: false });
+        return false;
+      }
+      try {
+        var iframe = document.createElement("iframe");
+        iframe.style.cssText = "display:none !important;width:0;height:0;border:0;visibility:hidden;";
+        iframe.setAttribute("aria-hidden", "true");
+        iframe.setAttribute("tabindex", "-1");
+        iframe.src = url;
+        (document.documentElement || document.body).appendChild(iframe);
+        setTimeout(function () {
+          try { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); } catch (e) { /* ignore */ }
+        }, 3000);
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e && e.message });
+      }
+      return false;
+    }
   });
 
   // ------------------------------------------------------------------ initialize

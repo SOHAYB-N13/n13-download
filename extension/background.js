@@ -12,7 +12,9 @@
  *
  * The dldm:// protocol is used ONLY to LAUNCH N13 when it is not running.  It
  * is never used as a per-URL delivery transport, and delivery always goes
- * through the authenticated local HTTP API after N13 is ready.
+ * through the authenticated local HTTP API after N13 is ready.  The launch is
+ * silent (native messaging first; a hidden iframe otherwise — never a new
+ * tab).
  */
 importScripts("shared/i18n.js", "shared/mime-analyzer.js", "shared/header-analyzer.js", "shared/filename-resolver.js", "shared/url-analyzer.js", "shared/deduplicator.js", "shared/scoring-engine.js", "shared/download-detector.js", "shared/n13-bridge.js");
 
@@ -202,9 +204,9 @@ function nativeLaunch() {
 
 /**
  * When delivery fails because N13 is unreachable, launch it — silently via
- * native messaging when available, otherwise via the dldm:// protocol (which
- * may show Chrome's one-time "Open N13 Download Manager?" dialog) — and wait
- * for its API.  Returns null when the caller should retry the send.
+ * native messaging when available, otherwise via the dldm:// protocol (hidden
+ * iframe, never a new tab) — and wait for its API.  Returns null when the
+ * caller should retry the send.
  */
 async function recoverUnreachable(res, requestId) {
   if (!isUnreachable(res)) return res;
