@@ -1094,6 +1094,42 @@ class Api:
         token_path.write_text(data, encoding="utf-8")
         return str(ext_dir)
 
+    def install_extension(self) -> Dict[str, Any]:
+        """One-click Chrome extension installer (runs in the background).
+
+        The automation drives Chrome's real chrome://extensions → Load
+        unpacked workflow via Windows UI automation and reports progress
+        through the event stream.
+        """
+        thread = getattr(self, "_installer_thread", None)
+        if thread is not None and thread.is_alive():
+            return {"status": "busy"}
+        import threading
+
+        from browser.extension_installer import install_extension as run_install
+
+        self._installer_thread = threading.Thread(
+            target=self._run_extension_install, args=(run_install,), daemon=True
+        )
+        self._installer_thread.start()
+        return {"status": "started"}
+
+    def _run_extension_install(self, run_install) -> None:
+        """Background runner: forward logs/progress to the frontend events."""
+        def emit(line: str) -> None:
+            self._event_queue.put_nowait({"type": "log", "message": line})
+
+        def progress(stage: str) -> None:
+            self._event_queue.put_nowait({"type": "ext_install", "stage": stage})
+
+        result = run_install(emit=emit, progress=progress)
+        self._event_queue.put_nowait({
+            "type": "ext_install_done",
+            "ok": bool(result.get("ok")),
+            "error": result.get("error", ""),
+            "extension_dir": result.get("extension_dir", ""),
+        })
+
     def register_protocol(self) -> bool:
         from browser.protocol import register_protocol
         return register_protocol()

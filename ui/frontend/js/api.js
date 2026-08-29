@@ -99,6 +99,7 @@ const API = {
   async schedulerStatus() { return this._call("scheduler_status"); },
   async clipboardStatus() { return this._call("clipboard_status"); },
   async createExtension() { return this._call("create_extension"); },
+  async installExtension() { return this._call("install_extension"); },
   async registerProtocol() { return this._call("register_protocol"); },
   async unregisterProtocol() { return this._call("unregister_protocol"); },
 

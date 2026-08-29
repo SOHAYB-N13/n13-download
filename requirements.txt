@@ -13,3 +13,8 @@ psutil>=5.9
 # Optional: import cookies from a live browser profile.
 # The core engine still works without it.
 browser-cookie3>=0.19
+
+# Optional: one-click Chrome extension installer (Windows UI automation).
+# The app works without it (the "Install Extension" button reports an error).
+uiautomation>=2.0.19
+pywinauto>=0.6.8

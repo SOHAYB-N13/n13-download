@@ -399,10 +399,14 @@ try {
             </li>
             <li>
               <span class="step-n">3</span>
-              <div class="step-text"><strong data-i18n="browser.step3_title">Load it once</strong><p data-i18n="browser.step3_desc">Open chrome://extensions, enable Developer mode, choose “Load unpacked” and pick the generated folder. Then right-click any link → “Download with N13”.</p></div>
+              <div class="step-text"><strong data-i18n="browser.step3_title">Load it once</strong><p data-i18n="browser.step3_desc">Press “Install Extension” — N13 opens chrome://extensions, enables Developer mode and loads the extension for you automatically. Then right-click any link → “Download with N13”.</p></div>
             </li>
           </ol>
           <div class="batch-actions">
+            <button class="btn btn-primary" id="btnInstallExt">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+              <span data-i18n="browser.install_extension">Install Extension</span>
+            </button>
             <button class="btn btn-ghost" id="btnCreateExt">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
               <span data-i18n="browser.create_extension">Create extension</span>

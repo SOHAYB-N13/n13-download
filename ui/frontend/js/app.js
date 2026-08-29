@@ -530,6 +530,29 @@ const App = {
       this.navigate(evt.page || "dashboard");
     } else if (evt.type === "toast") {
       Components.toast(evt.title || "Notice", evt.message || "", evt.kind || "info");
+    } else if (evt.type === "ext_install") {
+      const stages = {
+        "Locating extension...": "ext_install.stage.locating",
+        "Opening Chrome...": "ext_install.stage.opening",
+        "Opening chrome://extensions/...": "ext_install.stage.page",
+        "Checking Developer Mode...": "ext_install.stage.developer",
+        "Clicking Load unpacked...": "ext_install.stage.load",
+        "Waiting for folder picker...": "ext_install.stage.picker",
+        "Selecting extension directory...": "ext_install.stage.selecting",
+        "Clicking Select Folder...": "ext_install.stage.folder",
+        "Verifying installation...": "ext_install.stage.verifying",
+      };
+      const key = stages[evt.stage] || "ext_install.stage.locating";
+      Components.toast(I18N.t("ext_install.title", "Installing extension…"), I18N.t(key, evt.stage), "info", 2600);
+    } else if (evt.type === "ext_install_done") {
+      this.state.extInstalling = false;
+      const btn = Utils.$id("btnInstallExt");
+      if (btn) btn.disabled = false;
+      if (evt.ok) {
+        Components.toast(I18N.t("ext_install.done", "Extension installed successfully"), I18N.t("ext_install.done_msg", "N13 is now connected to Chrome"), "success", 8000);
+      } else {
+        Components.toast(I18N.t("ext_install.failed", "Extension install failed"), String(evt.error || ""), "error", 10000);
+      }
     } else if (evt.type === "window") {
       this._setMaxState(!!evt.maximized);
     } else if (evt.type === "update_state") {
@@ -1654,6 +1677,20 @@ const App = {
     Utils.$id("btnCreateExt").addEventListener("click", async () => {
       const path = await API.createExtension();
       if (path) Components.toast(I18N.t("toast.extension_created", "Extension created"), path, "success", 6500);
+    });
+
+    Utils.$id("btnInstallExt").addEventListener("click", async () => {
+      const btn = Utils.$id("btnInstallExt");
+      btn.disabled = true;
+      const res = await API.installExtension();
+      if (res && res.status === "busy") {
+        Components.toast(I18N.t("ext_install.busy", "Already installing…"), "", "info", 2000);
+        btn.disabled = false;
+        return;
+      }
+      Components.toast(I18N.t("ext_install.title", "Installing extension…"), I18N.t("ext_install.stage.locating", "Locating the N13 extension…"), "info", 2600);
+      this.state.extInstalling = true;
+      setTimeout(() => { if (!this.state.extInstalling) btn.disabled = false; }, 30000);
     });
 
     Utils.$id("btnRegProtocol").addEventListener("click", async () => {
