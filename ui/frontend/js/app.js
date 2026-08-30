@@ -8,6 +8,7 @@ const App = {
     downloads: {},
     history: [],
     logs: [],
+    elapsed: {},           // taskId -> { ms, from } active-time accumulator
     filter: "all",
     sortKey: "newest",
     sortDir: -1,
@@ -495,11 +496,13 @@ const App = {
       const had = !!this.state.downloads[t.id];
       if (evt.event === "removed") {
         delete this.state.downloads[t.id];
+        delete this.state.elapsed[t.id];
         this.state.selectedIds.delete(t.id);
         if (!this.state.selectedIds.size) this.state.selAnchor = null;
         this._removeRow(t.id);
       } else {
         this.state.downloads[t.id] = t;
+        this._elapsedFor(t); // keep the active-time tracker honest on every event
         if (!had) this._addRow(t);
         else this._updateRow(t);
       }
@@ -893,7 +896,7 @@ const App = {
     emptyEl.hidden = true;
     headEl.hidden = false;
     const frag = document.createDocumentFragment();
-    tasks.forEach((t) => frag.appendChild(Components.renderRow(t, this.rowCallbacks)));
+    tasks.forEach((t) => frag.appendChild(Components.renderRow(t, this.rowCallbacks, this._elapsedFor(t))));
     listEl.replaceChildren(frag);
     this._syncSelection();
 
@@ -913,10 +916,42 @@ const App = {
     this._renderDownloads();
   },
 
+  /**
+   * Active-time accumulator for the unified progress component.
+   *
+   * Elapsed counts only genuinely active phases (Downloading/Starting/
+   * Analyzing/Merging/Verifying).  Pausing freezes the value, Resuming
+   * continues from the same point, and terminal states (Complete/Failed/
+   * Cancelled) freeze it permanently.  Uses state-transition timestamps, so
+   * timer jitter never inflates the count.
+   */
+  _elapsedFor(task) {
+    const id = task.id;
+    let e = this.state.elapsed[id];
+    const active = ["Downloading", "Starting", "Analyzing", "Merging", "Verifying"].includes(task.state);
+    if (!e) {
+      e = { ms: 0, from: null };
+      // Seed from the backend wall-clock start when we first observe an
+      // already-active task (e.g. the app restarted mid-download).
+      if (task.started_at) {
+        const seed = Math.max(0, (Date.now() / 1000 - task.started_at) * 1000);
+        if (seed > 0) e.ms = seed;
+      }
+      this.state.elapsed[id] = e;
+    }
+    if (active) {
+      if (e.from === null) e.from = Date.now();
+    } else if (e.from !== null) {
+      e.ms += Date.now() - e.from;
+      e.from = null;
+    }
+    return e.ms + (e.from !== null ? Date.now() - e.from : 0);
+  },
+
   _updateRow(task) {
     if (this.state.page !== "downloads") return;
     const row = Utils.$q(`#downloadList [data-id="${task.id}"]`);
-    if (row) Components.updateRow(row, task);
+    if (row) Components.updateRow(row, task, this._elapsedFor(task));
   },
 
   _removeRow(id) {

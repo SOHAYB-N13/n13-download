@@ -406,7 +406,15 @@ const Components = {
     return `<span class="badge badge-${cls}"><i class="badge-dot"></i>${lbl}</span>`;
   },
 
-  renderRow(task, cb) {
+  _etaText(task) {
+    if (task.state === "Complete") return "00:00";
+    if (task.state !== "Downloading") return "--:--";
+    const eta = task.eta_seconds;
+    if (eta == null || !isFinite(eta) || eta < 0) return "--:--";
+    return Utils.formatDuration(eta);
+  },
+
+  renderRow(task, cb, elapsedMs = 0) {
     const name = Utils.fileName(task);
     const pct = task.total > 0 ? Utils.clamp((task.completed / task.total) * 100, 0, 100) : 0;
     const stCls = Utils.statusClass(task.state);
@@ -420,6 +428,7 @@ const Components = {
     const done = Utils.formatSize(task.completed);
     const total = task.total > 0 ? Utils.formatSize(task.total) : "—";
     const remaining = task.total > 0 ? Utils.formatSize(Math.max(0, task.total - task.completed)) : "—";
+    const pctText = task.total > 0 ? pct.toFixed(0) + "%" : "—";
 
     row.innerHTML = `
       <div class="dl-ico" data-type="${Utils.fileType(name)}">${Utils.fileIcon(name, 19)}</div>
@@ -428,16 +437,17 @@ const Components = {
         <div class="dl-sub" title="${Utils.escapeHtml(task.url)}">${Utils.escapeHtml(Utils.hostOf(task.url))}<span class="dl-smart">${task.smart_status ? I18N.fmt("fmt.smart_connections", { status: task.smart_status }) : ""}</span></div>
       </div>
       <div class="dl-progress">
+        <span class="dl-time dl-elapsed">${Utils.formatDuration(elapsedMs / 1000)}</span>
         <div class="progress" role="progressbar" aria-valuenow="${pct.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-fill p-${stCls}" style="width:${pct}%"></div>
+          <span class="dl-pct">${pctText}</span>
         </div>
-        <span class="dl-pct">${task.total > 0 ? pct.toFixed(0) + "%" : "—"}</span>
+        <span class="dl-time dl-eta">${this._etaText(task)}</span>
       </div>
       <div class="dl-cell dl-size" title="${done} of ${total} · ${remaining} left">
         <span class="dl-cell-main">${done}<span class="dl-cell-dim"> / ${total}</span></span>
       </div>
       <div class="dl-cell dl-speed">${task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—"}</div>
-      <div class="dl-cell dl-eta">${task.state === "Downloading" ? Utils.formatETA(task.eta_seconds) : "—"}</div>
       <div class="dl-status">${this._badge(task)}${task.error ? `<span class="dl-err" title="${Utils.escapeHtml(task.error)}">${Utils.icon("info", 13)}</span>` : ""}</div>
       <div class="dl-actions">${this._rowActions(task)}</div>`;
 
@@ -482,7 +492,7 @@ const Components = {
     });
   },
 
-  updateRow(row, task) {
+  updateRow(row, task, elapsedMs = 0) {
     const pct = task.total > 0 ? Utils.clamp((task.completed / task.total) * 100, 0, 100) : 0;
     const stCls = Utils.statusClass(task.state);
     const stateChanged = row.dataset.state !== task.state;
@@ -499,6 +509,11 @@ const Components = {
     const pctEl = row.querySelector(".dl-pct");
     if (pctEl) pctEl.textContent = task.total > 0 ? pct.toFixed(0) + "%" : "—";
 
+    const elapsedEl = row.querySelector(".dl-elapsed");
+    if (elapsedEl) elapsedEl.textContent = Utils.formatDuration(elapsedMs / 1000);
+    const etaEl = row.querySelector(".dl-eta");
+    if (etaEl) etaEl.textContent = this._etaText(task);
+
     const sizeEl = row.querySelector(".dl-size .dl-cell-main");
     if (sizeEl) {
       const total = task.total > 0 ? Utils.formatSize(task.total) : "—";
@@ -506,8 +521,6 @@ const Components = {
     }
     const speedEl = row.querySelector(".dl-speed");
     if (speedEl) speedEl.textContent = task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—";
-    const etaEl = row.querySelector(".dl-eta");
-    if (etaEl) etaEl.textContent = task.state === "Downloading" ? Utils.formatETA(task.eta_seconds) : "—";
 
     const smartEl = row.querySelector(".dl-smart");
     if (smartEl) smartEl.textContent = task.smart_status ? I18N.fmt("fmt.smart_connections", { status: task.smart_status }) : "";
@@ -546,7 +559,6 @@ const Components = {
         <div class="dl-progress"><span class="sk sk-bar"></span></div>
         <div class="dl-cell"><span class="sk sk-line w70"></span></div>
         <div class="dl-cell"><span class="sk sk-line w50"></span></div>
-        <div class="dl-cell"><span class="sk sk-line w40"></span></div>
         <div class="dl-status"><span class="sk sk-pill"></span></div>
         <div class="dl-actions"><span class="sk sk-dot3"></span></div>
       </div>`;

@@ -31,6 +31,18 @@ const Utils = {
     return `${s}s`;
   },
 
+  /** MM:SS (below one hour) / HH:MM:SS (one hour+) — "--:--" when invalid. */
+  formatDuration(seconds) {
+    if (seconds == null || isNaN(seconds) || seconds < 0 || !isFinite(seconds)) return "--:--";
+    const t = Math.floor(seconds);
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = t % 60;
+    const mm = String(m).padStart(2, "0");
+    const ss = String(s).padStart(2, "0");
+    return h ? `${String(h).padStart(2, "0")}:${mm}:${ss}` : `${mm}:${ss}`;
+  },
+
   formatDate(ts) {
     if (!ts) return "";
     const d = new Date(ts * 1000);
