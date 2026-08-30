@@ -154,7 +154,7 @@ class AppConfig:
 
     # --- Auto-update ----------------------------------------------------------
     auto_update_check: bool = True
-    update_repo: str = "SOHYAB-N13/n13-download"
+    update_repo: str = "SOHAYB-N13/n13-download"
 
     # --- Networking identity ----------------------------------------------
     user_agent: str = (

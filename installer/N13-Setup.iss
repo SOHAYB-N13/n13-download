@@ -4,7 +4,7 @@
 #define MyAppName      "N13 Download Manager"
 #define MyAppVersion   GetFileVersion('..\dist\N13\N13.exe')
 #define MyAppPublisher "N13"
-#define MyAppURL       "https://github.com/SOHYAB-N13/n13-download"
+#define MyAppURL       "https://github.com/SOHAYB-N13/n13-download"
 #define MyAppExeName   "N13.exe"
 #define MyAppAssocName "N13 Download Manager Protocol"
 #define MyAppAssocExt  "dldm"

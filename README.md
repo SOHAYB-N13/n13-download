@@ -32,7 +32,7 @@ Two interfaces are included:
 
 Get the ready-to-run **installer** — no Python required:
 
-[⬇️ Download N13-Download-Manager-Setup.exe](https://github.com/SOHYAB-N13/n13-download/releases/latest)
+[⬇️ Download N13-Download-Manager-Setup.exe](https://github.com/SOHAYB-N13/n13-download/releases/latest)
 
 The installer bundles WebView2 setup, registers the `dldm://` protocol and is
 updated automatically from the app.
@@ -144,7 +144,7 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 
 **نصب‌کننده آماده** را دانلود کنید — نیازی به پایتون نیست:
 
-[⬇️ دانلود N13-Download-Manager-Setup.exe](https://github.com/SOHYAB-N13/n13-download/releases/latest)
+[⬇️ دانلود N13-Download-Manager-Setup.exe](https://github.com/SOHAYB-N13/n13-download/releases/latest)
 
 نصب‌کننده شامل تنظیم WebView2 و ثبت پروتکل `dldm://` است و برنامه خودش از داخل،
 به‌روزرسانی‌ها را نصب می‌کند.

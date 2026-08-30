@@ -4,7 +4,7 @@
 
 If you find a security vulnerability in this project, please **do not** open a
 public issue. Instead, report it privately by emailing the maintainer at
-`97932683+SOHYAB-N13@users.noreply.github.com`.
+`97932683+SOHAYB-N13@users.noreply.github.com`.
 
 Please include:
 

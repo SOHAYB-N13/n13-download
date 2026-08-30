@@ -57,7 +57,7 @@ log = logging.getLogger("n13")
 # Constants
 # --------------------------------------------------------------------------- #
 
-DEFAULT_REPO = "SOHYAB-N13/n13-download"
+DEFAULT_REPO = "SOHAYB-N13/n13-download"
 GITHUB_API_URL = "https://api.github.com/repos/{repo}/releases/latest"
 INSTALLER_NAME = "N13-Download-Manager-Setup.exe"
 CHECKSUM_NAME = INSTALLER_NAME + ".sha256.txt"
