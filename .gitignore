@@ -15,3 +15,6 @@ docs/
 tests/
 .DS_Store
 Thumbs.db
+
+# Tool-generated project marker
+.freebuff/
