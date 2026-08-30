@@ -7,6 +7,7 @@ import logging
 import os
 import queue
 import subprocess
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,10 @@ from ui.common import (
 from ui.legacy import LegacyDownloadRunner
 
 log = logging.getLogger("n13")
+
+# Probe hand-off: how long a UI-probe result stays reusable for the queue's
+# ANALYZING step (duplicate-probe elimination fast path).
+_PROBE_CACHE_TTL = 60.0
 
 
 class Api:
@@ -52,6 +57,10 @@ class Api:
         self._net_baseline_time: float = 0.0
         self._shutdown_done: bool = False
         self._tray = None
+        # Normalized URL -> (probed_at, Analysis) — the task-scoped probe
+        # hand-off source for add_download (never trusted blindly; the runner
+        # re-validates URL match, freshness and SSRF before reuse).
+        self._probe_cache: Dict[str, tuple] = {}
 
         from core.paths import data_dir, migrate_legacy_saved_links
 
@@ -392,9 +401,17 @@ class Api:
         priority = int(rule["priority"]) if rule else 5
         conn = rule["connection_mode"] if rule else ""
         nthreads = int(rule["num_threads"]) if rule else 0
+        # Task-scoped probe hand-off: reuse a fresh probe result for THIS url
+        # so the queue's ANALYZING step does not probe it again.  The runner
+        # still validates it (URL match, freshness, SSRF) before reuse.
+        probe_analysis = None
+        entry = self._probe_cache.get(normalize_url(url))
+        if entry is not None and (time.time() - entry[0]) <= _PROBE_CACHE_TTL:
+            probe_analysis = entry[1]
         request = DownloadRequest(
             url=url, directory=resolved, checksum=checksum, label=label, category=cat,
             priority=priority, connection_mode=conn, num_threads=nthreads,
+            probe_analysis=probe_analysis,
         )
         return self._manager.add(request, autostart=autostart, allow_duplicate=allow_duplicate)
 
@@ -635,24 +652,29 @@ class Api:
 
     def probe_url(self, url: str) -> Dict[str, Any]:
         """Lightweight HEAD/range probe used by the New Download dialog to
-        auto-detect filename and size before the download starts."""
-        from core.probe import probe_url as _probe
+        auto-detect filename and size before the download starts.
+
+        The full analysis result is cached per URL (short TTL) and handed to
+        the queue when the user adds the download, so the same URL is not
+        probed a second time by the ANALYZING step.
+        """
+        from core.analyzer import analyze_url as _analyze
         url = normalize_url(url or "")
         if not validate_url(url):
             return {"ok": False, "error": "Enter a valid http(s) URL", "normalized": ""}
         try:
-            ok, size, supports_range, filename, err = _probe(
-                url, self._config, self._session, timeout=12
-            )
+            a = _analyze(url, self._config, self._session)
+            if a.ok:
+                self._probe_cache[url] = (time.time(), a)
         except Exception as exc:  # never leak a traceback into the UI
             return {"ok": False, "error": str(exc), "normalized": url}
         return {
-            "ok": ok,
-            "size": int(size or 0),
-            "size_display": human_size(size) if size else "",
-            "range": bool(supports_range),
-            "filename": filename or "",
-            "error": err or "",
+            "ok": a.ok,
+            "size": int(a.total_size or 0),
+            "size_display": human_size(a.total_size) if a.total_size else "",
+            "range": bool(a.supports_range),
+            "filename": a.filename or "",
+            "error": a.error or "",
             "normalized": url,
         }
 
@@ -663,7 +685,9 @@ class Api:
         if not validate_url(url):
             return {"ok": False, "error": "Enter a valid http(s) URL"}
         try:
-            a = _analyze(url, self._config, self._session, timeout=12)
+            a = _analyze(url, self._config, self._session)
+            if a.ok:
+                self._probe_cache[url] = (time.time(), a)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         result = a.to_dict()

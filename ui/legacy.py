@@ -12,6 +12,7 @@ control is now passed straight into :class:`core.download.DownloadController`.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -22,6 +23,10 @@ from core.session import SessionManager
 from core.throttle import sync_limiter_from_config
 
 from ui.common import DownloadRequest, ProgressCallback
+
+# How long a handed-off probe result stays valid (seconds).  After this the
+# analyzer performs its normal probe again.
+_HANDOFF_TTL = 60.0
 
 
 class LegacyDownloadRunner:
@@ -49,11 +54,50 @@ class LegacyDownloadRunner:
     # Analyze phase (ANALYZING)
     # ------------------------------------------------------------------
 
+    def _handoff_valid(self, analysis: Any, url: str) -> bool:
+        """Whether a handed-off probe result may be reused for *url*.
+
+        Fast path is strictly validated — a result that is not OK, does not
+        belong to this exact URL, is stale, or fails the SSRF check for the
+        task URL is rejected so the normal probe runs instead.
+        """
+        try:
+            if analysis is None or not getattr(analysis, "ok", False):
+                return False
+            if not getattr(analysis, "url", "") or not getattr(analysis, "probed_at", 0):
+                return False
+            if time.time() - float(analysis.probed_at) > _HANDOFF_TTL:
+                return False
+            from core.security import validate_download_url
+            from core.utils import normalize_url
+
+            if normalize_url(analysis.url) != normalize_url(url):
+                return False
+            ok, _ = validate_download_url(
+                url, block_private=self._config.block_private_urls
+            )
+            return ok
+        except Exception:
+            return False
+
     def analyze(self, task_id: str, request: DownloadRequest, control: TaskControl) -> Any:
-        """Probe the URL and return an :class:`core.analyzer.Analysis`."""
+        """Probe the URL and return an :class:`core.analyzer.Analysis`.
+
+        Reuses a task-scoped probe hand-off (from the UI's probe step) when it
+        is still valid for this exact URL — eliminating the duplicate network
+        probe — and falls back to the normal probe otherwise.
+        """
         if control is not None and control.cancelled:
             raise TaskCancelled()
         self._prepare()
+        handed = getattr(request, "probe_analysis", None)
+        if handed is not None and self._handoff_valid(handed, request.url):
+            if self._log:
+                try:
+                    self._log("Using handed-off probe result (no re-probe).")
+                except Exception:
+                    pass
+            return handed
         from core.analyzer import analyze_url
 
         return analyze_url(request.url, self._config, self._session)

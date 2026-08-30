@@ -112,17 +112,38 @@ _FATAL_STATUS = frozenset(range(400, 500)) - _RETRYABLE_STATUS
 
 # Write-buffer flush threshold: accumulate chunks in memory and flush to disk
 # in larger blocks to reduce syscall overhead on every part download.
-# Defined at module level so it is not re-evaluated on every chunk iteration.
-def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None) -> float:
+
+# Pre-first-byte retry budget.  Before ANY byte has been received, retries use
+# a fast, bounded schedule (0.5 / 1 / 2 s) and a hard attempt cap so a flaky
+# server can never stall the download startup for tens of seconds.  Once the
+# transfer has begun, the normal (more tolerant) retry behaviour applies.
+_STARTUP_RETRY_BASE = 0.5
+_STARTUP_RETRY_CAP = 2.0
+
+# Pre-first-byte request timeouts (connect, read) — short so a dead-but-
+# accepting endpoint fails within a bounded time.  After the first byte the
+# regular (30, 120) download timeout applies.
+_DOWNLOAD_TIMEOUT = (30, 120)
+
+
+def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None,
+                 started: bool = False) -> float:
     """Compute the next backoff delay, capped and jittered.
 
-    Honors Retry-After semantics implicitly through ``status`` (the caller can
-    extend this), and never exceeds ``retry_max_delay``.
+    ``started=False`` (no byte received yet) uses a fast bounded schedule —
+    the startup must never be gated by a long sleep chain.  ``started=True``
+    keeps the configured exponential backoff for in-transfer retries.
     """
-    base = config.retry_delay
-    backoff = config.retry_backoff
+    if not started:
+        base = min(_STARTUP_RETRY_BASE, config.retry_delay)
+        backoff = 2.0
+        cap = min(_STARTUP_RETRY_CAP, config.retry_max_delay)
+    else:
+        base = config.retry_delay
+        backoff = config.retry_backoff
+        cap = config.retry_max_delay
     delay = base * (backoff ** (attempt - 1))
-    delay = min(delay, config.retry_max_delay)
+    delay = min(delay, cap)
     # Decorrelated jitter in [delay*(1-j), delay*(1+j)].
     jitter = config.retry_jitter
     delay *= 1.0 - jitter + random.random() * (2 * jitter)
@@ -164,10 +185,9 @@ def _is_retryable_exception(exc: BaseException) -> tuple[bool, Optional[int]]:
                 return True, status
             if status in _FATAL_STATUS:
                 return False, status
-            # Other 4xx/5xx: retry only server-side codes handled above.
-            if 400 <= status < 500:
-                return False, status
-            return status >= 500, status
+            # Other 4xx/5xx: only the explicit transient set is retried —
+            # 501/505 and friends fail fast instead of wasting attempts.
+            return False, status
         return True, status
     if isinstance(exc, (requests.ConnectionError, requests.Timeout, ConnectionError)):
         return True, None
@@ -185,6 +205,19 @@ def _parts_within_directory(parts: List[DownloadPart], directory: Path) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+def _fallback_filename(url: str) -> str:
+    """Best-effort file name from a URL when the probe supplied none."""
+    from urllib.parse import unquote, urlparse
+
+    try:
+        name = unquote(urlparse(url).path or "").rstrip("/").split("/")[-1]
+        if name and name != "/":
+            return name
+    except Exception:
+        pass
+    return "download"
 
 
 class DownloadController:
@@ -236,8 +269,17 @@ class DownloadController:
         headers: dict,
         timeout: tuple[int, int] = (30, 120),
         stream: bool = False,
+        session=None,
     ) -> requests.Response:
-        return self.session.session.get(
+        """Issue a request through the given transport (default: main session).
+
+        ``session`` may be the probe transport (``SessionManager.probe_session``)
+        which retries almost nothing — used for pre-first-byte requests so a
+        dead-but-accepting server can never multiply its read timeout into a
+        multi-minute stall before the first byte.
+        """
+        sess = session if session is not None else self.session.session
+        return sess.get(
             url,
             headers=headers,
             timeout=timeout,
@@ -349,6 +391,12 @@ class DownloadController:
         max_retries = max(1, self.config.max_retries)
         chunk_size = self.config.chunk_size
         cancel_event = DownloadContext._cancel_event
+        startup_attempts = max(1, min(max_retries, self.config.startup_max_attempts))
+        startup_timeout = (
+            self.config.startup_connect_timeout,
+            self.config.startup_read_timeout,
+        )
+        first_byte_seen = False
 
         for attempt in range(1, max_retries + 1):
             if cancel_event.is_set() or self._ctl_cancelled(control):
@@ -379,7 +427,11 @@ class DownloadController:
             headers.pop("Upgrade-Insecure-Requests", None)
 
             try:
-                with self.smart_request(url, headers=headers, stream=True) as response:
+                with self.smart_request(url, headers=headers, stream=True,
+                                        timeout=startup_timeout if not first_byte_seen
+                                        else _DOWNLOAD_TIMEOUT,
+                                        session=self.session.probe_session
+                                        if not first_byte_seen else None) as response:
                     if response.status_code not in (200, 206):
                         raise requests.HTTPError(
                             f"HTTP {response.status_code}",
@@ -478,6 +530,8 @@ class DownloadController:
 
                             chunk_len = len(raw_chunk)
                             dest.write(raw_chunk)
+                            if not first_byte_seen:
+                                first_byte_seen = True
                             bytes_remaining -= chunk_len
                             local_bytes += chunk_len
 
@@ -529,7 +583,12 @@ class DownloadController:
                         optimizer.on_server_error(status)
                     except Exception:
                         pass
-                if not retryable or attempt >= max_retries:
+                # Pre-first-byte attempts are capped: a server that never
+                # delivers a byte within the startup budget should fail fast
+                # instead of retrying for minutes.
+                if not retryable or attempt >= max_retries or (
+                    not first_byte_seen and attempt >= startup_attempts
+                ):
                     detail = f" (HTTP {status})" if status else ""
                     self.last_error = friendly_error_message(exc, status)
                     self._print(
@@ -537,7 +596,8 @@ class DownloadController:
                         f"attempt(s){detail}: {exc}"
                     )
                     return False
-                delay = _retry_delay(attempt, self.config, status)
+                delay = _retry_delay(attempt, self.config, status,
+                                     started=first_byte_seen)
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -562,6 +622,12 @@ class DownloadController:
         max_retries = max(1, self.config.max_retries)
         cancel_event = DownloadContext._cancel_event
         chunk_size = self.config.chunk_size
+        startup_attempts = max(1, min(max_retries, self.config.startup_max_attempts))
+        startup_timeout = (
+            self.config.startup_connect_timeout,
+            self.config.startup_read_timeout,
+        )
+        first_byte_seen = False
 
         for attempt in range(1, max_retries + 1):
             if cancel_event.is_set() or self._ctl_cancelled(control):
@@ -579,7 +645,11 @@ class DownloadController:
             )
 
             try:
-                with self.smart_request(url, headers=headers, stream=True) as response:
+                with self.smart_request(url, headers=headers, stream=True,
+                                        timeout=startup_timeout if not first_byte_seen
+                                        else _DOWNLOAD_TIMEOUT,
+                                        session=self.session.probe_session
+                                        if not first_byte_seen else None) as response:
                     if response.status_code not in (200, 206):
                         response.raise_for_status()
 
@@ -646,6 +716,8 @@ class DownloadController:
                                 dest.write(raw_chunk)
                                 downloaded += len(raw_chunk)
                                 local_bytes += len(raw_chunk)
+                                if not first_byte_seen:
+                                    first_byte_seen = True
 
                                 if local_bytes >= _PROGRESS_FLUSH_THRESHOLD:
                                     if progress is not None and task_id is not None:
@@ -690,13 +762,16 @@ class DownloadController:
 
             except (requests.RequestException, OSError) as exc:
                 retryable, status = _is_retryable_exception(exc)
-                if not retryable or attempt >= max_retries:
+                if not retryable or attempt >= max_retries or (
+                    not first_byte_seen and attempt >= startup_attempts
+                ):
                     self.last_error = friendly_error_message(exc, status)
                     self._print(
                         f"[red]Download failed after {attempt} attempt(s): {exc}"
                     )
                     return False
-                delay = _retry_delay(attempt, self.config, status)
+                delay = _retry_delay(attempt, self.config, status,
+                                     started=first_byte_seen)
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -721,7 +796,7 @@ class DownloadController:
                     return
                 time.sleep(0.5)
 
-    # ------------------------------------------------------------------ #
+# ------------------------------------------------------------------ #
     # Main orchestration
     # ------------------------------------------------------------------ #
     def download_file(
@@ -745,18 +820,36 @@ class DownloadController:
         directory.mkdir(parents=True, exist_ok=True)
 
         # Use a fresh pre-analysis (ANALYZING step) when available to avoid a
-        # second network probe; otherwise probe here as before.
+        # second network probe; otherwise probe here as before.  A FAILED probe
+        # is never a hard gate: metadata discovery must not prevent the
+        # transfer from starting, so we fall back to a direct download.
+        resolved = ""
         if pre_analysis is not None and getattr(pre_analysis, "ok", False):
             reachable = True
             total_size = int(pre_analysis.total_size or 0)
             supports_range = bool(pre_analysis.supports_range)
             filename = getattr(pre_analysis, "filename", "") or ""
             error = ""
+            resolved = str(getattr(pre_analysis, "final_url", "") or "")
+        elif pre_analysis is not None:
+            # The queue's ANALYZING step already probed this URL and failed —
+            # do not re-probe; proceed straight to a direct download attempt.
+            reachable = False
+            total_size = 0
+            supports_range = False
+            filename = ""
+            error = str(getattr(pre_analysis, "error", "") or "")
         else:
+            from core.analyzer import analyze_url as _analyze_url
+
             self._print("[dim]Probing URL...[/dim]")
-            reachable, total_size, supports_range, filename, error = probe_url(
-                url, self.config, self.session
-            )
+            analysis = _analyze_url(url, self.config, self.session)
+            reachable = bool(analysis.ok)
+            total_size = int(analysis.total_size or 0)
+            supports_range = bool(analysis.supports_range)
+            filename = analysis.filename or ""
+            error = analysis.error or ""
+            resolved = str(getattr(analysis, "final_url", "") or "")
 
         if not reachable:
             if self._ctl_cancelled(control):
@@ -764,15 +857,53 @@ class DownloadController:
                 self._print("[yellow]Download cancelled while checking the link.[/yellow]")
                 self.last_error = "Cancelled"
                 return False
-            self.last_error = error or "Cannot reach server"
-            self._print(f"[red]Cannot reach server: {error}")
-            return False
+            # Security blocks (private/local targets etc.) are NEVER bypassed
+            # by the direct-download fallback — only metadata failures are.
+            from core.security import validate_download_url
+
+            sec_ok, sec_err = validate_download_url(
+                url, block_private=self.config.block_private_urls
+            )
+            if not sec_ok:
+                self.last_error = sec_err
+                self._print(f"[red]{sec_err}[/red]")
+                return False
+            self._print(
+                f"[yellow]Probe failed ({error or 'unreachable'}); "
+                "attempting direct download.[/yellow]"
+            )
+            total_size = 0
+            supports_range = False
+            if not filename:
+                filename = _fallback_filename(url)
 
         if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled while checking the link.[/yellow]")
             DownloadContext.clear()
             self.last_error = "Cancelled"
             return False
+
+        # Redirect-chain reuse: when the probe resolved the URL to a final
+        # destination, transfer against THAT URL directly instead of walking
+        # the redirect chain a second time.  Task-scoped and strictly
+        # validated: only http/https, and the resolved destination must pass
+        # the same security checks as the original.  Anything else falls back
+        # to the original URL (existing behaviour).
+        transfer_url = url
+        if resolved and resolved != url:
+            from core.security import validate_download_url
+
+            sec_ok, _ = validate_download_url(
+                resolved, block_private=self.config.block_private_urls
+            )
+            if sec_ok and resolved.startswith(("http://", "https://")):
+                transfer_url = resolved
+                self._print(f"[dim]Using resolved URL: {resolved}[/dim]")
+            else:
+                self._print(
+                    f"[dim]Resolved URL rejected by security checks; "
+                    "using original URL.[/dim]"
+                )
 
         if filename:
             self._print(f"[green]✓ Detected file: {filename}[/green]")
@@ -803,7 +934,7 @@ class DownloadController:
         if not can_resume:
             try:
                 return self.single_thread_download(
-                    url, file_path, progress_callback, control=control
+                    transfer_url, file_path, progress_callback, control=control
                 )
             finally:
                 # Single-thread downloads do not create a DownloadState, but
@@ -944,7 +1075,7 @@ class DownloadController:
                             governor.acquire()
                         try:
                             return self.download_part(
-                                url,
+                                transfer_url,
                                 part,
                                 progress,
                                 task_id,

@@ -9,6 +9,7 @@ queue worker thread — never on the UI thread.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Optional
 from urllib.parse import urlparse
@@ -37,6 +38,15 @@ class Analysis:
     checksum_available: bool = False
     error: str = ""
     headers: Dict[str, str] = field(default_factory=dict)
+    # Hand-off validation metadata: the ORIGINAL input URL this analysis
+    # belongs to, and when it was produced (used by the duplicate-probe
+    # fast path to confirm the result is still fresh and task-matching).
+    url: str = ""
+    probed_at: float = 0.0
+    # Final URL after redirect resolution ("" when no redirect / probe failed).
+    # Lets the transfer start at the resolved URL instead of re-traversing the
+    # redirect chain.  Task-scoped; never trusted without re-validation.
+    final_url: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -64,15 +74,16 @@ def analyze_url(
     url: str,
     config: "AppConfig",
     session_manager: "SessionManager",
-    timeout: int = 20,
+    timeout: Optional[float] = None,
+    read_timeout: Optional[float] = None,
 ) -> Analysis:
     """Analyse *url* in a worker thread and return an :class:`Analysis`."""
     from core.probe import probe_with_headers
 
-    result = Analysis()
+    result = Analysis(url=url, probed_at=time.time())
     try:
-        reachable, total, supports, filename, err, headers = probe_with_headers(
-            url, config, session_manager, timeout
+        reachable, total, supports, filename, err, headers, final_url = probe_with_headers(
+            url, config, session_manager, timeout, read_timeout
         )
     except Exception as exc:  # never leak a traceback to the UI
         result.error = str(exc)
@@ -83,6 +94,7 @@ def analyze_url(
         return result
 
     result.ok = True
+    result.final_url = final_url or ""
     result.total_size = int(total or 0)
     result.supports_range = bool(supports)
     result.filename = filename or get_filename_from_response(

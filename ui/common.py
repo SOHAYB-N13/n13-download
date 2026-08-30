@@ -184,6 +184,11 @@ class DownloadRequest:
     speed_limit_bps: int = 0
     connection_mode: str = ""      # "" | "smart" | "manual" (rule override)
     num_threads: int = 0           # used when connection_mode == "manual"
+    # Task-scoped probe hand-off: an already-computed Analysis for THIS url
+    # (produced by the UI's probe step).  Never trusted blindly — the runner
+    # re-validates URL match, freshness and SSRF before using it, and falls
+    # back to its own probe otherwise.
+    probe_analysis: Any = None
 
     @property
     def name(self) -> str:
@@ -296,6 +301,9 @@ class _TaskRecord:
     # Set during app shutdown so the worker finalize preserves the persisted
     # resumable state instead of marking the task CANCELLED.
     shutting_down: bool = False
+    # Probe hand-off carried from the original DownloadRequest into the
+    # worker thread (task-scoped; never persisted).
+    probe_analysis: Any = None
 
     @property
     def id(self) -> str:
@@ -490,7 +498,7 @@ class TaskManager:
                 num_threads=request.num_threads,
             )
             task_id = task.id
-            rec = _TaskRecord(task=task)
+            rec = _TaskRecord(task=task, probe_analysis=request.probe_analysis)
             self._tasks[task_id] = rec
             self._order.append(task_id)
             self._save_task_locked(rec)
@@ -986,6 +994,14 @@ class TaskManager:
             task = rec.task if rec else None
             control = rec.control if rec else None
             request = self._request_for(task) if task else None
+            probe_handoff = rec.probe_analysis if rec else None
+
+        # Attach the task-scoped probe hand-off so the runner can reuse the
+        # UI's probe result instead of probing the same URL a second time.
+        if request is not None and probe_handoff is not None:
+            from dataclasses import replace
+
+            request = replace(request, probe_analysis=probe_handoff)
 
         if rec is None or task is None or control is None or request is None:
             with self._lock:

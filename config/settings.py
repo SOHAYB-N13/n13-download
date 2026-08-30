@@ -102,6 +102,16 @@ class AppConfig:
     retry_jitter: float = 0.25                   # +/- jitter fraction (0..0.5)
     retry_max_delay: float = 120.0               # cap a single backoff sleep
 
+    # --- Startup budget ------------------------------------------------------
+    # Bounds for the period BEFORE the first byte of a download is received.
+    # A flaky server must never stall the startup for tens of seconds, while a
+    # healthy transfer keeps its normal (generous) timeout behaviour.
+    probe_connect_timeout: float = 4.0           # probe: connect timeout (s)
+    probe_read_timeout: float = 8.0              # probe: read timeout (s)
+    startup_connect_timeout: float = 10.0        # transfer pre-first-byte connect (s)
+    startup_read_timeout: float = 15.0           # transfer pre-first-byte read (s)
+    startup_max_attempts: int = 6                # pre-first-byte attempt cap
+
     # --- Speed tracking ----------------------------------------------------
     speed_sample_interval: float = 0.2
     speed_window_size: int = 20
@@ -253,6 +263,11 @@ class AppConfig:
         instance.retry_backoff   = max(1.0, min(10.0, float(instance.retry_backoff or 1)))
         instance.retry_jitter    = max(0.0, min(0.5,  float(instance.retry_jitter or 0)))
         instance.retry_max_delay = max(1.0, min(3600.0, float(instance.retry_max_delay or 1)))
+        instance.probe_connect_timeout = max(1.0, min(30.0, float(getattr(instance, "probe_connect_timeout", 4) or 4)))
+        instance.probe_read_timeout = max(1.0, min(60.0, float(getattr(instance, "probe_read_timeout", 8) or 8)))
+        instance.startup_connect_timeout = max(1.0, min(30.0, float(getattr(instance, "startup_connect_timeout", 10) or 10)))
+        instance.startup_read_timeout = max(1.0, min(120.0, float(getattr(instance, "startup_read_timeout", 15) or 15)))
+        instance.startup_max_attempts = max(1, min(15, int(getattr(instance, "startup_max_attempts", 6) or 6)))
         instance.max_speed_bps   = max(0, int(instance.max_speed_bps or 0))
         instance.live_server_port = max(1024, min(65535, int(instance.live_server_port or 6868)))
         instance.pool_connections = max(1, min(256, int(instance.pool_connections or 64)))
