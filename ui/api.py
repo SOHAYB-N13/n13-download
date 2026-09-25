@@ -545,6 +545,18 @@ class Api:
     def set_priority(self, task_id: str, priority: int) -> None:
         self._manager.set_priority(task_id, int(priority))
 
+    def set_task_speed_limit(self, task_id: str, bps: int) -> None:
+        """Cap one download's bandwidth (bytes/second, 0 = unlimited)."""
+        self._manager.set_task_speed_limit(task_id, int(bps or 0))
+
+    def rename_download(self, task_id: str, new_name: str) -> Dict[str, Any]:
+        """Rename a download's target file (and the file on disk if finished)."""
+        try:
+            return self._manager.rename_task(task_id, new_name)
+        except Exception as exc:  # never let a rename crash the UI
+            log.exception("rename failed")
+            return {"ok": False, "error": str(exc), "name": "", "path": ""}
+
     def pause_all(self) -> None:
         self._manager.pause_all()
 
@@ -1100,6 +1112,21 @@ class Api:
             "current_speed_bps": speed,
         }
 
+    def read_clipboard_url(self) -> str:
+        """Return the first download URL currently on the clipboard ("" if none).
+
+        Native fallback for the UI's "Paste URL" action: a browser WebView may
+        deny ``navigator.clipboard`` access, so the shell reads the clipboard
+        itself.  Bounded and exception-safe — a hung clipboard owner yields ""
+        rather than stalling the UI.
+        """
+        try:
+            from core.clipboard import extract_url, read_clipboard_text
+
+            return extract_url(read_clipboard_text()) or ""
+        except Exception:
+            return ""
+
     def clipboard_status(self) -> Dict[str, Any]:
         return {
             "monitoring": bool(getattr(self._config, "clipboard_monitor", False)),
@@ -1154,9 +1181,29 @@ class Api:
             "extension_dir": result.get("extension_dir", ""),
         })
 
+    def repair_extension(self) -> Dict[str, Any]:
+        """Rebuild the on-disk extension copy from the bundled template.
+
+        Fixes the two real-world breakages — a stale ``token.json`` that no
+        longer matches this installation, and manifest-referenced files that
+        went missing after an upgrade.  Reuses the same materialize/validate
+        path the installer uses, so a repair cannot drift from a fresh
+        install.  Never raises: the caller is a UI button.
+        """
+        try:
+            from browser.extension_locator import repair_extension as run_repair
+
+            return run_repair()
+        except Exception as exc:  # pragma: no cover - defensive
+            log.exception("repair_extension failed")
+            return {"ok": False, "path": "", "reason": str(exc)}
+
     def register_protocol(self) -> bool:
+        # Explicit user action ("Register dldm:// protocol"): force a rewrite so
+        # a stale/legacy command is always replaced by this installation's own
+        # "<install dir>\N13.exe" "%1" registration.
         from browser.protocol import register_protocol
-        return register_protocol()
+        return register_protocol(force=True)
 
     def unregister_protocol(self) -> bool:
         from browser.protocol import unregister_protocol

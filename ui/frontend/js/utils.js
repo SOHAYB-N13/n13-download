@@ -222,6 +222,16 @@ const Utils = {
     stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.8"/>',
     filter: '<path d="M4 5.5h16l-6.2 7.2v5.6l-3.6 2.2v-7.8L4 5.5Z"/>',
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6"/>',
+    edit: '<path d="M16.5 3.8a2.2 2.2 0 0 1 3.1 3.1L7.4 19.1 3.5 20.5l1.4-3.9L16.5 3.8Z"/><path d="m14.8 5.5 3.7 3.7"/>',
+    sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/>',
+    flag: '<path d="M5.5 21V4.2"/><path d="M5.5 5.2h11.4l-2 4 2 4H5.5"/>',
+    bell: '<path d="M18 9a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16S18 14 18 9Z"/><path d="M13.7 19a2 2 0 0 1-3.4 0"/>',
+    code: '<path d="m8.5 8-4.5 4 4.5 4"/><path d="m15.5 8 4.5 4-4.5 4"/><path d="m13.5 4-3 16"/>',
+    clock2: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.3 2.2 3.5 5.2 3.5 8.5s-1.2 6.3-3.5 8.5c-2.3-2.2-3.5-5.2-3.5-8.5s1.2-6.3 3.5-8.5Z"/>',
+    list: '<path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12"/><path d="M4 6.5h.01M4 12h.01M4 17.5h.01"/>',
+    tag: '<path d="M11.5 3.5H20v8.5l-8.5 8.5L3 12l8.5-8.5Z"/><path d="M16 8h.01"/>',
+    shield: '<path d="M12 3.2 4.5 6v6c0 4.5 3.2 7.5 7.5 8.8 4.3-1.3 7.5-4.3 7.5-8.8V6L12 3.2Z"/><path d="m9 12 2 2 4-4"/>',
   },
 
   icon(name, size = 18, cls = "") {

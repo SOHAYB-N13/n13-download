@@ -138,6 +138,12 @@ class LegacyDownloadRunner:
             self._log,
             show_progress=False,
         )
+        # Per-download bandwidth cap (0 = unlimited).  Applied on top of the
+        # global max_speed_bps limit, never instead of it.
+        try:
+            controller.set_task_speed_limit(int(getattr(request, "speed_limit_bps", 0) or 0))
+        except Exception:
+            pass
         self.last_error = ""
 
         def _on_status(name: str) -> None:

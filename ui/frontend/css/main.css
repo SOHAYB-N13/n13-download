@@ -73,7 +73,7 @@
   --sidebar-w: 244px;
   --sidebar-w-min: 78px;
   --titlebar-h: 58px;
-  --dl-cols: 44px minmax(200px, 1.55fr) minmax(150px, 0.95fr) 128px 96px 130px 106px;
+  --dl-cols: 44px minmax(200px, 1.55fr) minmax(150px, 0.95fr) 128px 96px 78px 130px 106px;
 }
 
 [data-theme="light"] {
@@ -1048,6 +1048,14 @@ body.sidebar-collapsed .nav-indicator { left: 4px; }
 .empty-title { font-size: 16px; font-weight: 620; }
 .empty-desc { font-size: 13px; color: var(--text-2); max-width: 340px; }
 .empty-btn { margin-top: 14px; }
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: center;
+  margin-top: 18px;
+}
+.empty-actions .empty-btn { margin-top: 0; }
 .panel-body .empty { padding: 34px 18px; }
 .panel-body .empty-ico { width: 52px; height: 52px; border-radius: 16px; }
 
@@ -1229,7 +1237,9 @@ body.sidebar-collapsed .nav-indicator { left: 4px; }
 
 /* ── 18. Settings ──────────────────────────────────────────────────────── */
 
-.settings-wrap { max-width: 860px; display: flex; flex-direction: column; gap: 14px; }
+/* The rail + panes shell owns the layout now; the wrapper only caps width. */
+.settings-wrap { max-width: 1180px; display: block; }
+.settings-panes { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
 .set-card {
   border-radius: var(--r-lg);
@@ -1949,6 +1959,404 @@ body.resizing * { cursor: inherit; }
   to { transform: scaleX(0); }
 }
 
+/* ── 26b. Command bar ──────────────────────────────────────────────────── */
+
+/* The primary actions live in a permanent strip under the titlebar so they
+   are reachable from every page without opening a menu. */
+.command-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+  z-index: 20;
+}
+.cmd-spacer { flex: 1; }
+
+.cmd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-size: 13.5px;
+  font-weight: 580;
+  font-family: inherit;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: background var(--dur-2), border-color var(--dur-2), transform var(--dur-2);
+}
+.cmd-btn .ico { width: 17px; height: 17px; }
+.cmd-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.cmd-btn:active { transform: translateY(1px); }
+.cmd-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cmd-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hi));
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent);
+}
+.cmd-primary:hover { background: linear-gradient(135deg, var(--accent-hi), var(--accent)); border-color: transparent; }
+.cmd-primary kbd { background: rgba(255, 255, 255, 0.2); color: var(--on-accent); border-color: transparent; }
+
+.cmd-btn kbd {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-3);
+}
+
+/* Browser-extension status pill */
+.ext-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
+  max-width: 320px;
+  transition: background var(--dur-2), border-color var(--dur-2);
+}
+.ext-pill:hover { background: var(--bg-hover); }
+.ext-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.ext-pill.on .ext-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.ext-pill.off .ext-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.ext-pill.busy .ext-dot { background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); animation: pulse 1.4s ease-in-out infinite; }
+.ext-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ext-title { font-size: 12.5px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-sub { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-action {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 620;
+  color: var(--accent);
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--border);
+}
+.ext-pill.on .ext-action { color: var(--text-3); }
+
+/* ── 26c. Queue strip ──────────────────────────────────────────────────── */
+
+.queue-strip {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+}
+.qs-item { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.qs-item .ico { width: 14px; height: 14px; color: var(--text-3); }
+.qs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.qs-dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.qs-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.qs-val { font-weight: 640; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.qs-lbl { color: var(--text-3); }
+.qs-spacer { flex: 1; }
+.qs-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 580;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+.qs-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.qs-btn.warn { color: var(--warning); border-color: var(--warning-soft); }
+.qs-btn.good { color: var(--success); border-color: var(--success-soft); }
+
+/* ── 26c-bis. Category filter strip ────────────────────────────────────── */
+
+/* Sits between the queue strip and the list.  Only rendered when the list
+   actually spans more than one category, so it costs nothing in the common
+   single-category case. */
+.cat-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.cat-strip[hidden] { display: none; }
+
+/* Reuses the .cat-chip look from the new-download dialog, plus a count. */
+.cat-strip .cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+}
+.cat-strip .cat-n {
+  font-size: 11px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--text-1) 8%, transparent);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+  line-height: 1.5;
+}
+.cat-strip .cat-chip.active .cat-n {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* ── 26d. Selection action bar ─────────────────────────────────────────── */
+
+/* Docked under the content area.  Present only while a download is selected,
+   so common actions never require a right-click. */
+.sel-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.26);
+  z-index: 25;
+  animation: selBarIn var(--dur-2) var(--ease-out);
+}
+.sel-bar[hidden] { display: none; }
+
+.sb-count { display: inline-flex; align-items: center; gap: 7px; padding-inline-end: 4px; }
+.sb-count-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.sb-count-lbl { font-size: 12.5px; color: var(--text-2); }
+.sb-clear { width: 26px; height: 26px; border-radius: 7px; }
+.sb-clear .ico { width: 13px; height: 13px; }
+
+.sb-divider { width: 1px; height: 22px; background: var(--border); flex: none; }
+.sb-spacer { flex: 1; }
+.sb-more-hint { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+
+.sb-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 11px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+  transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
+}
+.sb-btn .ico { width: 15px; height: 15px; }
+.sb-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border); }
+.sb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sb-btn:disabled { opacity: 0.36; cursor: default; }
+.sb-btn.primary { background: var(--accent); color: var(--on-accent); }
+.sb-btn.primary:hover:not(:disabled) { background: var(--accent-hi); border-color: transparent; }
+.sb-btn.danger { color: var(--danger); }
+.sb-btn.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger-soft); }
+
+/* Connections cell */
+.dl-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.dl-conn .ico { width: 13px; height: 13px; color: var(--text-3); }
+.dl-conn.live { color: var(--text-1); font-weight: 580; }
+.dl-conn.live .ico { color: var(--accent); }
+
+/* Per-download speed-limit badge shown in the row when a cap is set */
+.dl-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 620;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+}
+
+@keyframes selBarIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Rename / speed-limit dialog bits */
+.rename-row { display: flex; align-items: center; gap: 8px; }
+.rename-row .input { flex: 1; min-width: 0; }
+.rename-ext {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 9px 11px;
+  white-space: nowrap;
+}
+.unit-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  /* Units and numeric ranges are LTR data, not prose.  Without isolating
+     them the bidi algorithm reorders "0–10" to "10-0" under `dir="rtl"`. */
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-size: 12.5px;
+  font-weight: 580;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+
+/* Multi-field dialog body: sibling .field blocks have no margin of their own,
+   so give the stack an explicit rhythm. */
+.pri-body { display: flex; flex-direction: column; gap: 14px; }
+
+/* Developer → diagnostics */
+.dev-tools { display: flex; flex-direction: column; gap: 14px; }
+.dev-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── 26e. Settings section rail ────────────────────────────────────────── */
+
+.settings-shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 22px; align-items: start; }
+
+.set-rail {
+  position: sticky;
+  top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 66%, transparent);
+}
+.set-rail-group {
+  font-size: 10.5px;
+  font-weight: 680;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 10px 8px 4px;
+}
+.set-rail-group:first-child { padding-top: 2px; }
+.set-rail-btn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: var(--r-xs);
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 540;
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+.set-rail-btn .ico { width: 15px; height: 15px; flex: none; }
+.set-rail-btn:hover { background: var(--bg-hover); color: var(--text-1); }
+.set-rail-btn.active { background: var(--accent-soft); color: var(--text-1); font-weight: 620; }
+.set-rail-btn.active .ico { color: var(--accent); }
+
+/* ── 26f. Detail / property list ───────────────────────────────────────── */
+
+.prop-list { display: flex; flex-direction: column; gap: 1px; }
+.prop-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+.prop-row:last-child { border-bottom: none; }
+.prop-key { font-size: 12px; color: var(--text-3); }
+.prop-val {
+  font-size: 12.5px;
+  color: var(--text-1);
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+}
+.prop-val.mono { font-family: var(--mono); font-size: 11.5px; }
+.prop-sec {
+  font-size: 10.5px;
+  font-weight: 680;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin: 16px 0 4px;
+}
+.prop-sec:first-child { margin-top: 0; }
+
+@media (max-width: 1220px) {
+  .settings-shell { grid-template-columns: 1fr; }
+  .set-rail { position: static; flex-direction: row; overflow-x: auto; }
+  .set-rail-group { display: none; }
+  .set-rail-btn span { display: none; }
+}
+
 /* ── 27. Accessibility & motion preferences ────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
@@ -1973,18 +2381,19 @@ body.resizing * { cursor: inherit; }
 /* Hidden columns must keep occupying their (0-width) grid tracks, otherwise
    auto-placement shifts the remaining cells into the wrong columns. */
 @media (max-width: 1500px) {
-  :root { --dl-cols: 40px minmax(180px, 1.5fr) minmax(140px, 0.9fr) 118px 92px 124px 100px; }
+  :root { --dl-cols: 40px minmax(180px, 1.5fr) minmax(140px, 0.9fr) 118px 92px 72px 124px 100px; }
 }
 
 @media (max-width: 1340px) {
-  :root { --dl-cols: 40px minmax(170px, 1.5fr) minmax(130px, 0.9fr) 0 88px 118px 96px; }
+  :root { --dl-cols: 40px minmax(170px, 1.5fr) minmax(130px, 0.9fr) 0 88px 64px 118px 96px; }
   .dl-size, .dl-head .c-size { visibility: hidden; overflow: hidden; }
   .dash-cols { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1220px) {
-  :root { --dl-cols: 40px minmax(150px, 1.4fr) minmax(110px, 0.8fr) 0 0 110px 92px; }
+  :root { --dl-cols: 40px minmax(150px, 1.4fr) minmax(110px, 0.8fr) 0 0 0 110px 92px; }
   .dl-speed, .dl-head .c-speed { visibility: hidden; overflow: hidden; }
+  .dl-conn, .dl-head .c-conn { visibility: hidden; overflow: hidden; }
   #content { padding: 8px 20px 28px; }
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 }
@@ -1998,7 +2407,7 @@ body.resizing * { cursor: inherit; }
   #content { padding: 12px 44px 44px; }
   .page-head h1 { font-size: 28px; }
   .stats-grid { gap: 18px; }
-  .settings-wrap { max-width: 980px; }
+  .settings-wrap { max-width: 1320px; }
 }
 
 

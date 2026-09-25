@@ -105,6 +105,22 @@ def format_eta(seconds: Optional[float]) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def _sanitize_filename(name: str) -> str:
+    """Clean a user-supplied filename; returns "" when it is unusable.
+
+    Only the final path component is kept, so a rename can never traverse out
+    of the task's directory.  The character cleanup is delegated to the
+    engine's own :func:`core.utils.sanitize_filename` so a renamed task and a
+    freshly probed task produce identically shaped names.
+    """
+    raw = (name or "").strip().replace("\\", "/").split("/")[-1].strip()
+    if not raw or raw in {".", ".."} or not re.search(r"[A-Za-z0-9]", raw):
+        return ""
+    from core.utils import sanitize_filename as _engine_sanitize
+
+    return _engine_sanitize(raw)
+
+
 def _as_int(value: object, default: int = 0) -> int:
     try:
         return int(value)  # type: ignore[arg-type]
@@ -221,6 +237,11 @@ class TaskSnapshot:
     smart_status: str = ""
     connection_mode: str = ""
     num_threads: int = 0
+    # Position in the manager's queue order (0 = next up).  ``-1`` means the
+    # task is not in the order list at all.  Purely informational: it lets the
+    # UI offer an honest "queue order" view and Move up/down controls instead
+    # of reordering something the user cannot see.
+    queue_index: int = -1
 
     @property
     def name(self) -> str:
@@ -260,6 +281,8 @@ class TaskSnapshot:
             "smart_status": self.smart_status,
             "connection_mode": self.connection_mode,
             "num_threads": self.num_threads,
+            "speed_limit_bps": self.request.speed_limit_bps,
+            "queue_index": self.queue_index,
         }
 
 
@@ -401,6 +424,17 @@ class TaskManager:
             num_threads=task.num_threads,
         )
 
+    def _queue_index(self, task_id: str) -> int:
+        """This task's position in the queue order, or -1 if it is not queued.
+
+        The order list is short (one entry per known task), so a linear scan
+        is cheaper than keeping a parallel index map in sync.
+        """
+        try:
+            return self._order.index(task_id)
+        except ValueError:
+            return -1
+
     def _snap(self, rec: _TaskRecord) -> TaskSnapshot:
         t = rec.task
         return TaskSnapshot(
@@ -427,6 +461,7 @@ class TaskManager:
             smart_status=t.smart_status,
             connection_mode=t.connection_mode,
             num_threads=t.num_threads,
+            queue_index=self._queue_index(t.id),
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -643,8 +678,84 @@ class TaskManager:
         if event:
             self._emit(*event)
 
+    def set_task_speed_limit(self, task_id: str, bps: int) -> None:
+        """Set a per-download bandwidth cap in bytes/second (0 = unlimited).
+
+        The cap is stored on the task and handed to the engine when the
+        download runs, so it survives restarts and coexists with the global
+        ``max_speed_bps`` limit.
+        """
+        event: Optional[tuple[str, TaskSnapshot]] = None
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            if rec:
+                rec.task.speed_limit_bps = max(0, int(bps or 0))
+                self._save_task_locked(rec)
+                event = ("updated", self._snap(rec))
+        if event:
+            self._emit(*event)
+
+    def rename_task(self, task_id: str, new_name: str) -> Dict[str, Any]:
+        """Rename a download's target file.
+
+        Refused while the task is actively transferring, because the engine
+        holds the destination path open.  For a completed download the file on
+        disk is renamed as well so the record and the filesystem stay in sync;
+        for every other state only the queued name changes.
+
+        Returns ``{"ok": bool, "error": str, "name": str, "path": str}``.
+        """
+        clean = _sanitize_filename(new_name)
+        if not clean:
+            return {"ok": False, "error": "invalid_name", "name": "", "path": ""}
+
+        with self._lock:
+            rec = self._tasks.get(task_id)
+            if rec is None:
+                return {"ok": False, "error": "not_found", "name": "", "path": ""}
+
+            task = rec.task
+            if task.status in ACTIVE_STATES:
+                return {"ok": False, "error": "task_active", "name": task.filename, "path": ""}
+
+            old_name = task.filename or task.label or ""
+            directory = task.directory or ""
+            moved_from = ""
+            moved_to = ""
+
+            if task.status == TaskStatus.COMPLETED and directory:
+                src = Path(directory) / old_name if old_name else None
+                dst = Path(directory) / clean
+                if src is not None and src.name != clean and src.exists():
+                    if dst.exists():
+                        return {"ok": False, "error": "target_exists", "name": old_name, "path": str(dst)}
+                    try:
+                        os.replace(str(src), str(dst))
+                    except OSError as exc:
+                        return {"ok": False, "error": f"rename_failed: {exc}", "name": old_name, "path": ""}
+                    moved_from, moved_to = str(src), str(dst)
+
+            task.filename = clean
+            task.label = clean
+            # A completed task's resolved path must follow the rename so
+            # "Open file" / "Open folder" keep working.
+            if moved_to:
+                task.resolved_path = moved_to
+            self._save_task_locked(rec)
+            snap = self._snap(rec)
+
+        self._emit("updated", snap)
+        return {"ok": True, "error": "", "name": clean, "path": moved_to}
+
     def move_task(self, task_id: str, delta: int) -> None:
-        """Move a task up (-1) or down (+1) in the queue order."""
+        """Move a task up (-1) or down (+1) in the queue order.
+
+        Every task whose position shifted emits ``updated`` so a queue-order
+        view in the UI refreshes immediately.  Nothing is started or stopped
+        here: reordering only decides who goes next once a slot frees up,
+        which is exactly how ``set_priority`` behaves.
+        """
+        shifted: List[TaskSnapshot] = []
         with self._lock:
             try:
                 idx = self._order.index(task_id)
@@ -656,6 +767,13 @@ class TaskManager:
             self._order.pop(idx)
             self._order.insert(new_idx, task_id)
             self._save_order_locked()
+            lo, hi = (idx, new_idx) if idx < new_idx else (new_idx, idx)
+            for tid in self._order[lo:hi + 1]:
+                rec = self._tasks.get(tid)
+                if rec is not None:
+                    shifted.append(self._snap(rec))
+        for snap in shifted:
+            self._emit("updated", snap)
 
     def retry_failed(self) -> int:
         """Re-queue every failed/cancelled task; returns how many."""

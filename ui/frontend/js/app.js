@@ -10,6 +10,8 @@ const App = {
     logs: [],
     elapsed: {},           // taskId -> { ms, from } active-time accumulator
     filter: "all",
+    // Category filter for the Downloads list ("all" or a category name).
+    catFilter: "all",
     sortKey: "newest",
     sortDir: -1,
     search: "",
@@ -17,6 +19,12 @@ const App = {
     accent: "#EF4444",
     sidebarCollapsed: false,
     serverRunning: false,
+    // Timestamp of the last link received from the browser extension.  The
+    // live server exposes no "extension installed" flag, so an actual capture
+    // is the only honest proof of a working pairing.
+    extLastSeen: 0,
+    extConnected: false,
+    version: "",
     settings: null,
     maximized: false,
     highlightId: null,
@@ -52,6 +60,7 @@ const App = {
     this._bindWindowControls();
     this._bindResizeHandles();
     this._bindGlobalEvents();
+    this._bindCommandBar();
     this._bindDownloadsPage();
     this._bindBatchPage();
     this._bindBrowserPage();
@@ -100,6 +109,10 @@ const App = {
 
     try {
       this.state.settings = await API.getSettings();
+    } catch {}
+
+    try {
+      this.state.version = (await API.getVersion()) || "";
     } catch {}
 
     this._applyLanguage();
@@ -395,12 +408,44 @@ const App = {
         /^(input|textarea|select)$/i.test(ae.tagName || "") ||
         ae.isContentEditable ||
         ae.getAttribute?.("contenteditable") === "true"));
-      if (e.ctrlKey && !e.shiftKey && (e.key === "n" || e.key === "N")) {
+      // Never hijack a shortcut while the user is typing in a field — Ctrl+V
+      // in particular must keep its normal "paste into this input" meaning.
+      if (e.ctrlKey && !e.shiftKey && (e.key === "n" || e.key === "N") && !typing) {
         e.preventDefault(); this.openNewDownload();
+      } else if (e.ctrlKey && !e.shiftKey && (e.key === "v" || e.key === "V") && !typing) {
+        // Paste a URL from the clipboard straight into a new download.
+        e.preventDefault(); this.pasteFromClipboard();
       } else if (e.ctrlKey && e.key === ",") {
         e.preventDefault(); this.navigate("settings");
       } else if ((e.key === "/" && !typing) || (e.ctrlKey && (e.key === "f" || e.key === "F"))) {
         e.preventDefault(); Utils.$id("globalSearch").focus();
+      } else if (e.key === " " && !typing && this.state.page === "downloads") {
+        // Space toggles pause/resume for the current selection.
+        const tasks = this._selectedTasks();
+        if (tasks.length) {
+          e.preventDefault();
+          const anyRunning = tasks.some((t) => t.state === "Downloading");
+          const ids = tasks.map((t) => t.id);
+          if (anyRunning) this._forEachId(ids, (id) => API.pauseDownload(id));
+          else this._forEachId(ids, (id) => API.resumeDownload(id));
+        }
+      } else if (e.key === "Delete" && !typing && this.state.page === "downloads") {
+        const tasks = this._selectedTasks();
+        if (tasks.length) {
+          e.preventDefault();
+          // Shift+Delete also removes the file on disk; Delete only removes
+          // the task, matching the confirm copy shown by onRemove.
+          if (e.shiftKey) {
+            const done = tasks.filter((t) => t.state === "Complete");
+            if (done.length) {
+              done.forEach((t) => this.rowCallbacks.onDeleteFile(t.id, t.filename || Utils.fileName(t)));
+            } else {
+              this.rowCallbacks.onRemove(tasks.map((t) => t.id));
+            }
+          } else {
+            this.rowCallbacks.onRemove(tasks.map((t) => t.id));
+          }
+        }
       } else if (e.key === "Escape" && !typing) {
         Components.hideContextMenu();
         if (this.state.page === "downloads" && this.state.selectedIds.size) {
@@ -501,10 +546,19 @@ const App = {
         if (!this.state.selectedIds.size) this.state.selAnchor = null;
         this._removeRow(t.id);
       } else {
+        const prev = this.state.downloads[t.id];
         this.state.downloads[t.id] = t;
         this._elapsedFor(t); // keep the active-time tracker honest on every event
-        if (!had) this._addRow(t);
-        else this._updateRow(t);
+        if (!had) {
+          this._addRow(t);
+        } else if (this.state.sortKey === "queue" && prev && prev.queue_index !== t.queue_index) {
+          // A queue reorder moved this row.  _updateRow only rewrites cells in
+          // place, so rebuild the list to actually reorder it.
+          this.state.listSig = "";
+          this._renderDownloads(true);
+        } else {
+          this._updateRow(t);
+        }
       }
       this._updateBadge();
       this._updateCounts();
@@ -525,7 +579,10 @@ const App = {
       if (this.state.logs.length > 800) this.state.logs.shift();
       if (this.state.page === "logs") this._appendLog(evt.message);
     } else if (evt.type === "browser_url") {
-      Components.toast(I18N.t("toast.link_captured", "Link captured"), "Received from browser extension", "info");
+      // Proof the extension is installed and paired with our live server.
+      this.state.extLastSeen = Date.now();
+      this._renderExtPill();
+      Components.toast(I18N.t("toast.link_captured", "Link captured"), I18N.t("toast.link_captured_msg", "Received from browser extension"), "info");
       this.openNewDownload(evt.url);
     } else if (evt.type === "clipboard_url") {
       this._onClipboardLink(evt.url);
@@ -577,14 +634,27 @@ const App = {
     }
   },
 
+  /**
+   * Clipboard URL detected.
+   *
+   * A non-blocking toast with a one-click "Download" action replaces the old
+   * modal, so copying a link never interrupts what the user is doing and the
+   * most common response is a single click.
+   */
   async _onClipboardLink(url) {
     try {
-      const ok = await Components.linkPrompt(url);
-      if (ok) {
-        await this.openNewDownload(url);
-      } else {
-        Components.toast(I18N.t("toast.ignored", "Ignored"), I18N.t("toast.link_ignored", "Link not downloaded"), "info", 1800);
-      }
+      let host = url;
+      try { host = new URL(url).hostname || url; } catch { /* keep raw url */ }
+
+      Components.toast(
+        I18N.t("clip.detected", "Download detected"),
+        host,
+        "info",
+        9000,
+        {
+          label: I18N.t("clip.download_now", "Download"),
+          onClick: () => this.openNewDownload(url),
+        });
     } catch (e) {
       API.logJs("clipboard link: " + String(e));
     }
@@ -640,6 +710,13 @@ const App = {
       const seq = delta < 0 ? sorted : sorted.slice().reverse();
       seq.forEach((id) => API.moveTask(id, delta));
     },
+    // UI-facing wrapper: queue reordering is invisible under a date sort, so
+    // flip to queue order first.  Kept separate from onMove so the pure
+    // dispatch logic above stays unit-testable.
+    onReorder(x, delta) {
+      App._ensureQueueOrder();
+      App.rowCallbacks.onMove(x, delta);
+    },
     async onCopyPath(task) {
       const p = `${task.directory}\\${task.filename || Utils.fileName(task)}`;
       try {
@@ -680,6 +757,185 @@ const App = {
         Components.toast(I18N.t("toast.copy_failed", "Copy failed"), I18N.t("toast.copy_failed_msg", "Clipboard is unavailable"), "error");
       }
     },
+    onRename(id) { App.renameTask(id); },
+    onSpeedLimit(id) { App.openSpeedLimit(id); },
+    onPriority(x) { App.openPriority(x); },
+    onProperties(x) { App.showProperties(x); },
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Selection action bar
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** Currently selected task snapshots, in displayed order. */
+  _selectedTasks() {
+    const sel = this.state.selectedIds;
+    if (!sel || !sel.size) return [];
+    const order = Array.from(Utils.$qa("#downloadList .dl-row")).map((r) => r.dataset.id);
+    const ids = order.filter((id) => sel.has(id));
+    const rest = Array.from(sel).filter((id) => !order.includes(id));
+    return [...ids, ...rest].map((id) => this.state.downloads[id]).filter(Boolean);
+  },
+
+  /**
+   * Rebuild the docked action bar for the current selection.
+   *
+   * Only actions valid for the selected states are rendered, so the bar stays
+   * short and never shows a button that cannot do anything.
+   */
+  _renderSelBar() {
+    const bar = Utils.$id("selBar");
+    if (!bar) return;
+    const tasks = this._selectedTasks();
+
+    if (!tasks.length) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+
+    const n = tasks.length;
+    const countEl = Utils.$id("sbCount");
+    if (countEl) countEl.textContent = n;
+    const lblEl = Utils.$id("sbCountLabel");
+    if (lblEl) {
+      lblEl.textContent = n > 1
+        ? I18N.t("sel.selected_plural", "selected")
+        : I18N.t("sel.selected", "selected");
+    }
+
+    const actions = Components.selectionActions(tasks, this.rowCallbacks);
+    const host = Utils.$id("sbActions");
+    if (!host) return;
+
+    host.innerHTML = actions.map((a) => {
+      if (a.separator) return '<span class="sb-divider" aria-hidden="true"></span>';
+      const cls = a.kind === "primary" ? " primary" : (a.kind === "danger" ? " danger" : "");
+      return `<button class="sb-btn${cls}" data-sb="${a.id}" data-i18n-tip="${a.label}">${Utils.icon(a.icon, 15)}<span>${Utils.escapeHtml(a.label)}</span></button>`;
+    }).join("");
+
+    // Wire fresh handlers each render (the list is short and changes with state).
+    Utils.$qa("[data-sb]", host).forEach((btn) => {
+      const id = btn.dataset.sb;
+      const a = actions.find((x) => x.id === id);
+      if (!a || !a.run) return;
+      btn.addEventListener("click", () => a.run());
+    });
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Rename / speed limit / properties
+  // ══════════════════════════════════════════════════════════════════════
+
+  async renameTask(id) {
+    const t = this.state.downloads[id];
+    if (!t) return;
+    const active = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying", "Stopping"];
+    if (active.includes(t.state)) {
+      Components.toast(
+        I18N.t("toast.rename_blocked", "Cannot rename while downloading"),
+        I18N.t("toast.rename_blocked_msg", "Pause or cancel the download first."),
+        "warning");
+      return;
+    }
+    const current = t.filename || Utils.fileName(t);
+    const next = await Components.renameDialog(current);
+    if (!next || next === current) return;
+
+    try {
+      const res = await API.renameDownload(id, next);
+      if (res && res.ok) {
+        Components.toast(I18N.t("toast.renamed", "Renamed"), res.name || next, "success", 2400);
+      } else {
+        const err = (res && res.error) || "";
+        const msg = err === "task_active"
+          ? I18N.t("toast.rename_blocked_msg", "Pause or cancel the download first.")
+          : err === "target_exists"
+            ? I18N.t("toast.rename_exists", "A file with that name already exists.")
+            : err === "invalid_name"
+              ? I18N.t("toast.rename_invalid", "That name is not valid.")
+              : err;
+        Components.toast(I18N.t("toast.rename_failed", "Rename failed"), msg, "error");
+      }
+    } catch (e) {
+      API.logJs("rename: " + String(e));
+      Components.toast(I18N.t("toast.rename_failed", "Rename failed"), String(e), "error");
+    }
+  },
+
+  async openSpeedLimit(id) {
+    const t = this.state.downloads[id];
+    if (!t) return;
+    const bps = await Components.speedLimitDialog(t.speed_limit_bps || 0, t.filename || Utils.fileName(t));
+    if (bps === null) return;
+    try {
+      await API.setTaskSpeedLimit(id, bps);
+      Components.toast(
+        I18N.t("toast.speed_limit_set", "Speed limit updated"),
+        bps > 0 ? Utils.formatSpeed(bps) : I18N.t("dlg.unlimited", "Unlimited"),
+        "success", 2400);
+    } catch (e) {
+      API.logJs("speed limit: " + String(e));
+    }
+  },
+
+  showProperties(x) {
+    const ids = this._asIds(x);
+    const tasks = ids.map((id) => this.state.downloads[id]).filter(Boolean);
+    Components.propertiesDialog(tasks);
+  },
+
+  /**
+   * Set the scheduling priority of one or several downloads.
+   *
+   * The stored scale runs 0 = highest … 10 = lowest; the dialog presents it
+   * as High / Normal / Low so the direction is never ambiguous.
+   */
+  async openPriority(x) {
+    const ids = this._asIds(x).filter((id) => this.state.downloads[id]);
+    if (!ids.length) return;
+    const first = this.state.downloads[ids[0]];
+    const current = ids.length > 1 ? 5 : (first.priority ?? 5);
+    const value = await Components.priorityDialog(
+      current,
+      ids.length > 1 ? "" : (first.filename || Utils.fileName(first)));
+    if (value === null) return;
+
+    const label = value <= 3
+      ? I18N.t("dlg.pri_high", "High")
+      : value >= 8 ? I18N.t("dlg.pri_low", "Low") : I18N.t("dlg.pri_normal", "Normal");
+    try {
+      for (const id of ids) await API.setPriority(id, value);
+      Components.toast(
+        ids.length > 1
+          ? I18N.t("toast.priority_set_many", "Priority updated for {n} downloads").replace("{n}", ids.length)
+          : I18N.t("toast.priority_set", "Priority updated"),
+        `${label} (${value})`, "success", 2400);
+    } catch (e) {
+      API.logJs("priority: " + String(e));
+      Components.toast(I18N.t("toast.priority_failed", "Could not set priority"), String(e), "error");
+    }
+  },
+
+  /**
+   * Switch the list to queue order so Move up/down is actually visible.
+   *
+   * Reordering the backend queue does nothing you can see while the list is
+   * sorted by date, so the first move flips the sort — and says so, rather
+   * than silently changing the order behind the user's back.
+   */
+  _ensureQueueOrder() {
+    if (this.state.sortKey === "queue") return;
+    this.state.sortKey = "queue";
+    this.state.sortDir = 1;
+    const sel = Utils.$id("sortSelect");
+    if (sel) sel.value = "queue:1";
+    this.state.listSig = "";
+    this._renderDownloads(true);
+    Components.toast(
+      I18N.t("toast.queue_order_on", "Showing queue order"),
+      I18N.t("toast.queue_order_on_msg", "Move up / down changes the order downloads start in."),
+      "info", 3200);
   },
 
   _bindDownloadsPage() {
@@ -712,6 +968,208 @@ const App = {
       await API.clearFinished();
       Components.toast(I18N.t("toast.list_cleared", "List cleared"), I18N.t("toast.list_cleared_msg", "Finished entries were removed"), "info");
     });
+
+    // Selection action bar
+    const sbClear = Utils.$id("sbClear");
+    if (sbClear) sbClear.addEventListener("click", () => this._clearSelection());
+
+    // Queue strip controls
+    const limitBtn = Utils.$id("qsLimitBtn");
+    if (limitBtn) limitBtn.addEventListener("click", () => this._editGlobalLimit());
+    const schedBtn = Utils.$id("qsSchedBtn");
+    if (schedBtn) schedBtn.addEventListener("click", () => this.navigate("settings"));
+    const retryBtn = Utils.$id("qsRetryFailed");
+    if (retryBtn) {
+      retryBtn.addEventListener("click", async () => {
+        const n = await API.retryFailed();
+        Components.toast(
+          I18N.t("toast.retrying_failed", "Retrying failed downloads"),
+          I18N.fmt("toast.n_requeued", { n }, "{n} re-queued").replace("{n}", n),
+          "success");
+      });
+    }
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Command bar (always-visible primary actions)
+  // ══════════════════════════════════════════════════════════════════════
+
+  _bindCommandBar() {
+    const on = (id, fn) => {
+      const el = Utils.$id(id);
+      if (el) el.addEventListener("click", fn);
+    };
+    on("cmdNewDownload", () => this.openNewDownload());
+    on("cmdPasteUrl", () => this.pasteFromClipboard());
+    on("cmdBatch", () => this.navigate("batch"));
+    on("extPill", () => {
+      // A connected extension has nothing to fix — jump to the Browser page
+      // so the user can manage it.  Otherwise start the guided setup.
+      if (this.state.extConnected) this.navigate("browser");
+      else this._setupExtension();
+    });
+
+    this._renderExtPill();
+  },
+
+  /** How long a browser capture keeps the extension marked as "connected". */
+  _EXT_FRESH_MS: 5 * 60 * 1000,
+
+  /**
+   * Reflect live extension/server state in the always-visible status pill.
+   *
+   * The live server exposes no "extension installed" flag, so connectivity is
+   * inferred honestly: the extension is considered connected once it has
+   * actually sent us a link within the freshness window.  That is the only
+   * signal that proves the extension is installed *and* paired.
+   */
+  _renderExtPill() {
+    const pill = Utils.$id("extPill");
+    if (!pill) return;
+    const running = !!this.state.serverRunning;
+    const fresh = !!this.state.extLastSeen &&
+      (Date.now() - this.state.extLastSeen) < this._EXT_FRESH_MS;
+    const connected = running && fresh;
+    this.state.extConnected = connected;
+
+    pill.classList.toggle("on", connected);
+    pill.classList.toggle("off", !connected);
+
+    const title = Utils.$id("extPillTitle");
+    const sub = Utils.$id("extPillSub");
+    const act = Utils.$id("extPillAction");
+    if (!title || !sub || !act) return;
+
+    if (connected) {
+      title.textContent = I18N.t("browser.ext_on", "Extension connected");
+      sub.textContent = I18N.t("browser.ext_on_sub", "Right-click any link to send it to N13");
+      act.textContent = I18N.t("browser.manage", "Manage");
+    } else if (running) {
+      title.textContent = I18N.t("browser.ext_waiting", "Waiting for extension");
+      sub.textContent = I18N.t("browser.ext_waiting_sub", "Server is running — install the extension");
+      act.textContent = I18N.t("browser.setup", "Set up");
+    } else {
+      title.textContent = I18N.t("browser.ext_off", "Extension not connected");
+      sub.textContent = I18N.t("browser.ext_off_sub", "Click to set up");
+      act.textContent = I18N.t("browser.setup", "Set up");
+    }
+  },
+
+  /** Start the live server and open the guided install flow. */
+  async _setupExtension() {
+    this.navigate("browser");
+    try {
+      if (!this.state.serverRunning) {
+        await API.startLiveServer();
+        await this._refreshServerStatus();
+      }
+      Components.toast(
+        I18N.t("browser.setup_started", "Browser setup"),
+        I18N.t("browser.setup_started_msg", "Press “Install Extension” on the Browser page to finish."),
+        "info", 6000);
+    } catch (e) {
+      API.logJs("setup extension: " + String(e));
+    }
+  },
+
+  /**
+   * Paste a URL straight from the clipboard into the New Download dialog.
+   *
+   * Falls back to an empty dialog (prefilled nothing) when the clipboard is
+   * unreadable, so Ctrl+V never dead-ends the user.
+   */
+  async pasteFromClipboard() {
+    const url = await this._readClipboardUrl();
+    if (!url) {
+      Components.toast(
+        I18N.t("toast.no_link", "No link in clipboard"),
+        I18N.t("toast.no_link_msg", "Copy a download link first, or type the address manually."),
+        "warning");
+    }
+    this.openNewDownload(url || null, { paste: true });
+  },
+
+  /**
+   * Resolve a download URL from the clipboard.
+   *
+   * Tries the WebView clipboard first (fast, no IPC) and falls back to the
+   * native reader in the Python shell, because WebView2 may deny
+   * ``navigator.clipboard`` for local-origin documents.  Returns "" when
+   * neither yields a link.
+   */
+  async _readClipboardUrl() {
+    const pick = (text) => ((text || "").match(/https?:\/\/[^\s"'<>]+/) || [])[0] || "";
+    try {
+      const fromJs = pick(await navigator.clipboard.readText());
+      if (fromJs) return fromJs;
+    } catch (e) {
+      API.logJs("clipboard read (js): " + String(e));
+    }
+    try {
+      return pick(await API.readClipboardUrl());
+    } catch (e) {
+      API.logJs("clipboard read (native): " + String(e));
+      return "";
+    }
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Queue strip
+  // ══════════════════════════════════════════════════════════════════════
+
+  _renderQueueStrip() {
+    const all = this._taskArray();
+    const ACTIVE = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
+    const active = all.filter((t) => ACTIVE.includes(t.state));
+    const waiting = all.filter((t) => t.state === "Queued");
+    const failed = all.filter((t) => ["Failed", "Cancelled", "Stopped"].includes(t.state));
+
+    const set = (id, v) => { const el = Utils.$id(id); if (el) el.textContent = v; };
+    set("qsActive", active.length);
+    set("qsWaiting", waiting.length);
+    set("qsSpeed", Utils.formatSpeed(active.reduce((s, t) => s + (t.speed_bps || 0), 0)));
+
+    const limit = (this.state.settings && this.state.settings.max_speed_bps) || 0;
+    const limitBtn = Utils.$id("qsLimitBtn");
+    if (limitBtn) {
+      limitBtn.textContent = limit > 0 ? Utils.formatSpeed(limit) : I18N.t("dlg.unlimited", "Unlimited");
+      limitBtn.classList.toggle("warn", limit > 0);
+    }
+
+    const sched = this.state.settings || {};
+    const schedBtn = Utils.$id("qsSchedBtn");
+    if (schedBtn) {
+      const on = !!sched.scheduler_enabled;
+      schedBtn.textContent = on
+        ? `${sched.schedule_start_time || "—"}–${sched.schedule_stop_time || "—"}`
+        : I18N.t("queue.off", "Off");
+      schedBtn.classList.toggle("good", on);
+    }
+
+    const retryBtn = Utils.$id("qsRetryFailed");
+    if (retryBtn) {
+      retryBtn.hidden = failed.length === 0;
+      const lbl = Utils.$id("qsRetryLabel");
+      if (lbl) lbl.textContent = `${I18N.t("queue.retry_failed", "Retry failed")} (${failed.length})`;
+    }
+  },
+
+  /** Quick global bandwidth-cap editor driven from the queue strip. */
+  async _editGlobalLimit() {
+    const current = (this.state.settings && this.state.settings.max_speed_bps) || 0;
+    const bps = await Components.speedLimitDialog(current, I18N.t("queue.speed_limit", "Global limit"));
+    if (bps === null) return;
+    try {
+      await API.updateSettings({ max_speed_bps: bps });
+      this.state.settings = { ...(this.state.settings || {}), max_speed_bps: bps };
+      this._renderQueueStrip();
+      Components.toast(
+        I18N.t("toast.speed_limit_set", "Speed limit updated"),
+        bps > 0 ? Utils.formatSpeed(bps) : I18N.t("dlg.unlimited", "Unlimited"),
+        "success", 2400);
+    } catch (e) {
+      API.logJs("global limit: " + String(e));
+    }
   },
 
   _taskArray() { return Object.values(this.state.downloads); },
@@ -776,11 +1234,13 @@ const App = {
     sel.forEach((id) => { if (!visible.has(id)) { sel.delete(id); pruned = true; } });
     if (pruned && !sel.size) this.state.selAnchor = null;
     if (this.state.selAnchor != null && !visible.has(this.state.selAnchor)) this.state.selAnchor = null;
+    this._renderSelBar();
   },
 
   _clearSelection() {
     this.state.selectedIds.clear();
     this.state.selAnchor = null;
+    this._renderSelBar();
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -833,6 +1293,12 @@ const App = {
         Utils.hostOf(t.url).includes(search));
     }
 
+    // Category view.  Tasks with no category are treated as "General", which
+    // is exactly what the backend defaults them to.
+    if (this.state.catFilter !== "all") {
+      list = list.filter((t) => (t.category || "General") === this.state.catFilter);
+    }
+
     const key = {
       newest: (t) => t.created_at || 0,
       name: (t) => Utils.fileName(t).toLowerCase(),
@@ -840,6 +1306,9 @@ const App = {
       progress: (t) => (t.total > 0 ? t.completed / t.total : 0),
       speed: (t) => t.speed_bps || 0,
       status: (t) => t.state,
+      // Backend queue position.  Tasks the manager no longer tracks (-1) sort
+      // to the bottom rather than jumping to the top.
+      queue: (t) => (t.queue_index >= 0 ? t.queue_index : Number.MAX_SAFE_INTEGER),
     }[sortKey] || ((t) => t.created_at || 0);
 
     list = [...list].sort((a, b) => {
@@ -857,13 +1326,16 @@ const App = {
     const headEl = Utils.$id("downloadHead");
     const emptyEl = Utils.$id("downloadsEmpty");
     const tasks = this._filteredTasks();
-    const sig = tasks.map((t) => t.id).join("|") + "::" + this.state.filter + this.state.sortKey + this.state.sortDir + this.state.search;
+    const sig = tasks.map((t) => t.id).join("|") + "::" + this.state.filter + this.state.sortKey + this.state.sortDir + this.state.search + "::" + this.state.catFilter;
 
     if (sig === this.state.listSig && !structureChanged) {
       tasks.forEach((t) => this._updateRow(t));
+      // Task states may have changed, which changes the available actions.
+      if (this.state.selectedIds.size) this._renderSelBar();
       return;
     }
     this.state.listSig = sig;
+    this._renderCatStrip();
 
     if (!this._taskArray().length) {
       headEl.hidden = true;
@@ -873,8 +1345,24 @@ const App = {
         icon: "download",
         title: I18N.t("empty.no_downloads", "No downloads yet"),
         desc: I18N.t("empty.no_downloads_desc", "Paste a link or drop it anywhere to start your first download."),
-        actionLabel: I18N.t("title.new_download", "New download"),
-        onAction: () => this.openNewDownload(null, { paste: true }),
+        actions: [
+          {
+            label: I18N.t("cmd.paste_url", "Paste URL"),
+            icon: "paste",
+            primary: true,
+            onClick: () => this.pasteFromClipboard(),
+          },
+          {
+            label: I18N.t("empty.install_extension", "Install Browser Extension"),
+            icon: "browser",
+            onClick: () => this._setupExtension(),
+          },
+          {
+            label: I18N.t("empty.import", "Import Downloads"),
+            icon: "batch",
+            onClick: () => this.navigate("batch"),
+          },
+        ],
       }));
       emptyEl.hidden = false;
       return;
@@ -884,10 +1372,21 @@ const App = {
       headEl.hidden = true;
       listEl.innerHTML = "";
       this._clearSelection();
+      const cat = this.state.catFilter;
       emptyEl.replaceChildren(Components.emptyState({
         icon: "search",
         title: I18N.t("empty.nothing_matches", "Nothing matches"),
-        desc: I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
+        desc: cat !== "all"
+          ? I18N.t("empty.nothing_in_category", "No downloads in this category yet.")
+          : I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
+        actions: cat !== "all"
+          ? [{
+            label: I18N.t("cat.show_all", "Show all categories"),
+            icon: "list",
+            primary: true,
+            onClick: () => this._setCatFilter("all"),
+          }]
+          : undefined,
       }));
       emptyEl.hidden = false;
       return;
@@ -910,12 +1409,73 @@ const App = {
     }
   },
 
+  // ══════════════════════════════════════════════════════════════════════
+  //  Category filter
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** Canonical category order — matches the backend's routing defaults. */
+  _CAT_ORDER: ["General", "Compressed", "Videos", "Music", "Documents", "Programs", "Images"],
+
+  /**
+   * Render the category filter strip above the list.
+   *
+   * Hidden unless the list actually spans more than one category: with a
+   * single category (or none) the strip is pure noise and just eats a row.
+   */
+  _renderCatStrip() {
+    const strip = Utils.$id("catStrip");
+    if (!strip) return;
+
+    const all = this._taskArray();
+    const counts = new Map();
+    all.forEach((t) => {
+      const c = t.category || "General";
+      counts.set(c, (counts.get(c) || 0) + 1);
+    });
+
+    if (counts.size < 2) {
+      strip.hidden = true;
+      strip.innerHTML = "";
+      // A filter pointing at a category that no longer exists would hide
+      // every row with no way back — drop it.
+      if (this.state.catFilter !== "all" && !counts.has(this.state.catFilter)) {
+        this.state.catFilter = "all";
+      }
+      return;
+    }
+
+    const ordered = [
+      ...this._CAT_ORDER.filter((c) => counts.has(c)),
+      ...Array.from(counts.keys()).filter((c) => !this._CAT_ORDER.includes(c)).sort(),
+    ];
+
+    const chip = (key, label, n) => {
+      const active = this.state.catFilter === key;
+      return `<button class="cat-chip${active ? " active" : ""}" data-cat="${Utils.escapeHtml(key)}" role="tab" aria-selected="${active}">`
+        + `<span class="cat-t">${Utils.escapeHtml(label)}</span><span class="cat-n">${n}</span></button>`;
+    };
+
+    strip.innerHTML =
+      chip("all", I18N.t("cat.all", "All categories"), all.length) +
+      ordered.map((c) => chip(c, I18N.t("category." + c, c), counts.get(c))).join("");
+    strip.hidden = false;
+
+    Utils.$qa(".cat-chip", strip).forEach((el) => {
+      el.addEventListener("click", () => this._setCatFilter(el.dataset.cat));
+    });
+  },
+
+  _setCatFilter(cat) {
+    this.state.catFilter = cat || "all";
+    this.state.listSig = "";
+    this._renderDownloads(true);
+  },
+
   _addRow(task) {
     // New task arrived — refresh structure cheaply.
     this.state.listSig = "";
     this._renderDownloads();
   },
-
   /**
    * Active-time accumulator for the unified progress component.
    *
@@ -994,6 +1554,7 @@ const App = {
     set("paused", count(["Paused"]));
     set("completed", count(["Complete"]));
     set("failed", count(["Failed", "Cancelled", "Stopped"]));
+    this._renderQueueStrip();
   },
 
   _showSkeletons() {
@@ -1260,12 +1821,19 @@ const App = {
   // ══════════════════════════════════════════════════════════════════════
 
   _startStatsPolling() {
+    let tick = 0;
     const poll = async () => {
       try {
         const [stats, sys] = await Promise.all([API.getStats(), API.getSystemStats()]);
         if (stats) this._renderStats(stats, sys || {});
         this._lastStats = stats;
       } catch {}
+      // Refresh the extension pill and queue strip roughly every 10s so a
+      // stale "connected" state decays even while the app sits idle.
+      if (++tick % 5 === 0) {
+        this._renderExtPill();
+        this._renderQueueStrip();
+      }
       setTimeout(poll, 2000);
     };
     poll();
@@ -1666,6 +2234,7 @@ const App = {
       this._lastServerStatus = st;
       this.state.serverRunning = st.running;
       if (this.state.page === "browser") this._renderBrowser(st);
+      this._renderExtPill();
     } catch {}
   },
 
@@ -1728,6 +2297,31 @@ const App = {
       setTimeout(() => { if (!this.state.extInstalling) btn.disabled = false; }, 30000);
     });
 
+    Utils.$id("btnRepairExt").addEventListener("click", async () => {
+      const btn = Utils.$id("btnRepairExt");
+      btn.disabled = true;
+      Components.toast(
+        I18N.t("ext_repair.title", "Repairing extension…"),
+        I18N.t("ext_repair.msg", "Rebuilding the extension folder from the bundled template."),
+        "info", 2400);
+      try {
+        const res = await API.repairExtension();
+        if (res && res.ok) {
+          Components.toast(I18N.t("toast.ext_repaired", "Extension repaired"), res.path || "", "success", 6500);
+        } else {
+          Components.toast(
+            I18N.t("toast.ext_repair_failed", "Repair failed"),
+            (res && res.reason) || I18N.t("toast.ext_repair_failed_msg", "The extension folder could not be rebuilt."),
+            "error", 6500);
+        }
+      } catch (e) {
+        API.logJs("repair extension: " + String(e));
+        Components.toast(I18N.t("toast.ext_repair_failed", "Repair failed"), String(e), "error", 6500);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     Utils.$id("btnRegProtocol").addEventListener("click", async () => {
       const ok = await API.registerProtocol();
       Components.toast(ok ? I18N.t("toast.protocol_registered", "Protocol registered") : I18N.t("toast.protocol_failed", "Registration failed"),
@@ -1739,21 +2333,32 @@ const App = {
   //  Settings
   // ══════════════════════════════════════════════════════════════════════
 
+  /**
+   * Settings schema, organised into the eight top-level groups shown in the
+   * section rail.  Every field from the previous flat layout is preserved —
+   * only the grouping changed — so no setting is lost in the redesign.
+   */
   _settingsDef() {
     const st = (key, fallback) => I18N.t("settings." + key, fallback);
     return [
+      // ── General ───────────────────────────────────────────────────
       {
-        id: "general", icon: "download", title: st("general", "General"),
+        id: "appearance", group: "general", icon: "sun", title: st("appearance", "Appearance"),
+        fields: [
+          { key: "_theme", label: "Theme", hint: "Interface color scheme", type: "theme" },
+          { key: "_accent", label: "Accent color", hint: "Used for buttons, links and progress", type: "accent" },
+        ],
+      },
+      {
+        id: "general", group: "general", icon: "download", title: st("general", "General"),
         fields: [
           { key: "download_dir", label: "Download folder", hint: "Default location for new files", type: "dir" },
-          { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
           { key: "duplicate_policy", label: "Duplicate handling", hint: "What to do when a URL or file already exists", type: "select", options: [
             { value: "ask", label: "Ask every time" },
             { value: "allow", label: "Allow duplicates" },
             { value: "rename", label: "Rename automatically" },
             { value: "replace", label: "Replace existing" },
           ] },
-          { key: "num_threads", label: "Connections per download", hint: "Parallel segments per file (higher = faster on good networks)", type: "range", min: 1, max: 64 },
           { key: "language", label: "Language", hint: "Interface language", type: "select", options: [
             { value: "en", label: "English" },
             { value: "fa", label: "فارسی (Persian)" },
@@ -1761,8 +2366,23 @@ const App = {
         ],
       },
       {
-        id: "smart", icon: "bolt", title: st("smart", "Smart Download"),
+        id: "startup", group: "general", icon: "power", title: st("startup", "Startup & clipboard"),
         fields: [
+          { key: "resume_on_startup", label: "Resume on startup", hint: "Automatically continue downloads that were interrupted", type: "toggle" },
+          { key: "start_minimized", label: "Start minimized", hint: "Launch the window minimized", type: "toggle" },
+          { key: "minimize_to_tray", label: "Minimize to tray", hint: "Minimizing hides N13 to the system tray", type: "toggle" },
+          { key: "close_to_tray", label: "Close to tray", hint: "Closing the window keeps N13 running in the tray", type: "toggle" },
+          { key: "clipboard_monitor", label: "Clipboard monitoring", hint: "Offer to download URLs you copy", type: "toggle" },
+          { key: "clipboard_autostart", label: "Auto-download copied links", hint: "Start the download without asking (when monitoring is on)", type: "toggle" },
+        ],
+      },
+
+      // ── Downloads ─────────────────────────────────────────────────
+      {
+        id: "downloads", group: "downloads", icon: "sliders", title: st("downloads", "Download behaviour"),
+        fields: [
+          { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
+          { key: "num_threads", label: "Connections per download", hint: "Parallel segments per file (higher = faster on good networks)", type: "range", min: 1, max: 64 },
           { key: "connection_mode", label: "Connection mode", hint: "Smart picks the connection count automatically; Manual uses your fixed value", type: "select", options: [
             { value: "smart", label: "Smart (recommended)" },
             { value: "manual", label: "Manual" },
@@ -1772,29 +2392,22 @@ const App = {
         ],
       },
       {
-        id: "rules", icon: "link", title: st("rules", "Download Rules"),
+        id: "categories", group: "downloads", icon: "folder", title: st("categories", "Categories"),
+        fields: [
+          { key: "auto_categorize", label: "Auto-detect category", hint: "Assign a category from the file type", type: "toggle" },
+          { key: "_category_dirs", label: "Category folders", hint: "Save each category to its own folder", type: "catdirs" },
+          { key: "_category_exts", label: "Custom extensions", hint: "Extra extensions per category (advanced)", type: "catexts" },
+        ],
+      },
+      {
+        id: "rules", group: "downloads", icon: "link", title: st("rules", "Download Rules"),
         fields: [
           { key: "rules_enabled", label: "Enable rules", hint: "Automatically set category, folder and priority for new downloads", type: "toggle" },
           { key: "_rules_manager", label: "Rules", hint: "Match by extension, domain, URL text, size, or MIME type", type: "rules" },
         ],
       },
       {
-        id: "appearance", icon: "sun", title: st("appearance", "Appearance"),
-        fields: [
-          { key: "_theme", label: "Theme", hint: "Interface color scheme", type: "theme" },
-          { key: "_accent", label: "Accent color", hint: "Used for buttons, links and progress", type: "accent" },
-        ],
-      },
-      {
-        id: "bandwidth", icon: "gauge", title: st("bandwidth", "Bandwidth"),
-        fields: [
-          { key: "_limit_enabled", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
-          { key: "max_speed_bps", label: "Speed limit", hint: "Applies to all downloads combined", type: "speed" },
-          { key: "_speed_presets", label: "Quick presets", hint: "256 KB/s · 512 KB/s · 1 MB/s · 2 MB/s · 5 MB/s · 10 MB/s", type: "speedpresets" },
-        ],
-      },
-      {
-        id: "scheduler", icon: "calendar", title: st("scheduler", "Scheduler"),
+        id: "scheduler", group: "downloads", icon: "calendar", title: st("scheduler", "Scheduler"),
         fields: [
           { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
           { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
@@ -1805,31 +2418,10 @@ const App = {
           { key: "night_end_time", label: "Night ends at", hint: "e.g. 07:00", type: "time" },
         ],
       },
+
+      // ── Connection ────────────────────────────────────────────────
       {
-        id: "startup", icon: "power", title: st("startup", "Startup & clipboard"),
-        fields: [
-          { key: "resume_on_startup", label: "Resume on startup", hint: "Automatically continue downloads that were interrupted", type: "toggle" },
-          { key: "start_minimized", label: "Start minimized", hint: "Launch the window minimized", type: "toggle" },
-          { key: "minimize_to_tray", label: "Minimize to tray", hint: "Minimizing hides N13 to the system tray", type: "toggle" },
-          { key: "close_to_tray", label: "Close to tray", hint: "Closing the window keeps N13 running in the tray", type: "toggle" },
-          { key: "clipboard_monitor", label: "Clipboard monitoring", hint: "Offer to download URLs you copy", type: "toggle" },
-          { key: "clipboard_autostart", label: "Auto-download copied links", hint: "Start the download without asking (when monitoring is on)", type: "toggle" },
-          { key: "notifications_enabled", label: "Desktop notifications", hint: "Balloon notifications via the system tray", type: "toggle" },
-          { key: "notify_completed", label: "Notify on completion", hint: "When a download finishes", type: "toggle" },
-          { key: "notify_failed", label: "Notify on failure", hint: "When a download fails", type: "toggle" },
-          { key: "notify_started", label: "Notify on start", hint: "When a download begins (off by default)", type: "toggle" },
-        ],
-      },
-      {
-        id: "categories", icon: "folder", title: st("categories", "Categories"),
-        fields: [
-          { key: "auto_categorize", label: "Auto-detect category", hint: "Assign a category from the file type", type: "toggle" },
-          { key: "_category_dirs", label: "Category folders", hint: "Save each category to its own folder", type: "catdirs" },
-          { key: "_category_exts", label: "Custom extensions", hint: "Extra extensions per category (advanced)", type: "catexts" },
-        ],
-      },
-      {
-        id: "network", icon: "wifi", title: st("network", "Network"),
+        id: "network", group: "connection", icon: "wifi", title: st("network", "Network"),
         fields: [
           { key: "proxy_url", label: "Proxy", hint: "e.g. http://127.0.0.1:8080 — empty disables", type: "text", placeholder: "http://host:port" },
           { key: "proxy_username", label: "Proxy username", hint: "", type: "text" },
@@ -1838,7 +2430,7 @@ const App = {
         ],
       },
       {
-        id: "reliability", icon: "retry", title: st("reliability", "Reliability"),
+        id: "reliability", group: "connection", icon: "retry", title: st("reliability", "Reliability"),
         fields: [
           { key: "max_retries", label: "Retry attempts", hint: "Times a failed segment is retried", type: "range", min: 0, max: 20 },
           { key: "retry_delay", label: "Retry delay", hint: "Base wait between attempts, in seconds", type: "range", min: 1, max: 60 },
@@ -1847,21 +2439,69 @@ const App = {
           { key: "block_private_urls", label: "Block private addresses", hint: "Prevents downloads from local network targets (SSRF protection)", type: "toggle" },
         ],
       },
+
+      // ── Speed ─────────────────────────────────────────────────────
       {
-        id: "integration", icon: "browser", title: st("integration", "Browser integration"),
+        id: "bandwidth", group: "speed", icon: "gauge", title: st("bandwidth", "Bandwidth"),
+        fields: [
+          { key: "_limit_enabled", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
+          { key: "max_speed_bps", label: "Speed limit", hint: "Applies to all downloads combined", type: "speed" },
+          { key: "_speed_presets", label: "Quick presets", hint: "256 KB/s · 512 KB/s · 1 MB/s · 2 MB/s · 5 MB/s · 10 MB/s", type: "speedpresets" },
+        ],
+      },
+
+      // ── Browser Integration ───────────────────────────────────────
+      {
+        id: "integration", group: "browser", icon: "browser", title: st("integration", "Browser integration"),
         fields: [
           { key: "live_server_port", label: "Extension server port", hint: "Restart the live server after changing", type: "number", min: 1024, max: 65535 },
           { key: "_server_link", label: "Live server", hint: "Manage the browser bridge", type: "server" },
         ],
       },
+
+      // ── Notifications ─────────────────────────────────────────────
       {
-        id: "updates", icon: "refresh", title: st("updates", "Updates"),
+        id: "notifications", group: "notifications", icon: "bell", title: st("notifications", "Notifications"),
+        fields: [
+          { key: "notifications_enabled", label: "Desktop notifications", hint: "Balloon notifications via the system tray", type: "toggle" },
+          { key: "notify_completed", label: "Notify on completion", hint: "When a download finishes", type: "toggle" },
+          { key: "notify_failed", label: "Notify on failure", hint: "When a download fails", type: "toggle" },
+          { key: "notify_started", label: "Notify on start", hint: "When a download begins (off by default)", type: "toggle" },
+        ],
+      },
+
+      // ── Advanced ──────────────────────────────────────────────────
+      {
+        id: "updates", group: "advanced", icon: "refresh", title: st("updates", "Updates"),
         fields: [
           { key: "_update_panel", label: "", hint: "", type: "update" },
         ],
       },
+
+      // ── Developer ─────────────────────────────────────────────────
+      {
+        id: "developer", group: "developer", icon: "code", title: st("developer", "Developer"),
+        fields: [
+          { key: "_devtools", label: "Diagnostics", hint: "Version, runtime and log access for bug reports", type: "devtools" },
+        ],
+      },
     ];
   },
+
+  /** Top-level settings groups, in rail order. */
+  _settingsGroups() {
+    return [
+      { id: "general", label: I18N.t("settings.group.general", "General"), icon: "sliders" },
+      { id: "downloads", label: I18N.t("settings.group.downloads", "Downloads"), icon: "download" },
+      { id: "connection", label: I18N.t("settings.group.connection", "Connection"), icon: "wifi" },
+      { id: "speed", label: I18N.t("settings.group.speed", "Speed"), icon: "gauge" },
+      { id: "browser", label: I18N.t("settings.group.browser", "Browser Integration"), icon: "browser" },
+      { id: "notifications", label: I18N.t("settings.group.notifications", "Notifications"), icon: "bell" },
+      { id: "advanced", label: I18N.t("settings.group.advanced", "Advanced"), icon: "shield" },
+      { id: "developer", label: I18N.t("settings.group.developer", "Developer"), icon: "code" },
+    ];
+  },
+
 
   async _buildSettings() {
     const container = Utils.$id("settingsBody");
@@ -1879,19 +2519,76 @@ const App = {
     });
     const ctx = { speedMbps };
 
-    container.innerHTML = this._settingsDef().map((sec) => `
+    const sections = this._settingsDef();
+    const groups = this._settingsGroups();
+
+    // Rail entries are grouped headings followed by their sections, so a long
+    // settings tree stays navigable instead of being one endless scroll.
+    const railHtml = groups.map((g) => {
+      const kids = sections.filter((sec) => (sec.group || "general") === g.id);
+      if (!kids.length) return "";
+      return `
+        <div class="set-rail-group">${Utils.escapeHtml(g.label)}</div>
+        ${kids.map((sec) => `
+          <button class="set-rail-btn" data-goto="${sec.id}">
+            ${Utils.icon(sec.icon, 15)}<span>${Utils.escapeHtml(sec.title)}</span>
+          </button>`).join("")}`;
+    }).join("");
+
+    // Each card is built defensively: a single malformed field must degrade to
+    // a readable note instead of blanking the whole Settings page.
+    const cardsHtml = sections.map((sec) => {
+      let body = "";
+      try {
+        body = sec.fields.map((f) => this._fieldHtml(f, s, ctx)).join("");
+      } catch (err) {
+        API.logJs(`settings section ${sec.id}: ${err && err.message}`);
+        body = `<p class="dim-note">${Utils.escapeHtml(I18N.t("app.section_unavailable", "These settings could not be displayed."))}</p>`;
+      }
+      return `
       <section class="set-card" id="set-${sec.id}">
         <header class="set-head">
           <span class="set-ico">${Utils.icon(sec.icon, 17)}</span>
           <h3>${sec.title}</h3>
           <span class="set-saved" data-saved="${sec.id}">${Utils.icon("check", 12)} ${I18N.t("settings.saved", "Saved")}</span>
         </header>
-        <div class="set-body">
-          ${sec.fields.map((f) => this._fieldHtml(f, s, ctx)).join("")}
-        </div>
-      </section>`).join("");
+        <div class="set-body">${body}</div>
+      </section>`;
+    }).join("");
+
+    container.innerHTML = `
+      <div class="settings-shell">
+        <nav class="set-rail" aria-label="${Utils.escapeHtml(I18N.t("settings.sections", "Settings sections"))}">${railHtml}</nav>
+        <div class="settings-panes">${cardsHtml}</div>
+      </div>`;
 
     this._wireSettings(container, s);
+    this._wireSettingsRail(container);
+  },
+
+  /** Rail navigation: smooth-scroll to a section and highlight it. */
+  _wireSettingsRail(container) {
+    const rail = Utils.$q(".set-rail", container);
+    const scroller = Utils.$id("content");
+    if (!rail) return;
+
+    const btns = Utils.$qa(".set-rail-btn", rail);
+    btns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const card = Utils.$id("set-" + btn.dataset.goto);
+        if (!card) return;
+        btns.forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        if (scroller) {
+          // Scroll within the content pane, accounting for the sticky offset.
+          scroller.scrollTo({ top: Math.max(0, card.offsetTop - 12), behavior: "smooth" });
+        } else {
+          card.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+      });
+    });
+
+    if (btns.length) btns[0].classList.add("active");
   },
 
   _fieldHtml(f, s, ctx) {
@@ -1978,6 +2675,23 @@ const App = {
         </div>`;
     } else if (f.type === "server") {
       ctl = `<button class="btn btn-ghost" id="setGoBrowser">${Utils.icon("external", 15)} ${I18N.t("browser.open_page", "Open Browser page")}</button>`;
+    } else if (f.type === "devtools") {
+      // _propRow is a Components helper, not an App method.
+      const propRow = Components._propRow.bind(Components);
+      const rows = [
+        propRow(I18N.t("dev.version", "App version"), Utils.escapeHtml(this.state.version || "—")),
+        propRow(I18N.t("dev.platform", "Platform"), Utils.escapeHtml(navigator.userAgent.includes("Windows") ? "Windows" : navigator.platform || "—")),
+        propRow(I18N.t("dev.ui_language", "UI language"), Utils.escapeHtml(I18N.lang)),
+        propRow(I18N.t("dev.active_tasks", "Active tasks"), Utils.escapeHtml(String(this._taskArray().length))),
+      ].join("");
+      ctl = `<div class="dev-tools">
+          <div class="prop-list">${rows}</div>
+          <div class="dev-actions">
+            <button class="btn btn-ghost btn-sm" data-dev="logs">${Utils.icon("logs", 13)} ${I18N.t("dev.open_logs", "Open logs")}</button>
+            <button class="btn btn-ghost btn-sm" data-dev="copy">${Utils.icon("copy", 13)} ${I18N.t("dev.copy_diag", "Copy diagnostics")}</button>
+            <button class="btn btn-ghost btn-sm" data-dev="settings">${Utils.icon("code", 13)} ${I18N.t("dev.copy_settings", "Copy settings JSON")}</button>
+          </div>
+        </div>`;
     } else if (f.type === "rules") {
       ctl = `<div class="rules-manager" id="rulesManager"></div>
         <div class="rules-actions">
@@ -2255,6 +2969,37 @@ const App = {
     });
 
     Utils.$id("setGoBrowser")?.addEventListener("click", () => this.navigate("browser"));
+
+    // Developer → diagnostics.
+    const copyText = async (text, okMsg) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        Components.toast(I18N.t("toast.copied", "Copied"), okMsg, "success", 2200);
+      } catch {
+        Components.toast(I18N.t("toast.copy_failed", "Copy failed"), I18N.t("toast.copy_failed_msg", "Clipboard is unavailable"), "error");
+      }
+    };
+    Utils.$qa("[data-dev]", container).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const kind = btn.dataset.dev;
+        if (kind === "logs") {
+          this.navigate("logs");
+        } else if (kind === "copy") {
+          const diag = [
+            `N13 Download Manager ${this.state.version || "unknown"}`,
+            `Language: ${I18N.lang}`,
+            `Theme: ${this.state.theme}`,
+            `Tasks in list: ${this._taskArray().length}`,
+            `Server running: ${!!this.state.serverRunning}`,
+            `Extension connected: ${!!this.state.extConnected}`,
+            `User agent: ${navigator.userAgent}`,
+          ].join("\n");
+          copyText(diag, I18N.t("dev.copied_diag", "Diagnostics copied to clipboard"));
+        } else if (kind === "settings") {
+          copyText(JSON.stringify(this.state.settings || {}, null, 2), I18N.t("dev.copied_settings", "Settings JSON copied to clipboard"));
+        }
+      });
+    });
     if (Utils.$id("btnRuleAdd")) this._initRulesManager(container);
     this._wireUpdatePanel(container);
   },

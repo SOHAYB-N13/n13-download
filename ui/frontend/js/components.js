@@ -194,6 +194,243 @@ const Components = {
     });
   },
 
+  // ── Rename ────────────────────────────────────────────────────────
+
+  async renameDialog(currentName, { onDuplicate = null } = {}) {
+    const L = (k, f) => I18N.t(k, f);
+    const dot = String(currentName || "").lastIndexOf(".");
+    const base = dot > 0 ? currentName.slice(0, dot) : (currentName || "");
+    const ext = dot > 0 ? currentName.slice(dot) : "";
+
+    return new Promise((resolve) => {
+      const dlg = this.showModal(`
+        <div class="field">
+          <label class="field-label" for="rnName">${L("dlg.new_name", "New name")}</label>
+          <div class="rename-row">
+            <input class="input" id="rnName" value="${Utils.escapeHtml(base)}" spellcheck="false" autocomplete="off">
+            ${ext ? `<span class="rename-ext mono">${Utils.escapeHtml(ext)}</span>` : ""}
+          </div>
+          <p class="field-hint">${L("dlg.rename_hint", "The extension is kept so the file still opens correctly.")}</p>
+        </div>`,
+        { title: L("act.rename", "Rename"), width: 470, onClose: () => resolve(null) });
+
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="rnCancel">${L("confirm.cancel", "Cancel")}</button>
+        <button class="btn btn-primary" id="rnOk">${Utils.icon("check", 15)} ${L("dlg.rename_btn", "Rename")}</button>`);
+
+      const input = dlg.qs("#rnName");
+      // Select the stem so typing immediately replaces it.
+      setTimeout(() => { input.focus(); input.select(); }, 60);
+
+      const submit = () => {
+        const v = input.value.trim();
+        if (!v) { input.focus(); return; }
+        resolve(v + ext);
+        dlg.close();
+      };
+      dlg.qs("#rnOk").addEventListener("click", submit);
+      dlg.qs("#rnCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+      });
+    });
+  },
+
+  // ── Per-download speed limit ──────────────────────────────────────
+
+  async speedLimitDialog(currentBps, fileName = "") {
+    const L = (k, f) => I18N.t(k, f);
+    const presets = [0, 262144, 524288, 1048576, 2097152, 5242880, 10485760];
+    const toMbps = (bps) => (bps > 0 ? +(bps / 1048576).toFixed(2) : 0);
+    const current = currentBps || 0;
+
+    return new Promise((resolve) => {
+      const dlg = this.showModal(`
+        ${fileName ? `<p class="confirm-sub mono" style="margin-top:0">${Utils.escapeHtml(fileName)}</p>` : ""}
+        <div class="field">
+          <label class="field-label" for="slValue">${L("dlg.speed_limit", "Per-download speed limit")}</label>
+          <div class="input-join">
+            <input class="input input-num" id="slValue" type="number" min="0" step="0.1" value="${toMbps(current)}">
+            <span class="unit-tag">MB/s</span>
+          </div>
+          <p class="field-hint">${L("dlg.speed_limit_hint", "0 means unlimited. Applies on top of the global limit.")}</p>
+        </div>
+        <div class="preset-row" id="slPresets">
+          ${presets.map((p) => `<button class="chip${p === current ? " active" : ""}" data-bps="${p}">${p === 0 ? L("dlg.unlimited", "Unlimited") : toMbps(p) + " MB/s"}</button>`).join("")}
+        </div>`,
+        { title: L("act.speed_limit", "Speed limit"), width: 480, onClose: () => resolve(null) });
+
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="slCancel">${L("confirm.cancel", "Cancel")}</button>
+        <button class="btn btn-primary" id="slOk">${Utils.icon("check", 15)} ${L("confirm.apply", "Apply")}</button>`);
+
+      const input = dlg.qs("#slValue");
+      Utils.$qa(".chip", dlg.el).forEach((chip) => {
+        chip.addEventListener("click", () => {
+          Utils.$qa(".chip", dlg.el).forEach((c) => c.classList.remove("active"));
+          chip.classList.add("active");
+          input.value = toMbps(+chip.dataset.bps) || 0;
+        });
+      });
+
+      const submit = () => {
+        const mb = Math.max(0, Number(input.value) || 0);
+        resolve(Math.round(mb * 1048576));
+        dlg.close();
+      };
+      dlg.qs("#slOk").addEventListener("click", submit);
+      dlg.qs("#slCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    });
+  },
+
+  /**
+   * Priority picker.
+   *
+   * The manager stores ``0`` = highest … ``10`` = lowest, which is the exact
+   * opposite of what most people read into the word "priority".  The dialog
+   * therefore speaks in High / Normal / Low and only converts on the way out,
+   * with an exact 0–10 field for anyone who wants the raw value.
+   */
+  async priorityDialog(currentPriority, fileName = "") {
+    const L = (k, f) => I18N.t(k, f);
+    const raw = Number(currentPriority);
+    const cur = Math.max(0, Math.min(10, Number.isFinite(raw) ? raw : 5));
+    const PRESETS = [
+      { v: 1, key: "dlg.pri_high", fb: "High" },
+      { v: 5, key: "dlg.pri_normal", fb: "Normal" },
+      { v: 9, key: "dlg.pri_low", fb: "Low" },
+    ];
+
+    return new Promise((resolve) => {
+      const dlg = this.showModal(`
+        ${fileName ? `<p class="confirm-sub mono" style="margin-top:0">${Utils.escapeHtml(fileName)}</p>` : ""}
+        <div class="pri-body">
+          <div class="field">
+            <span class="field-label">${L("dlg.priority", "Download priority")}</span>
+            <div class="preset-row" id="prPresets">
+              ${PRESETS.map((p) => `<button class="chip${p.v === cur ? " active" : ""}" data-pri="${p.v}">${L(p.key, p.fb)}</button>`).join("")}
+            </div>
+            <p class="field-hint">${L("dlg.priority_hint", "When a queue slot frees up, higher priority downloads start first.")}</p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="prValue">${L("dlg.priority_exact", "Exact level")}</label>
+            <div class="input-join">
+              <input class="input input-num" id="prValue" type="number" min="0" max="10" step="1" value="${cur}">
+              <span class="unit-tag">0–10</span>
+            </div>
+          </div>
+        </div>`,
+        { title: L("act.priority", "Priority"), width: 460, onClose: () => resolve(null) });
+
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="prCancel">${L("confirm.cancel", "Cancel")}</button>
+        <button class="btn btn-primary" id="prOk">${Utils.icon("check", 15)} ${L("confirm.apply", "Apply")}</button>`);
+
+      const input = dlg.qs("#prValue");
+      const syncChips = () => {
+        const v = +input.value;
+        Utils.$qa(".chip", dlg.el).forEach((c) => c.classList.toggle("active", +c.dataset.pri === v));
+      };
+      Utils.$qa(".chip", dlg.el).forEach((chip) => {
+        chip.addEventListener("click", () => { input.value = chip.dataset.pri; syncChips(); });
+      });
+      input.addEventListener("input", syncChips);
+
+      const submit = () => {
+        const v = Math.max(0, Math.min(10, Math.round(Number(input.value) || 0)));
+        resolve(v);
+        dlg.close();
+      };
+      dlg.qs("#prOk").addEventListener("click", submit);
+      dlg.qs("#prCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    });
+  },
+
+  // ── Properties / details ──────────────────────────────────────────
+  propertiesDialog(tasks) {
+    const L = (k, f) => I18N.t(k, f);
+    if (!tasks || !tasks.length) return;
+
+    if (tasks.length > 1) {
+      const states = {};
+      let total = 0, done = 0;
+      tasks.forEach((t) => {
+        states[t.state] = (states[t.state] || 0) + 1;
+        total += t.total || 0;
+        done += t.completed || 0;
+      });
+      const body = `
+        <div class="prop-sec">${L("props.selection", "Selection")}</div>
+        <div class="prop-list">
+          ${this._propRow(L("props.count", "Downloads"), tasks.length)}
+          ${this._propRow(L("props.total_size", "Total size"), Utils.formatSize(total))}
+          ${this._propRow(L("props.downloaded", "Downloaded"), `${Utils.formatSize(done)} (${total > 0 ? ((done / total) * 100).toFixed(1) : "0"}%)`)}
+        </div>
+        <div class="prop-sec">${L("props.by_status", "By status")}</div>
+        <div class="prop-list">
+          ${Object.entries(states).map(([s, n]) => this._propRow(Utils.statusLabel(s), n)).join("")}
+        </div>`;
+      const dlg = this.showModal(body, { title: L("act.properties", "Properties"), width: 520 });
+      dlg.setFooter(`<button class="btn btn-primary" id="ppClose">${L("dlg.close", "Close")}</button>`);
+      dlg.qs("#ppClose").addEventListener("click", () => dlg.close());
+      return;
+    }
+
+    const t = tasks[0];
+    const name = Utils.fileName(t);
+    const path = t.directory ? `${t.directory}\\${t.filename || name}` : "—";
+    const etaTxt = (t.state === "Downloading" && t.eta_seconds != null && isFinite(t.eta_seconds))
+      ? Utils.formatDuration(t.eta_seconds) : "—";
+    const body = `
+      <div class="prop-sec">${L("props.file", "File")}</div>
+      <div class="prop-list">
+        ${this._propRow(L("props.name", "Name"), Utils.escapeHtml(name), true)}
+        ${this._propRow(L("props.category", "Category"), Utils.escapeHtml(t.category || "General"))}
+        ${this._propRow(L("props.path", "Location"), Utils.escapeHtml(path), true, "mono")}
+        ${this._propRow(L("props.url", "Source URL"), `<span class="mono">${Utils.escapeHtml(t.url || "")}</span>`)}
+        ${this._propRow(L("props.checksum", "Checksum"), t.checksum ? Utils.escapeHtml(t.checksum) : "—")}
+      </div>
+      <div class="prop-sec">${L("props.transfer", "Transfer")}</div>
+      <div class="prop-list">
+        ${this._propRow(L("props.status", "Status"), this._badge(t))}
+        ${this._propRow(L("props.size", "Size"), `${Utils.formatSize(t.completed || 0)} / ${t.total > 0 ? Utils.formatSize(t.total) : "—"}`)}
+        ${this._propRow(L("col.speed", "Speed"), t.state === "Downloading" ? Utils.formatSpeed(t.speed_bps) : "—")}
+        ${this._propRow(L("props.avg_speed", "Average speed"), t.average_speed > 0 ? Utils.formatSpeed(t.average_speed) : "—")}
+        ${this._propRow(L("col.eta", "ETA"), etaTxt)}
+        ${this._propRow(L("col.connections", "Connections"), `${t.connections || 1}${t.smart_status ? ` · ${I18N.fmt("fmt.smart_connections", { status: t.smart_status })}` : ""}`)}
+        ${this._propRow(L("props.priority", "Priority"), `${t.priority ?? 5}`)}
+        ${this._propRow(L("dlg.speed_limit", "Speed limit"), t.speed_limit_bps > 0 ? Utils.formatSpeed(t.speed_limit_bps) : L("dlg.unlimited", "Unlimited"))}
+        ${this._propRow(L("props.retries", "Retries"), `${t.retry_count || 0}`)}
+      </div>
+      <div class="prop-sec">${L("props.server", "Server")}</div>
+      <div class="prop-list">
+        ${this._propRow(L("props.server_name", "Server"), Utils.escapeHtml(t.server || "—"))}
+        ${this._propRow(L("props.content_type", "Content type"), Utils.escapeHtml(t.content_type || "—"))}
+        ${this._propRow(L("props.resumable", "Resumable"), t.supports_range ? L("props.yes", "Yes") : L("props.no", "No"))}
+      </div>
+      ${t.error ? `<div class="prop-sec">${L("props.error", "Last error")}</div>
+        <div class="prop-list">${this._propRow(L("props.error", "Error"), Utils.escapeHtml(t.error))}</div>` : ""}`;
+
+    const dlg = this.showModal(body, { title: L("act.properties", "Properties"), width: 620 });
+    dlg.setFooter(`
+      <button class="btn btn-ghost" id="ppCopyPath">${Utils.icon("copy", 14)} ${L("props.copy_path", "Copy path")}</button>
+      <button class="btn btn-primary" id="ppClose">${L("dlg.close", "Close")}</button>`);
+    dlg.qs("#ppClose").addEventListener("click", () => dlg.close());
+    dlg.qs("#ppCopyPath").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(path);
+        Components.toast(L("toast.copied", "Copied"), L("toast.copied_path", "File path copied to clipboard"), "info", 2000);
+      } catch { /* clipboard unavailable */ }
+    });
+  },
+
+  _propRow(key, valueHtml, isHtml = false, extraCls = "") {
+    return `<div class="prop-row"><span class="prop-key">${Utils.escapeHtml(key)}</span>
+      <span class="prop-val ${extraCls}">${isHtml ? valueHtml : Utils.escapeHtml(String(valueHtml))}</span></div>`;
+  },
+
   // ── Download rule editor ──────────────────────────────────────────
 
   async ruleEditor(rule) {
@@ -360,7 +597,7 @@ const Components = {
       items.push({ label: L("act.cancel", "Cancel") + cnt, icon: "xCircle", action: () => cb.onCancel(targets) });
     if (s === "Failed" || s === "Cancelled" || s === "Stopped")
       items.push({ label: L("act.retry", "Retry") + cnt, icon: "retry", action: () => cb.onRetry(targets) });
-    if (items.length) items.push({ separator: true });
+    if (items.length)     items.push({ separator: true });
     items.push({ label: L("act.copy_url", "Copy URL") + cnt, icon: "copy", action: () => cb.onCopyUrl(targets) });
     if (s === "Complete") {
       items.push({ label: L("act.open_file", "Open file"), icon: "external", action: () => cb.onOpenFile(task.id) });
@@ -369,12 +606,82 @@ const Components = {
       items.push({ label: L("act.redownload", "Redownload"), icon: "retry", action: () => cb.onRedownload(task.id) });
       items.push({ label: L("act.delete_file", "Delete file"), icon: "trash", danger: true, action: () => cb.onDeleteFile(task.id, name) });
     }
-    items.push({ separator: true });
-    items.push({ label: L("act.move_up", "Move up") + cnt, icon: "arrowUp", action: () => cb.onMove(targets, -1) });
-    items.push({ label: L("act.move_down", "Move down") + cnt, icon: "arrowDown", action: () => cb.onMove(targets, 1) });
+    // Rename / per-download cap only make sense for a single task.
+    if (!multi) {
+      items.push({ separator: true });
+      items.push({ label: L("act.rename", "Rename"), icon: "edit", action: () => cb.onRename(task.id) });
+      items.push({ label: L("act.speed_limit", "Speed limit"), icon: "gauge", action: () => cb.onSpeedLimit(task.id) });
+      items.push({ label: L("act.priority", "Priority"), icon: "flag", action: () => cb.onPriority(task.id) });
+      items.push({ label: L("act.properties", "Properties"), icon: "info", action: () => cb.onProperties(task.id) });
+    }
+    // Move up/down only reorder tasks that are still waiting to start.
+    if (s === "Queued") {
+      items.push({ separator: true });
+      items.push({ label: L("act.move_up", "Move up") + cnt, icon: "arrowUp", action: () => cb.onReorder(targets, -1) });
+      items.push({ label: L("act.move_down", "Move down") + cnt, icon: "arrowDown", action: () => cb.onReorder(targets, 1) });
+    }
     items.push({ separator: true });
     items.push({ label: L("act.remove", "Remove from list") + cnt, icon: "x", danger: true, action: () => cb.onRemove(targets) });
     return items;
+  },
+
+  /**
+   * Build the action list for the current selection.
+   *
+   * Returns only actions that are meaningful for the selected states, so the
+   * action bar stays short and never shows a dead button.  Each entry is
+   * ``{id, label, icon, kind, run}`` where ``kind`` drives the styling
+   * (``"primary"`` | ``"danger"`` | ``""``).
+   */
+  selectionActions(tasks, cb) {
+    const L = (k, f) => (typeof I18N !== "undefined" ? I18N.t(k, f) : f);
+    const states = tasks.map((t) => t.state);
+    const any = (list) => states.some((s) => list.includes(s));
+    const ids = tasks.map((t) => t.id);
+    const single = tasks.length === 1 ? tasks[0] : null;
+    const firstComplete = tasks.find((t) => t.state === "Complete") || null;
+    const n = tasks.length;
+    const out = [];
+
+    const ACTIVE = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
+
+    if (any(["Queued"]))
+      out.push({ id: "start", label: L("act.start_now", "Start"), icon: "play", kind: "primary", run: () => cb.onStart(ids) });
+    if (any(["Downloading"]))
+      out.push({ id: "pause", label: L("act.pause", "Pause"), icon: "pause", kind: "", run: () => cb.onPause(ids) });
+    if (any(["Paused"]))
+      out.push({ id: "resume", label: L("act.resume", "Resume"), icon: "play", kind: "primary", run: () => cb.onResume(ids) });
+    if (any(["Failed", "Cancelled", "Stopped"]))
+      out.push({ id: "retry", label: L("act.retry", "Retry"), icon: "retry", kind: "primary", run: () => cb.onRetry(ids) });
+    if (any(ACTIVE) || any(["Paused", "Queued"]))
+      out.push({ id: "cancel", label: L("act.cancel", "Cancel"), icon: "xCircle", kind: "", run: () => cb.onCancel(ids) });
+
+    if (out.length) out.push({ separator: true });
+
+    if (firstComplete)
+      out.push({ id: "openfile", label: L("act.open_file", "Open file"), icon: "external", kind: "", run: () => cb.onOpenFile(firstComplete.id) });
+    out.push({ id: "folder", label: L("act.open_folder", "Open folder"), icon: "folderOpen", kind: "", run: () => cb.onOpenFolder(ids[0]) });
+    out.push({ id: "copy", label: L("act.copy_url", "Copy link"), icon: "copy", kind: "", run: () => cb.onCopyUrl(ids) });
+    if (single)
+      out.push({ id: "rename", label: L("act.rename", "Rename"), icon: "edit", kind: "", run: () => cb.onRename(single.id) });
+    if (single)
+      out.push({ id: "speed", label: L("act.speed_limit", "Speed limit"), icon: "gauge", kind: "", run: () => cb.onSpeedLimit(single.id) });
+
+    // Queue controls.  Reordering is only meaningful for tasks that are still
+    // waiting, so Move up/down is offered only when *every* selected task is
+    // queued — otherwise the buttons would appear to do nothing.
+    if (states.length && states.every((s) => s === "Queued")) {
+      out.push({ id: "moveup", label: L("act.move_up", "Move up"), icon: "arrowUp", kind: "", run: () => cb.onReorder(ids, -1) });
+      out.push({ id: "movedown", label: L("act.move_down", "Move down"), icon: "arrowDown", kind: "", run: () => cb.onReorder(ids, 1) });
+    }
+    // Priority is a persisted property, so it stays available in any state.
+    out.push({ id: "priority", label: L("act.priority", "Priority"), icon: "flag", kind: "", run: () => cb.onPriority(single ? single.id : ids) });
+
+    out.push({ id: "props", label: L("act.properties", "Properties"), icon: "info", kind: "", run: () => cb.onProperties(single ? single.id : ids) });
+
+    out.push({ separator: true });
+    out.push({ id: "remove", label: n > 1 ? L("act.remove_many", "Remove") : L("act.remove", "Remove"), icon: "trash", kind: "danger", run: () => cb.onRemove(ids) });
+    return out;
   },
 
   _rowActions(task) {
@@ -414,6 +721,30 @@ const Components = {
     return Utils.formatDuration(eta);
   },
 
+  /** Live connection count for a row ("—" when the task is not transferring). */
+  _connText(task) {
+    const live = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
+    if (!live.includes(task.state)) return "—";
+    const n = task.connections;
+    if (!n || n < 1) return "—";
+    return String(n);
+  },
+
+  _connHtml(task) {
+    const live = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
+    const isLive = live.includes(task.state);
+    const txt = this._connText(task);
+    const icon = Utils.icon("bolt", 13);
+    return `<div class="dl-conn${isLive && txt !== "—" ? " live" : ""}" title="${I18N.t("col.connections", "Connections")}">${icon}<span>${txt}</span></div>`;
+  },
+
+  /** Small badge shown when a per-download bandwidth cap is configured. */
+  _capHtml(task) {
+    const bps = task.speed_limit_bps || 0;
+    if (bps <= 0) return "";
+    return `<span class="dl-cap" title="${I18N.t("dlg.speed_limit", "Per-download speed limit")}">${Utils.formatSpeed(bps)}</span>`;
+  },
+
   renderRow(task, cb, elapsedMs = 0) {
     const name = Utils.fileName(task);
     const pct = task.total > 0 ? Utils.clamp((task.completed / task.total) * 100, 0, 100) : 0;
@@ -447,7 +778,8 @@ const Components = {
       <div class="dl-cell dl-size" title="${done} of ${total} · ${remaining} left">
         <span class="dl-cell-main">${done}<span class="dl-cell-dim"> / ${total}</span></span>
       </div>
-      <div class="dl-cell dl-speed">${task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—"}</div>
+      <div class="dl-cell dl-speed">${task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—"}${this._capHtml(task)}</div>
+      ${this._connHtml(task)}
       <div class="dl-status">${this._badge(task)}${task.error ? `<span class="dl-err" title="${Utils.escapeHtml(task.error)}">${Utils.icon("info", 13)}</span>` : ""}</div>
       <div class="dl-actions">${this._rowActions(task)}</div>`;
 
@@ -520,7 +852,18 @@ const Components = {
       sizeEl.innerHTML = `${Utils.formatSize(task.completed)}<span class="dl-cell-dim"> / ${total}</span>`;
     }
     const speedEl = row.querySelector(".dl-speed");
-    if (speedEl) speedEl.textContent = task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—";
+    if (speedEl) {
+      speedEl.innerHTML = (task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—") + this._capHtml(task);
+    }
+
+    const connEl = row.querySelector(".dl-conn");
+    if (connEl) {
+      const live = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"].includes(task.state);
+      const txt = this._connText(task);
+      connEl.classList.toggle("live", live && txt !== "—");
+      const span = connEl.querySelector("span");
+      if (span) span.textContent = txt;
+    }
 
     const smartEl = row.querySelector(".dl-smart");
     if (smartEl) smartEl.textContent = task.smart_status ? I18N.fmt("fmt.smart_connections", { status: task.smart_status }) : "";
@@ -538,15 +881,30 @@ const Components = {
 
   // ── Empty states & skeletons ──────────────────────────────────────
 
-  emptyState({ icon = "download", title, desc = "", actionLabel = "", onAction = null }) {
+  emptyState({ icon = "download", title, desc = "", actionLabel = "", onAction = null, actions = null }) {
     const wrap = document.createElement("div");
     wrap.className = "empty";
+
+    // `actions` (preferred) renders several one-click entry points so a brand
+    // new user is never staring at a dead end.  `actionLabel`/`onAction` stay
+    // supported for the simpler single-button callers.
+    const list = actions && actions.length
+      ? actions
+      : (actionLabel ? [{ label: actionLabel, icon: "plus", primary: true, onClick: onAction }] : []);
+
     wrap.innerHTML = `
       <span class="empty-ico">${Utils.icon(icon, 30)}</span>
       <h3 class="empty-title">${Utils.escapeHtml(title)}</h3>
       ${desc ? `<p class="empty-desc">${Utils.escapeHtml(desc)}</p>` : ""}
-      ${actionLabel ? `<button class="btn btn-primary empty-btn">${Utils.icon("plus", 15)}${Utils.escapeHtml(actionLabel)}</button>` : ""}`;
-    if (actionLabel && onAction) wrap.querySelector(".empty-btn").addEventListener("click", onAction);
+      ${list.length ? `<div class="empty-actions">${list.map((a, i) => `
+        <button class="btn ${a.primary ? "btn-primary" : "btn-ghost"} empty-btn" data-ei="${i}">
+          ${Utils.icon(a.icon || "plus", 15)}${Utils.escapeHtml(a.label)}
+        </button>`).join("")}</div>` : ""}`;
+
+    Utils.$qa(".empty-btn", wrap).forEach((btn) => {
+      const a = list[+btn.dataset.ei];
+      if (a && typeof a.onClick === "function") btn.addEventListener("click", a.onClick);
+    });
     return wrap;
   },
 

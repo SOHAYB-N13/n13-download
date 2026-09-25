@@ -259,6 +259,28 @@ class DownloadController:
             self._print(
                 f"[dim]Speed limit: {format_size(self._limiter.max_rate)}/s[/dim]"
             )
+        # Optional per-task cap, layered *on top of* the global limiter.  It is
+        # ``None`` unless a caller opts in via :meth:`set_task_speed_limit`, so
+        # the CLI/TUI and every existing download path are byte-for-byte
+        # unaffected.
+        self._task_limiter: Optional[BandwidthLimiter] = None
+
+    def set_task_speed_limit(self, max_bytes_per_second: int) -> None:
+        """Apply a per-download bandwidth cap (0 disables it).
+
+        The cap is enforced in addition to the global ``max_speed_bps`` limit,
+        so a single download can be slowed without touching every other
+        transfer in the process.
+        """
+        rate = max(0, int(max_bytes_per_second or 0))
+        if rate <= 0:
+            self._task_limiter = None
+            return
+        if self._task_limiter is None:
+            self._task_limiter = BandwidthLimiter(rate)
+        else:
+            self._task_limiter.update_limit(rate)
+        self._print(f"[dim]Per-download speed limit: {format_size(rate)}/s[/dim]")
 
     # ------------------------------------------------------------------ #
     # Request helpers
@@ -319,7 +341,9 @@ class DownloadController:
             pass
 
     def _throttle(self, chunk_len: int, control=None) -> None:
-        if self._limiter is None:
+        global_limiter = self._limiter
+        task_limiter = self._task_limiter
+        if global_limiter is None and task_limiter is None:
             return
 
         def _stop() -> bool:
@@ -331,7 +355,13 @@ class DownloadController:
                 return bool(control.paused or control.cancelled)
             return False
 
-        self._limiter.consume(chunk_len, should_stop=_stop)
+        # Both caps apply: the global one protects total bandwidth, the
+        # per-task one slows this single transfer.  Consuming from the smaller
+        # bucket first would starve the other, so always drain both.
+        if global_limiter is not None:
+            global_limiter.consume(chunk_len, should_stop=_stop)
+        if task_limiter is not None:
+            task_limiter.consume(chunk_len, should_stop=_stop)
 
     # ------------------------------------------------------------------ #
     # Per-task control helpers

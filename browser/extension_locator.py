@@ -208,6 +208,45 @@ def materialize_extension_dir(emit: Optional[Callable[[str], None]] = None) -> P
     )
 
 
+def repair_extension(emit: Optional[Callable[[str], None]] = None) -> dict:
+    """Rebuild the on-disk extension copy from the bundled template.
+
+    A "repair" is deliberately the same operation as a first-time
+    materialize: discard the existing copy, re-create it from the bundled
+    template, re-sync the live server credential, then re-validate.  Reusing
+    one code path means a repaired install can never drift from a fresh one.
+
+    This fixes the two failures users actually hit:
+
+    * the copy's ``token.json`` no longer matches the running installation
+      (server token was rotated, or the copy came from a different install),
+    * files referenced by the manifest are missing or damaged after an
+      upgrade or a partial antivirus quarantine.
+
+    Returns ``{"ok": bool, "path": str, "reason": str}``.  Never raises — the
+    caller is a UI button and must always get a report back.
+    """
+    try:
+        path = materialize_extension_dir(emit)
+    except ExtensionLocatorError as exc:
+        _log(emit, f"Repair failed: {exc}")
+        return {"ok": False, "path": "", "reason": str(exc)}
+    except Exception as exc:  # never let a repair crash the UI
+        log.exception("%s unexpected repair failure", TAG)
+        _log(emit, f"Repair failed: {exc}")
+        return {"ok": False, "path": "", "reason": str(exc)}
+
+    ok, reason = validate_extension_dir(path)
+    if not ok:
+        # materialize already validated, so this only trips on a race (e.g.
+        # antivirus removed a file in between) — report rather than assume.
+        _log(emit, f"Repaired copy failed validation: {reason}")
+        return {"ok": False, "path": str(path), "reason": reason}
+
+    _log(emit, f"Extension repaired: {path}")
+    return {"ok": True, "path": str(path), "reason": reason}
+
+
 def discover_extension_dir(emit: Optional[Callable[[str], None]] = None) -> Path:
     """Stage 1: find and validate the real N13 extension directory.
 

@@ -19,6 +19,52 @@ from typing import Callable, Optional
 _POLL_INTERVAL = 3.0
 
 
+def extract_url(value: Optional[str]) -> Optional[str]:
+    """Return the first ``http(s)`` URL found in *value*, else ``None``."""
+    if not value:
+        return None
+    for token in str(value).replace("\r", "\n").split("\n"):
+        token = token.strip()
+        if token.lower().startswith(("http://", "https://")):
+            return token
+    return None
+
+
+def read_clipboard_text(timeout: float = 1.5) -> str:
+    """Read the system clipboard, never blocking the caller for long.
+
+    The UI's "Paste URL" action needs a clipboard read on demand.  A browser
+    WebView may refuse ``navigator.clipboard`` access, so this is the native
+    fallback.
+
+    ``tkinter`` must create its own root to query the clipboard, so the read
+    runs on a short-lived daemon thread and the caller waits at most
+    *timeout* seconds.  A clipboard owned by a hung application therefore
+    degrades to an empty string instead of freezing the UI, and the daemon
+    flag guarantees it can never keep the process alive.
+    """
+    result: list[str] = []
+
+    def _worker() -> None:
+        try:
+            root = tkinter.Tk()
+            root.withdraw()
+            try:
+                result.append((root.clipboard_get() or "").strip())
+            finally:
+                try:
+                    root.destroy()
+                except tkinter.TclError:
+                    pass
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=_worker, name="n13-clipboard-read", daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    return result[0] if result else ""
+
+
 class ClipboardMonitor:
     def __init__(
         self,
@@ -74,13 +120,7 @@ class ClipboardMonitor:
     @staticmethod
     def _looks_like_url(value: str) -> Optional[str]:
         """Return the first http(s) URL found in *value*, else ``None``."""
-        if not value:
-            return None
-        for token in value.replace("\r", "\n").split("\n"):
-            token = token.strip()
-            if token.lower().startswith(("http://", "https://")):
-                return token
-        return None
+        return extract_url(value)
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_interval):

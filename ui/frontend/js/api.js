@@ -62,6 +62,8 @@ const API = {
   async deleteFile(taskId) { return this._call("delete_file", taskId); },
   async moveTask(id, delta) { return this._call("move_task", id, delta); },
   async setPriority(id, priority) { return this._call("set_priority", id, priority); },
+  async renameDownload(id, newName) { return this._call("rename_download", id, String(newName)); },
+  async setTaskSpeedLimit(id, bps) { return this._call("set_task_speed_limit", id, Math.max(0, Math.round(bps || 0))); },
   async retryFailed() { return this._call("retry_failed"); },
   async clearFailed() { return this._call("clear_failed"); },
   async clearCompleted() { return this._call("clear_completed"); },
@@ -98,8 +100,11 @@ const API = {
   async liveServerStatus() { return this._call("live_server_status"); },
   async schedulerStatus() { return this._call("scheduler_status"); },
   async clipboardStatus() { return this._call("clipboard_status"); },
+  // Native clipboard read — used when the WebView denies navigator.clipboard.
+  async readClipboardUrl() { return this._call("read_clipboard_url"); },
   async createExtension() { return this._call("create_extension"); },
   async installExtension() { return this._call("install_extension"); },
+  async repairExtension() { return this._call("repair_extension"); },
   async registerProtocol() { return this._call("register_protocol"); },
   async unregisterProtocol() { return this._call("unregister_protocol"); },
 

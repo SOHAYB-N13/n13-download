@@ -123,6 +123,37 @@ try {
       </div>
     </header>
 
+    <!-- Primary command bar — always visible, every page -->
+    <div class="command-bar" role="toolbar" aria-label="Primary actions">
+      <button class="cmd-btn cmd-primary" id="cmdNewDownload" data-i18n-tip="title.new_download">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span class="cmd-label" data-i18n="title.new_download">New download</span>
+        <kbd>Ctrl+N</kbd>
+      </button>
+
+      <button class="cmd-btn" id="cmdPasteUrl" data-i18n-tip="cmd.paste_tip">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="3.5" rx="1"/><path d="M16 4.5h2.5A1.5 1.5 0 0 1 20 6v14a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 20V6a1.5 1.5 0 0 1 1.5-1.5H8"/></svg>
+        <span class="cmd-label" data-i18n="cmd.paste_url">Paste URL</span>
+        <kbd>Ctrl+V</kbd>
+      </button>
+
+      <button class="cmd-btn" id="cmdBatch" data-i18n-tip="cmd.batch_tip">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.2 8.5 4.6-8.5 4.6L3.5 7.8 12 3.2Z"/><path d="m4.5 12.2 7.5 4 7.5-4"/><path d="m4.5 16.2 7.5 4 7.5-4"/></svg>
+        <span class="cmd-label" data-i18n="cmd.add_batch">Add batch</span>
+      </button>
+
+      <span class="cmd-spacer"></span>
+
+      <button class="ext-pill off" id="extPill" aria-live="polite">
+        <span class="ext-dot" aria-hidden="true"></span>
+        <span class="ext-text">
+          <strong class="ext-title" id="extPillTitle" data-i18n="browser.ext_off">Extension not connected</strong>
+          <span class="ext-sub" id="extPillSub" data-i18n="browser.ext_off_sub">Click to set up</span>
+        </span>
+        <span class="ext-action" id="extPillAction" data-i18n="browser.setup">Set up</span>
+      </button>
+    </div>
+
     <!-- Scrollable content -->
     <main id="content" role="main">
       <header class="page-head">
@@ -235,6 +266,7 @@ try {
               <select id="sortSelect" data-i18n-aria-label="sort.label">
                 <option value="newest:-1" selected data-i18n="sort.newest">Newest first</option>
                 <option value="newest:1" data-i18n="sort.oldest">Oldest first</option>
+                <option value="queue:1" data-i18n="sort.queue">Queue order</option>
                 <option value="name:1" data-i18n="sort.name_az">Name A–Z</option>
                 <option value="name:-1" data-i18n="sort.name_za">Name Z–A</option>
                 <option value="size:-1" data-i18n="sort.largest">Largest first</option>
@@ -256,11 +288,49 @@ try {
           </div>
         </div>
 
+        <!-- Queue summary: active / waiting / priority / scheduler -->
+        <div class="queue-strip" id="queueStrip" aria-label="Queue status">
+          <div class="qs-item">
+            <span class="qs-dot active" aria-hidden="true"></span>
+            <span class="qs-val" id="qsActive">0</span>
+            <span class="qs-lbl" data-i18n="queue.active">Active</span>
+          </div>
+          <div class="qs-item">
+            <span class="qs-dot waiting" aria-hidden="true"></span>
+            <span class="qs-val" id="qsWaiting">0</span>
+            <span class="qs-lbl" data-i18n="queue.waiting">Waiting</span>
+          </div>
+          <div class="qs-item">
+            <span class="qs-dot" aria-hidden="true"></span>
+            <span class="qs-val" id="qsSpeed">0 B/s</span>
+            <span class="qs-lbl" data-i18n="queue.bandwidth">Bandwidth</span>
+          </div>
+          <div class="qs-item" id="qsLimitWrap">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4"/><circle cx="12" cy="12" r="3.4"/></svg>
+            <span class="qs-lbl" data-i18n="queue.speed_limit">Global limit</span>
+            <button class="qs-btn" id="qsLimitBtn" data-i18n-tip="queue.change_limit">Unlimited</button>
+          </div>
+          <div class="qs-item" id="qsSchedWrap">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/></svg>
+            <span class="qs-lbl" data-i18n="queue.scheduler">Scheduler</span>
+            <button class="qs-btn" id="qsSchedBtn" data-i18n-tip="queue.scheduler_tip">Off</button>
+          </div>
+          <span class="qs-spacer"></span>
+          <button class="btn btn-ghost btn-sm" id="qsRetryFailed" hidden>
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 3.5v5h-5"/></svg>
+            <span id="qsRetryLabel" data-i18n="queue.retry_failed">Retry failed</span>
+          </button>
+        </div>
+
+        <!-- Category filter — rendered only when the list spans >1 category -->
+        <div class="cat-strip" id="catStrip" role="tablist" aria-label="Filter by category" hidden></div>
+
         <div class="dl-head" id="downloadHead" hidden>
           <span class="h-name" data-i18n="col.name">Name</span>
           <span data-i18n="col.progress">Progress</span>
           <span class="c-size" data-i18n="col.size">Size</span>
           <span class="c-speed" data-i18n="col.speed">Speed</span>
+          <span class="c-conn" data-i18n="col.connections">Conn.</span>
           <span data-i18n="col.status">Status</span>
           <span class="h-actions" aria-hidden="true"></span>
         </div>
@@ -410,6 +480,10 @@ try {
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
               <span data-i18n="browser.create_extension">Create extension</span>
             </button>
+            <button class="btn btn-ghost" id="btnRepairExt" data-i18n-tip="browser.repair_tip">
+              <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.6 6.4a4.2 4.2 0 0 0 5.4 5.4l-8.5 8.5a2.4 2.4 0 0 1-3.4-3.4z"/><path d="m17.3 3.1 3.6 3.6-2.2 2.2-3.6-3.6z"/></svg>
+              <span data-i18n="browser.repair_extension">Repair extension</span>
+            </button>
             <button class="btn btn-ghost" id="btnRegProtocol">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.5a5 5 0 0 0 7.5.5l2.8-2.8a5 5 0 0 0-7-7l-1.6 1.5"/><path d="M14 10.5a5 5 0 0 0-7.5-.5l-2.8 2.8a5 5 0 0 0 7 7l1.6-1.5"/></svg>
               <span data-i18n="browser.register_protocol">Register dldm:// protocol</span>
@@ -438,6 +512,24 @@ try {
         <div class="log-view" id="logList" aria-live="polite"></div>
       </section>
     </main>
+
+    <!-- Selection action bar — appears whenever downloads are selected -->
+    <div class="sel-bar" id="selBar" role="toolbar" aria-label="Download actions" hidden>
+      <div class="sb-count">
+        <span class="sb-count-n" id="sbCount">0</span>
+        <span class="sb-count-lbl" id="sbCountLabel" data-i18n="sel.selected">selected</span>
+        <button class="sb-clear icon-btn" id="sbClear" data-i18n-tip="sel.clear" data-i18n-aria-label="sel.clear">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <span class="sb-divider" aria-hidden="true"></span>
+
+      <div class="sb-actions" id="sbActions"></div>
+
+      <span class="sb-spacer"></span>
+      <span class="sb-more-hint" data-i18n="sel.more_hint">Right-click for more</span>
+    </div>
   </div>
 </div>
 

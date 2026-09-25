@@ -612,6 +612,159 @@ const I18N = {
       // Misc
       "app.settings_unavailable": "Settings are unavailable right now.",
       "app.loading": "Loading…",
+
+      // ── Command bar (always-visible primary actions) ──────────────
+      "cmd.paste_url": "Paste URL",
+      "cmd.paste_tip": "Paste a link from the clipboard (Ctrl+V)",
+      "cmd.add_batch": "Add batch",
+      "cmd.batch_tip": "Queue many downloads at once",
+
+      // ── Queue strip ───────────────────────────────────────────────
+      "queue.active": "Active",
+      "queue.waiting": "Waiting",
+      "queue.bandwidth": "Bandwidth",
+      "queue.speed_limit": "Global limit",
+      "queue.change_limit": "Change the global bandwidth cap",
+      "queue.scheduler": "Scheduler",
+      "queue.scheduler_tip": "Open scheduler settings",
+      "queue.off": "Off",
+      "queue.retry_failed": "Retry failed",
+
+      // ── Selection action bar ──────────────────────────────────────
+      "sel.selected": "selected",
+      "sel.selected_plural": "selected",
+      "sel.clear": "Clear selection",
+      "sel.more_hint": "Right-click for more",
+
+      // ── New columns / actions ─────────────────────────────────────
+      "col.connections": "Conn.",
+      "act.rename": "Rename",
+      "act.speed_limit": "Speed limit",
+      "act.properties": "Properties",
+      "act.remove_many": "Remove",
+
+      // ── Rename / speed-limit dialogs ──────────────────────────────
+      "dlg.new_name": "New name",
+      "dlg.rename_hint": "The extension is kept so the file still opens correctly.",
+      "dlg.rename_btn": "Rename",
+      "dlg.speed_limit": "Speed limit",
+      "dlg.speed_limit_hint": "0 means unlimited. Applies on top of the global limit.",
+      "dlg.unlimited": "Unlimited",
+      "confirm.apply": "Apply",
+
+      // ── Toasts for the new actions ────────────────────────────────
+      "toast.rename_blocked": "Cannot rename while downloading",
+      "toast.rename_blocked_msg": "Pause or cancel the download first.",
+      "toast.renamed": "Renamed",
+      "toast.rename_failed": "Rename failed",
+      "toast.rename_exists": "A file with that name already exists.",
+      "toast.rename_invalid": "That name is not valid.",
+      "toast.no_link": "No link in clipboard",
+      "toast.no_link_msg": "Copy a download link first, or type the address manually.",
+      "toast.retrying_failed": "Retrying failed downloads",
+      "toast.n_requeued": "{n} re-queued",
+      "toast.link_captured_msg": "Received from browser extension",
+
+      // ── Clipboard quick action ────────────────────────────────────
+      "clip.detected": "Download detected",
+      "clip.download_now": "Download",
+
+      // ── Empty state extras ────────────────────────────────────────
+      "empty.install_extension": "Install Browser Extension",
+      "empty.import": "Import Downloads",
+
+      // ── Extension status pill ─────────────────────────────────────
+      "browser.ext_on": "Extension connected",
+      "browser.ext_on_sub": "Right-click any link to send it to N13",
+      "browser.ext_off": "Extension not connected",
+      "browser.ext_off_sub": "Click to set up",
+      "browser.ext_waiting": "Waiting for extension",
+      "browser.ext_waiting_sub": "Server is running — install the extension",
+      "browser.manage": "Manage",
+      "browser.setup": "Set up",
+      "browser.setup_started": "Browser setup",
+      "browser.setup_started_msg": "Press “Install Extension” on the Browser page to finish.",
+
+      // ── Properties / details ──────────────────────────────────────
+      "props.selection": "Selection",
+      "props.count": "Downloads",
+      "props.total_size": "Total size",
+      "props.downloaded": "Downloaded",
+      "props.by_status": "By status",
+      "props.file": "File",
+      "props.name": "Name",
+      "props.category": "Category",
+      "props.path": "Location",
+      "props.url": "Source URL",
+      "props.checksum": "Checksum",
+      "props.transfer": "Transfer",
+      "props.status": "Status",
+      "props.size": "Size",
+      "props.avg_speed": "Average speed",
+      "props.priority": "Priority",
+      "props.retries": "Retries",
+      "props.server": "Server",
+      "props.server_name": "Server",
+      "props.content_type": "Content type",
+      "props.resumable": "Resumable",
+      "props.yes": "Yes",
+      "props.no": "No",
+      "props.error": "Last error",
+      "props.copy_path": "Copy path",
+
+      // ── Settings groups ───────────────────────────────────────────
+      "settings.sections": "Settings sections",
+      "settings.downloads": "Download behaviour",
+      "settings.notifications": "Notifications",
+      "settings.developer": "Developer",
+      "settings.group.general": "General",
+      "settings.group.downloads": "Downloads",
+      "settings.group.connection": "Connection",
+      "settings.group.speed": "Speed",
+      "settings.group.browser": "Browser Integration",
+      "settings.group.notifications": "Notifications",
+      "settings.group.advanced": "Advanced",
+      "settings.group.developer": "Developer",
+
+      // ── Developer panel ───────────────────────────────────────────
+      "dev.version": "App version",
+      "dev.platform": "Platform",
+      "dev.ui_language": "UI language",
+      "dev.active_tasks": "Tasks in list",
+      "dev.open_logs": "Open logs",
+      "dev.copy_diag": "Copy diagnostics",
+      "dev.copy_settings": "Copy settings JSON",
+      "dev.copied_diag": "Diagnostics copied to clipboard",
+      "dev.copied_settings": "Settings JSON copied to clipboard",
+
+      // ── Queue ordering / priority ─────────────────────────────────
+      "sort.queue": "Queue order",
+      "act.priority": "Priority",
+      "dlg.priority": "Download priority",
+      "dlg.priority_hint": "When a queue slot frees up, higher priority downloads start first.",
+      "dlg.priority_exact": "Exact level",
+      "dlg.pri_high": "High",
+      "dlg.pri_normal": "Normal",
+      "dlg.pri_low": "Low",
+      "toast.priority_set": "Priority updated",
+      "toast.priority_set_many": "Priority updated for {n} downloads",
+      "toast.priority_failed": "Could not set priority",
+      "toast.queue_order_on": "Showing queue order",
+      "toast.queue_order_on_msg": "Move up / down changes the order downloads start in.",
+
+      // ── Categories ────────────────────────────────────────────────
+      "cat.all": "All categories",
+      "cat.show_all": "Show all categories",
+      "empty.nothing_in_category": "No downloads in this category yet.",
+
+      // ── Extension repair ──────────────────────────────────────────
+      "browser.repair_extension": "Repair extension",
+      "browser.repair_tip": "Rebuild the extension folder from the bundled template",
+      "ext_repair.title": "Repairing extension…",
+      "ext_repair.msg": "Rebuilding the extension folder from the bundled template.",
+      "toast.ext_repaired": "Extension repaired",
+      "toast.ext_repair_failed": "Repair failed",
+      "toast.ext_repair_failed_msg": "The extension folder could not be rebuilt.",
     },
 
     fa: {
@@ -1219,6 +1372,161 @@ const I18N = {
       // Misc
       "app.settings_unavailable": "تنظیمات در حال حاضر در دسترس نیست.",
       "app.loading": "در حال بارگذاری…",
+
+      // Queue ordering / priority
+      "sort.queue": "ترتیب صف",
+      "act.priority": "اولویت",
+      "dlg.priority": "اولویت دانلود",
+      "dlg.priority_hint": "وقتی یک جایگاه صف آزاد شود، دانلودهای با اولویت بالاتر زودتر شروع می‌شوند.",
+      "dlg.priority_exact": "سطح دقیق",
+      "dlg.pri_high": "بالا",
+      "dlg.pri_normal": "معمولی",
+      "dlg.pri_low": "پایین",
+      "toast.priority_set": "اولویت به‌روزرسانی شد",
+      "toast.priority_set_many": "اولویت {n} دانلود به‌روزرسانی شد",
+      "toast.priority_failed": "تنظیم اولویت ممکن نشد",
+      "toast.queue_order_on": "نمایش ترتیب صف",
+      "toast.queue_order_on_msg": "انتقال به بالا/پایین ترتیب شروع دانلودها را تغییر می‌دهد.",
+
+      // Categories
+      "cat.all": "همهٔ دسته‌ها",
+      "cat.show_all": "نمایش همهٔ دسته‌ها",
+      "empty.nothing_in_category": "هنوز دانلودی در این دسته نیست.",
+
+      // Extension repair
+      "browser.repair_extension": "تعمیر افزونه",
+      "browser.repair_tip": "ساخت مجدد پوشهٔ افزونه از قالب همراه برنامه",
+      "ext_repair.title": "در حال تعمیر افزونه…",
+      "ext_repair.msg": "پوشهٔ افزونه از قالب همراه برنامه بازسازی می‌شود.",
+      "toast.ext_repaired": "افزونه تعمیر شد",
+      "toast.ext_repair_failed": "تعمیر ناموفق بود",
+      "toast.ext_repair_failed_msg": "پوشهٔ افزونه بازسازی نشد.",
+
+      // Command bar
+      "cmd.paste_url": "چسباندن نشانی",
+      "cmd.paste_tip": "چسباندن پیوند از کلیپ‌بورد (Ctrl+V)",
+      "cmd.add_batch": "افزودن گروهی",
+      "cmd.batch_tip": "افزودن چند دانلود به‌صورت یک‌جا",
+
+      // Queue strip
+      "queue.active": "فعال",
+      "queue.waiting": "در انتظار",
+      "queue.bandwidth": "پهنای باند",
+      "queue.speed_limit": "محدودیت کلی",
+      "queue.change_limit": "تغییر سقف کلی پهنای باند",
+      "queue.scheduler": "زمان‌بند",
+      "queue.scheduler_tip": "باز کردن تنظیمات زمان‌بند",
+      "queue.off": "خاموش",
+      "queue.retry_failed": "تلاش مجدد ناموفق‌ها",
+
+      // Selection action bar
+      "sel.selected": "انتخاب‌شده",
+      "sel.selected_plural": "انتخاب‌شده",
+      "sel.clear": "پاک کردن انتخاب",
+      "sel.more_hint": "برای گزینه‌های بیشتر راست‌کلیک کنید",
+
+      // Table columns
+      "col.connections": "اتصال",
+
+      // Actions
+      "act.rename": "تغییر نام",
+      "act.speed_limit": "محدودیت سرعت",
+      "act.properties": "ویژگی‌ها",
+      "act.remove_many": "حذف",
+
+      // Dialogs
+      "dlg.new_name": "نام جدید",
+      "dlg.rename_hint": "پسوند حفظ می‌شود تا فایل همچنان درست باز شود.",
+      "dlg.rename_btn": "تغییر نام",
+      "dlg.speed_limit": "محدودیت سرعت",
+      "dlg.speed_limit_hint": "صفر یعنی نامحدود. روی محدودیت کلی اعمال می‌شود.",
+      "dlg.unlimited": "نامحدود",
+      "confirm.apply": "اعمال",
+
+      // Toasts
+      "toast.rename_blocked": "در حال دانلود نمی‌توان تغییر نام داد",
+      "toast.rename_blocked_msg": "ابتدا دانلود را متوقف یا لغو کنید.",
+      "toast.renamed": "نام تغییر کرد",
+      "toast.rename_failed": "تغییر نام ناموفق بود",
+      "toast.rename_exists": "فایلی با این نام از قبل وجود دارد.",
+      "toast.rename_invalid": "این نام معتبر نیست.",
+      "toast.no_link": "پیوندی در کلیپ‌بورد نیست",
+      "toast.no_link_msg": "ابتدا یک پیوند دانلود کپی کنید یا نشانی را دستی وارد کنید.",
+      "toast.retrying_failed": "تلاش مجدد برای دانلودهای ناموفق",
+      "toast.n_requeued": "{n} مورد به صف بازگشت",
+      "toast.link_captured_msg": "از افزونهٔ مرورگر دریافت شد",
+
+      // Clipboard detection
+      "clip.detected": "دانلود شناسایی شد",
+      "clip.download_now": "دانلود",
+
+      // Empty state
+      "empty.install_extension": "نصب افزونهٔ مرورگر",
+      "empty.import": "درون‌ریزی دانلودها",
+
+      // Browser integration status pill
+      "browser.ext_on": "افزونه متصل است",
+      "browser.ext_on_sub": "برای ارسال به N13 روی هر پیوندی راست‌کلیک کنید",
+      "browser.ext_off": "افزونه متصل نیست",
+      "browser.ext_off_sub": "برای راه‌اندازی کلیک کنید",
+      "browser.ext_waiting": "در انتظار افزونه",
+      "browser.ext_waiting_sub": "سرور در حال اجراست — افزونه را نصب کنید",
+      "browser.manage": "مدیریت",
+      "browser.setup": "راه‌اندازی",
+      "browser.setup_started": "راه‌اندازی مرورگر",
+      "browser.setup_started_msg": "برای پایان، در صفحهٔ مرورگر روی «نصب افزونه» بزنید.",
+
+      // Properties dialog
+      "props.selection": "انتخاب",
+      "props.count": "دانلودها",
+      "props.total_size": "حجم کل",
+      "props.downloaded": "دانلودشده",
+      "props.by_status": "بر اساس وضعیت",
+      "props.file": "فایل",
+      "props.name": "نام",
+      "props.category": "دسته",
+      "props.path": "مسیر",
+      "props.url": "نشانی منبع",
+      "props.checksum": "چک‌سام",
+      "props.transfer": "انتقال",
+      "props.status": "وضعیت",
+      "props.size": "حجم",
+      "props.avg_speed": "سرعت میانگین",
+      "props.priority": "اولویت",
+      "props.retries": "تلاش‌های مجدد",
+      "props.server": "سرور",
+      "props.server_name": "سرور",
+      "props.content_type": "نوع محتوا",
+      "props.resumable": "قابل ادامه",
+      "props.yes": "بله",
+      "props.no": "خیر",
+      "props.error": "آخرین خطا",
+      "props.copy_path": "کپی مسیر",
+
+      // Settings sections
+      "settings.sections": "بخش‌های تنظیمات",
+      "settings.downloads": "رفتار دانلود",
+      "settings.notifications": "اعلان‌ها",
+      "settings.developer": "توسعه‌دهنده",
+      "settings.group.general": "عمومی",
+      "settings.group.downloads": "دانلودها",
+      "settings.group.connection": "اتصال",
+      "settings.group.speed": "سرعت",
+      "settings.group.browser": "یکپارچگی با مرورگر",
+      "settings.group.notifications": "اعلان‌ها",
+      "settings.group.advanced": "پیشرفته",
+      "settings.group.developer": "توسعه‌دهنده",
+
+      // Developer panel
+      "dev.version": "نسخهٔ برنامه",
+      "dev.platform": "سکو",
+      "dev.ui_language": "زبان رابط",
+      "dev.active_tasks": "وظایف در فهرست",
+      "dev.open_logs": "باز کردن گزارش‌ها",
+      "dev.copy_diag": "کپی عیب‌یابی",
+      "dev.copy_settings": "کپی JSON تنظیمات",
+      "dev.copied_diag": "عیب‌یابی در کلیپ‌بورد کپی شد",
+      "dev.copied_settings": "JSON تنظیمات در کلیپ‌بورد کپی شد",
     },
   },
 
