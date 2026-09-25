@@ -2267,6 +2267,23 @@ body.resizing * { cursor: inherit; }
 }
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 
+/* ── Bidi isolation for data values ────────────────────────────────────────
+   These cells hold measurements ("3.2 GB / 7.6 GB", "5.9 MB/s", "43%", "16"),
+   not prose.  Under `dir="rtl"` the bidi algorithm lays the runs out
+   right-to-left and scrambles them — "3.2 GB / 7.6 GB" becomes
+   "7.6 GB / 3.2 GB".  `plaintext` resolves each element's direction from its
+   own first strong character, so measurements stay LTR while genuinely
+   translated values ("نامحدود") still read RTL. */
+.dl-cell,
+.dl-time,
+.dl-pct,
+.dl-conn,
+.prop-val,
+.cat-n,
+.qs-val {
+  unicode-bidi: plaintext;
+}
+
 /* Multi-field dialog body: sibling .field blocks have no margin of their own,
    so give the stack an explicit rhythm. */
 .pri-body { display: flex; flex-direction: column; gap: 14px; }

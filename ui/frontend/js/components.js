@@ -389,12 +389,12 @@ const Components = {
         ${this._propRow(L("props.name", "Name"), Utils.escapeHtml(name), true)}
         ${this._propRow(L("props.category", "Category"), Utils.escapeHtml(t.category || "General"))}
         ${this._propRow(L("props.path", "Location"), Utils.escapeHtml(path), true, "mono")}
-        ${this._propRow(L("props.url", "Source URL"), `<span class="mono">${Utils.escapeHtml(t.url || "")}</span>`)}
+        ${this._propRow(L("props.url", "Source URL"), `<span class="mono">${Utils.escapeHtml(t.url || "")}</span>`, true)}
         ${this._propRow(L("props.checksum", "Checksum"), t.checksum ? Utils.escapeHtml(t.checksum) : "—")}
       </div>
       <div class="prop-sec">${L("props.transfer", "Transfer")}</div>
       <div class="prop-list">
-        ${this._propRow(L("props.status", "Status"), this._badge(t))}
+        ${this._propRow(L("props.status", "Status"), this._badge(t), true)}
         ${this._propRow(L("props.size", "Size"), `${Utils.formatSize(t.completed || 0)} / ${t.total > 0 ? Utils.formatSize(t.total) : "—"}`)}
         ${this._propRow(L("col.speed", "Speed"), t.state === "Downloading" ? Utils.formatSpeed(t.speed_bps) : "—")}
         ${this._propRow(L("props.avg_speed", "Average speed"), t.average_speed > 0 ? Utils.formatSpeed(t.average_speed) : "—")}
