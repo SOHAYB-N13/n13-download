@@ -387,10 +387,10 @@ const Components = {
       <div class="prop-sec">${L("props.file", "File")}</div>
       <div class="prop-list">
         ${this._propRow(L("props.name", "Name"), Utils.escapeHtml(name), true)}
-        ${this._propRow(L("props.category", "Category"), Utils.escapeHtml(t.category || "General"))}
+        ${this._propRow(L("props.category", "Category"), Utils.escapeHtml(t.category || "General"), true)}
         ${this._propRow(L("props.path", "Location"), Utils.escapeHtml(path), true, "mono")}
         ${this._propRow(L("props.url", "Source URL"), `<span class="mono">${Utils.escapeHtml(t.url || "")}</span>`, true)}
-        ${this._propRow(L("props.checksum", "Checksum"), t.checksum ? Utils.escapeHtml(t.checksum) : "—")}
+        ${this._propRow(L("props.checksum", "Checksum"), t.checksum ? Utils.escapeHtml(t.checksum) : "—", true)}
       </div>
       <div class="prop-sec">${L("props.transfer", "Transfer")}</div>
       <div class="prop-list">
