@@ -37,6 +37,7 @@ const App = {
   pages: {
     dashboard: { title: "Dashboard", sub: "Overview of your download activity" },
     downloads: { title: "Downloads", sub: "Manage and monitor your files" },
+    queue:     { title: "Queue", sub: "What is running and what starts next" },
     history:   { title: "History", sub: "Previously completed downloads" },
     batch:     { title: "Batch", sub: "Queue many downloads at once" },
     browser:   { title: "Browser", sub: "Capture downloads from your browser" },
@@ -244,6 +245,8 @@ const App = {
     if (page === "logs") this._renderLogs();
     if (page === "dashboard") this._renderDashboardLists();
     if (page === "downloads") this._renderDownloads(true);
+    // The Queue page owns its own rendering (js/queue.js).
+    if (page === "queue" && typeof Queue !== "undefined") Queue.render();
   },
 
   _moveNavIndicator() {

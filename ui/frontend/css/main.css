@@ -2600,3 +2600,323 @@ body.resizing * { cursor: inherit; }
 .an-row .an-lbl { width: 84px; flex: none; }
 .an-pills { display: flex; flex-wrap: wrap; gap: 4px; }
 .an-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-active); border: 1px solid var(--border); color: var(--text-2); }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Queue page (js/queue.js)
+   ══════════════════════════════════════════════════════════════════════════
+   Self-contained styling for the queue dashboard, its two lists, the drag &
+   drop affordances and the tabbed details panel.  Everything is built from the
+   existing tokens so both themes and RTL keep working without overrides. */
+
+.queue-view { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Overview cards ─────────────────────────────────────────────────────── */
+
+.qk-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.qk-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 13px 15px;
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.qk-card.tint-green::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--success);
+}
+.qk-val { font-size: 22px; font-weight: 640; letter-spacing: -0.4px; color: var(--text-1); }
+.qk-lbl { font-size: 12.5px; font-weight: 560; color: var(--text-2); }
+.qk-sub { font-size: 11.5px; color: var(--text-3); }
+
+/* ── Two-column body ────────────────────────────────────────────────────── */
+
+.qk-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .qk-body { grid-template-columns: minmax(0, 1fr); }
+}
+.qk-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+.qk-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.qk-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.qk-panel-head h2 { font-size: 13.5px; font-weight: 620; color: var(--text-1); }
+.qk-count {
+  font-size: 11.5px;
+  font-weight: 620;
+  color: var(--text-2);
+  background: var(--bg-active);
+  border-radius: var(--r-pill);
+  padding: 1px 8px;
+  min-width: 22px;
+  text-align: center;
+}
+.qk-panel-head .btn { margin-inline-start: auto; }
+.qk-panel-head .btn + .btn { margin-inline-start: 6px; }
+
+.qk-note, .qk-hint {
+  margin: 0;
+  padding: 9px 14px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: var(--bg-input);
+}
+.qk-note { border-bottom: 1px solid var(--border); color: var(--warning); }
+.qk-hint { border-top: 1px solid var(--border); color: var(--text-3); }
+
+.qk-list { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
+.qk-waiting { max-height: 46vh; overflow-y: auto; }
+
+/* ── Rows ───────────────────────────────────────────────────────────────── */
+
+.qk-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.qk-row:hover { background: var(--bg-hover); }
+.qk-row:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.qk-row.sel { background: var(--accent-soft); border-color: var(--accent-ring); }
+.qk-row.focus { border-color: var(--border-strong); }
+.qk-row.dragging { opacity: 0.45; }
+/* Drop indicators use box-shadow so the list never reflows mid-drag. */
+.qk-row.drop-before { box-shadow: inset 0 2px 0 0 var(--accent); }
+.qk-row.drop-after { box-shadow: inset 0 -2px 0 0 var(--accent); }
+
+.qk-row-active {
+  grid-template-columns: minmax(0, 1fr) 120px 46px 84px 62px;
+}
+.qk-row-wait {
+  grid-template-columns: 18px 24px minmax(0, 1fr) 78px 88px 58px;
+}
+/* Without a drag handle the position badge takes the first column. */
+.qk-row-wait:not([draggable="true"]) { grid-template-columns: 24px minmax(0, 1fr) 78px 88px 58px; }
+.qk-row-wait:not([draggable="true"]) .qk-grip { display: none; }
+
+.qk-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qk-name {
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qk-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qk-eff { color: var(--info); }
+
+.qk-num { font-size: 12px; color: var(--text-2); text-align: end; }
+.qk-dim { color: var(--text-3); }
+.qk-starts { color: var(--text-2); font-weight: 540; }
+
+.qk-pos {
+  font-size: 11.5px;
+  font-weight: 640;
+  color: var(--text-3);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Drag handle: a six-dot grip, drawn in CSS so it inherits currentColor. */
+.qk-grip {
+  width: 10px;
+  height: 16px;
+  cursor: grab;
+  opacity: 0.4;
+  background-image: radial-gradient(currentColor 1px, transparent 1.2px);
+  background-size: 5px 5px;
+  background-position: 0 1px;
+  color: var(--text-2);
+}
+.qk-grip:hover { opacity: 0.9; }
+.qk-row:active .qk-grip { cursor: grabbing; }
+
+.qk-bar {
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.qk-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width var(--dur-2) var(--ease-out);
+}
+
+.qk-row-acts { display: flex; gap: 2px; justify-content: flex-end; }
+.qk-mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.qk-mini:hover { background: var(--bg-active); color: var(--text-1); border-color: var(--border); }
+.qk-mini .ico { width: 14px; height: 14px; }
+
+.qk-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 22px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.qk-empty strong { color: var(--text-2); font-size: 13px; font-weight: 580; }
+
+/* ── Order-view toggle ──────────────────────────────────────────────────── */
+
+.qk-seg-group {
+  display: inline-flex;
+  margin-inline-start: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 2px;
+}
+.qk-seg {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 560;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+.qk-seg:hover { color: var(--text-1); }
+.qk-seg.on { background: var(--accent-soft); color: var(--accent); }
+
+/* ── Details panel ──────────────────────────────────────────────────────── */
+
+.qk-details {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.qk-details-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.qk-details-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qk-tabs { display: flex; gap: 2px; padding: 6px 8px 0; }
+.qk-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 560;
+  padding: 6px 10px;
+  border-radius: var(--r-xs) var(--r-xs) 0 0;
+  cursor: pointer;
+}
+.qk-tab:hover { color: var(--text-1); background: var(--bg-hover); }
+.qk-tab.on { color: var(--accent); box-shadow: inset 0 -2px 0 0 var(--accent); }
+.qk-details-body { padding: 12px; }
+
+.qk-kvs { display: flex; flex-direction: column; gap: 7px; margin: 0; }
+.qk-kv { display: flex; align-items: baseline; gap: 10px; }
+.qk-kv dt { flex: none; width: 108px; font-size: 11.5px; color: var(--text-3); }
+.qk-kv dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-1);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+/* ── Suggestions ────────────────────────────────────────────────────────── */
+
+.qk-reco-list { display: flex; flex-direction: column; }
+.qk-reco-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--border);
+}
+.qk-reco-item:first-child { border-top: 0; }
+.qk-reco-item p { flex: 1; margin: 0; font-size: 12.5px; color: var(--text-2); }
+.qk-reco-item .btn { flex: none; }
+
+/* ── Bidi: the queue prints measurements, not prose ─────────────────────── */
+
+.qk-val,
+.qk-sub,
+.qk-num,
+.qk-pos,
+.qk-starts,
+.qk-kv dd,
+.qk-meta {
+  unicode-bidi: plaintext;
+}
+/* Timestamps, sizes and the "1 of 4 slots" counter are LTR data. */
+.qk-num, .qk-pos, .qk-val { direction: ltr; }
+[dir="rtl"] .qk-kv dd { text-align: left; }
+[dir="rtl"] .qk-num { text-align: start; }

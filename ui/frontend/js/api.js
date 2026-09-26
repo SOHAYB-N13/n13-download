@@ -61,6 +61,13 @@ const API = {
   async openPath(path) { return this._call("open_path", path); },
   async deleteFile(taskId) { return this._call("delete_file", taskId); },
   async moveTask(id, delta) { return this._call("move_task", id, delta); },
+  async reorderTasks(ids, position) {
+    return this._call("reorder_tasks", ids || [], position === undefined ? null : position);
+  },
+  async moveTaskTo(id, position) { return this._call("move_task_to", id, position); },
+  async moveToTop(id) { return this._call("move_to_top", id); },
+  async moveToBottom(id) { return this._call("move_to_bottom", id); },
+  async queuePlan() { return this._call("queue_plan"); },
   async setPriority(id, priority) { return this._call("set_priority", id, priority); },
   async renameDownload(id, newName) { return this._call("rename_download", id, String(newName)); },
   async setTaskSpeedLimit(id, bps) { return this._call("set_task_speed_limit", id, Math.max(0, Math.round(bps || 0))); },

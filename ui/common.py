@@ -846,8 +846,11 @@ class TaskManager:
     ) -> None:
         """Move *task_ids* as one contiguous block, keeping the given order.
 
-        * With ``position=None`` the block lands where its first listed task
-          currently sits — which is what dragging a selection should do.
+        * With ``position=None`` the block collapses onto the slot of its
+          *topmost* member, keeping the order the caller listed.  This is the
+          "gather these together without moving them anywhere" case, and it
+          guarantees the block never jumps down past tasks the caller did not
+          select.
         * With ``position=N`` the block's first task ends up at index N of the
           resulting queue (0 = next up), which is the ``newIndex`` a drag &
           drop handler naturally reports.

@@ -44,6 +44,11 @@ try {
         <span class="nav-label" data-i18n="nav.downloads">Downloads</span>
         <span class="nav-badge" id="navBadge" hidden>0</span>
       </button>
+      <button class="nav-item" data-page="queue" data-i18n-tip="nav.queue">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9"/><path d="M4 12h9"/><path d="M4 18h9"/><path d="M17.5 8v7"/><path d="m14.5 12 3 3 3-3"/></svg>
+        <span class="nav-label" data-i18n="nav.queue">Queue</span>
+        <span class="nav-badge" id="queueBadge" hidden>0</span>
+      </button>
       <button class="nav-item" data-page="history" data-i18n-tip="nav.history">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 12a8.4 8.4 0 1 0 2.4-5.9L3.5 8.5"/><path d="M3.5 3.5v5h5"/><path d="M12 7.5V12l3.2 1.9"/></svg>
         <span class="nav-label" data-i18n="nav.history">History</span>
@@ -339,6 +344,13 @@ try {
         <div id="downloadsEmpty" hidden></div>
       </section>
 
+      <!-- ── Queue ─────────────────────────────────────────────────── -->
+      <!-- Rendered entirely by js/queue.js so the queue experience stays a
+           self-contained module rather than growing this file. -->
+      <section class="page" id="page-queue" aria-label="Queue">
+        <div class="queue-view" id="queueView"></div>
+      </section>
+
       <!-- ── History ───────────────────────────────────────────────── -->
       <section class="page" id="page-history" aria-label="History">
         <div class="analytics" id="historyStats" hidden></div>
@@ -564,5 +576,6 @@ try {
 <script src="js/api.js"></script>
 <script src="js/components.js"></script>
 <script src="js/app.js"></script>
+<script src="js/queue.js"></script>
 </body>
 </html>
