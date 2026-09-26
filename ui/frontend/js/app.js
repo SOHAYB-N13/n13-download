@@ -2448,6 +2448,7 @@ const App = {
           { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
           { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
           { key: "schedule_stop_time", label: "Stop at", hint: "Queue pauses from this time (HH:MM)", type: "time" },
+          { key: "schedule_days", label: "Active days", hint: "Days the window above applies to. None selected means every day.", type: "days", wide: true },
           { key: "_night_cap_enabled", label: "Night speed limit", hint: "Slow downloads during the night window", type: "toggle", of: "night_speed_limit_bps" },
           { key: "night_speed_limit_bps", label: "Night limit", hint: "Applied between night start and night end", type: "speed" },
           { key: "night_start_time", label: "Night starts at", hint: "e.g. 23:00", type: "time" },
@@ -2671,9 +2672,12 @@ const App = {
     const tkey = f.key.replace(/^_/, "");
     const label = I18N.t("set." + tkey, f.label);
     const hint = I18N.t("set." + tkey + ".hint", f.hint);
+    // Chip-style controls have no single focusable input, so a `for=` would
+    // point at an id that never exists.
+    const noFor = f.key.startsWith("_") || f.type === "days";
     const head = `
       <div class="field-info">
-        <label class="field-label" ${f.key.startsWith("_") ? "" : `for="set-${f.key}"`}>${label}</label>
+        <label class="field-label" ${noFor ? "" : `for="set-${f.key}"`}>${label}</label>
         ${hint ? `<p class="field-hint">${hint}</p>` : ""}
       </div>`;
 
@@ -2703,6 +2707,17 @@ const App = {
       ctl = `<input class="input input-num" type="number" id="set-${f.key}" data-key="${f.key}" value="${s[f.key]}" min="${f.min}" max="${f.max}">`;
     } else if (f.type === "time") {
       ctl = `<input class="input mono" type="time" id="set-${f.key}" data-key="${f.key}" value="${Utils.escapeHtml(s[f.key] || "")}">`;
+    } else if (f.type === "days") {
+      // Multi-select weekday chips. The same control as the scheduler quick
+      // dialog; an empty selection means "every day".
+      const dayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+      const picked = Array.isArray(s[f.key]) ? s[f.key] : [];
+      ctl = `<div class="sched-days" data-days-key="${f.key}">
+        ${dayKeys.map((d) => {
+          const on = picked.includes(d);
+          return `<button type="button" class="chip${on ? " active" : ""}" data-day="${d}" aria-pressed="${on}">${I18N.t("day." + d, d)}</button>`;
+        }).join("")}
+      </div>`;
     } else if (f.type === "select") {
       ctl = `<select class="input" id="set-${f.key}" data-key="${f.key}">
         ${(f.options || []).map((o) => {
@@ -2828,6 +2843,9 @@ const App = {
         const ok = await API.updateSettings(batch);
         if (ok) {
           Object.assign(this.state.settings, batch);
+          // Scheduler settings are surfaced in the Queue strip, which lives on
+          // another page; refresh it now instead of waiting for the idle poll.
+          if (ids.some((k) => k === "scheduler_enabled" || k.startsWith("schedule_"))) this._renderQueueStrip();
           ids.forEach((k) => markSaved(secId || (container.querySelector(`[data-key="${k}"]`) || {}).closest?.(".set-card")?.id?.replace("set-", "") || "general"));
         } else {
           Components.toast(I18N.t("toast.not_saved", "Not saved"), I18N.t("toast.not_saved_msg", "A setting could not be applied"), "error");
@@ -2936,6 +2954,21 @@ const App = {
     Utils.$qa('input[type="time"][data-key]', container).forEach((inp) => {
       inp.addEventListener("change", () => {
         scheduleSave({ [inp.dataset.key]: inp.value || null }, secOf(inp));
+      });
+    });
+
+    // Weekday chips (schedule_days). Multi-select; empty means every day.
+    Utils.$qa("[data-days-key]", container).forEach((box) => {
+      const key = box.dataset.daysKey;
+      const chips = Utils.$qa(".chip", box);
+      chips.forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const on = chip.classList.toggle("active");
+          chip.setAttribute("aria-pressed", String(on));
+          scheduleSave({
+            [key]: chips.filter((c) => c.classList.contains("active")).map((c) => c.dataset.day),
+          }, secOf(box));
+        });
       });
     });
 

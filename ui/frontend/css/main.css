@@ -2304,7 +2304,9 @@ body.resizing * { cursor: inherit; }
 .pri-body { display: flex; flex-direction: column; gap: 14px; }
 
 /* Quick scheduler editor, opened from the queue strip. Mirrors the speed-limit
-   dialog's shell so the two strip controls look and behave identically. */
+   dialog's shell so the two strip controls look and behave identically.
+   `.sched-days` is shared with Settings → Scheduler, which reuses the same
+   weekday chips for `schedule_days`. */
 .sched-body { display: flex; flex-direction: column; gap: 16px; }
 .sched-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .sched-row .field-info { min-width: 0; }
