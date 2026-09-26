@@ -1,4 +1,19 @@
-"""Cross-platform browser protocol handler registration."""
+"""Cross-platform browser protocol handler registration.
+
+``dldm://`` is an *application* protocol: the operating system must launch the
+N13 executable and hand it the raw URL as an ordinary command-line argument::
+
+    dldm://<url>  ->  Windows protocol handler  ->  "<install dir>\\N13.exe" "%1"
+                                                          |
+                                            N13.exe parses dldm:// itself
+                                                          |
+                                                  N13 Download Manager
+
+The install directory is resolved at registration time on the machine that is
+registering — never hardcoded.  ``browser/dldm_handler.py`` is an internal
+helper module (reused by ``browser/native_host.py``) and must never be
+registered as an external protocol launcher.
+"""
 
 from __future__ import annotations
 
@@ -34,12 +49,17 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _handler_script_path() -> Path:
-    return _project_root() / "browser" / "dldm_handler.py"
+def _dev_entry_script() -> Path:
+    """Entry script used when running from a source checkout.
 
-
-def _main_script_path() -> Path:
-    return _project_root() / "d.py"
+    ``build/n13_entry.py`` is preferred: it is the very same entry point the
+    frozen application uses, so a source checkout registers the identical
+    command *shape* (``"<launcher>" "<entry>" "%1"``) instead of a private
+    handler script.  ``d.py`` is only a fallback for very old checkouts.
+    """
+    root = _project_root()
+    entry = root / "build" / "n13_entry.py"
+    return entry if entry.is_file() else root / "d.py"
 
 
 def create_chrome_extension(dst: Optional[Path] = None) -> Path:
@@ -98,6 +118,19 @@ NATIVE_HOST_NAME = "com.n13.download_manager"
 
 
 def _native_host_dir() -> Path:
+    """Writable directory for the native-host manifest + launcher.
+
+    Installed builds must never write inside the installation directory (it can
+    be read-only, e.g. ``C:\\Program Files``), so the per-user data directory is
+    used there.  Source checkouts keep the historical ``build/native_host``.
+    """
+    if is_frozen():
+        try:
+            from core.paths import user_data_dir
+
+            return user_data_dir() / "native_host"
+        except Exception:
+            pass
     return _project_root() / "build" / "native_host"
 
 
@@ -182,8 +215,16 @@ def register_native_host() -> bool:
     Writes the host manifest + launcher .bat under ``build/native_host`` and
     points Chrome (and Edge) at it via the registry.  This lets the extension
     start the N13 GUI silently — no "Open N13 Download Manager?" dialog.
+
+    The launcher is built the same way as the ``dldm://`` command: from the
+    *running* application (``N13.exe --native-host`` when installed, the
+    Python interpreter + host script in a source checkout).  A packaged build
+    must never spawn ``python.exe`` or a bundled ``.py`` path.
+
     Idempotent: safe to call on every app startup.
     """
+    if os_integration_disabled():
+        return False
     host_dir = _native_host_dir()
     host_script = _project_root() / "browser" / "native_host.py"
     if not host_script.is_file():
@@ -193,15 +234,22 @@ def register_native_host() -> bool:
     try:
         host_dir.mkdir(parents=True, exist_ok=True)
 
-        # Prefer pythonw (no console flash when Chrome spawns the host).
-        python_exe = Path(sys.executable)
-        pythonw = python_exe.with_name("pythonw.exe")
-        runner = pythonw if pythonw.is_file() else python_exe
+        if is_frozen():
+            # Installed build: Chrome runs the application itself in native-host
+            # mode.  The path is this installation's real location.
+            launcher = f'"{installed_exe()}" --native-host'
+        else:
+            # Source checkout: prefer pythonw (no console flash when Chrome
+            # spawns the host).
+            python_exe = Path(sys.executable)
+            pythonw = python_exe.with_name("pythonw.exe")
+            runner = pythonw if pythonw.is_file() else python_exe
+            launcher = f'"{runner}" "{host_script}"'
 
         bat_path = host_dir / "n13_native_host.bat"
         bat_path.write_text(
             "@echo off\n"
-            f'"{runner}" "{host_script}"\n',
+            f"{launcher}\n",
             encoding="utf-8",
         )
 
@@ -246,9 +294,160 @@ def register_native_host() -> bool:
         return False
 
 
-def register_protocol() -> bool:
+# --------------------------------------------------------------------------- #
+# dldm:// protocol registration                                                #
+# --------------------------------------------------------------------------- #
+
+PROTOCOL_SCHEME = "dldm"
+PROTOCOL_KEY = r"Software\Classes\dldm"
+PROTOCOL_COMMAND_KEY = PROTOCOL_KEY + r"\shell\open\command"
+PROTOCOL_ICON_KEY = PROTOCOL_KEY + r"\DefaultIcon"
+PROTOCOL_DESCRIPTION = "URL:N13 Download Manager Protocol"
+PRODUCTION_EXE_NAME = "N13.exe"
+
+# Tokens that must NEVER appear in a *production* (installed) protocol command.
+# Any of them means an interpreter/console/development launcher would be
+# started instead of the GUI application.
+FORBIDDEN_IN_PRODUCTION_COMMAND = (
+    "dldm_handler",
+    "python.exe",
+    "pythonw.exe",
+    "py.exe",
+    "pyw.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "\\d.py",
+    "/d.py",
+    "n13_entry.py",
+)
+
+
+def is_frozen() -> bool:
+    """True when running from a packaged build (PyInstaller one-dir/one-file)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+#: Set ``N13_SKIP_OS_INTEGRATION=1`` to stop the process from writing any OS
+#: integration (``dldm://`` protocol handler, Chrome/Edge native-messaging
+#: keys).  Used by the test suite, headless/CI runs and managed deployments
+#: that do not want the application to touch the registry.
+OS_INTEGRATION_ENV = "N13_SKIP_OS_INTEGRATION"
+
+
+def os_integration_disabled() -> bool:
+    """True when this process must not modify the operating system."""
+    value = os.environ.get(OS_INTEGRATION_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def installed_exe() -> Path:
+    """Absolute path of the executable that should own ``dldm://``.
+
+    In a packaged build ``sys.executable`` *is* ``N13.exe``, located in
+    whatever directory this user installed to (``C:\\Program Files\\...``,
+    ``D:\\Apps\\N13``, a portable folder, a per-user install, ...).  Nothing
+    about the path is hardcoded anywhere.
+    """
+    exe = Path(sys.executable)
+    if exe.name.lower() != PRODUCTION_EXE_NAME.lower():
+        # Defensive: a renamed/relocated launcher still resolves to the
+        # application executable sitting next to it.
+        sibling = exe.with_name(PRODUCTION_EXE_NAME)
+        if sibling.is_file():
+            return sibling
+    return exe
+
+
+def protocol_launcher() -> tuple[str, Optional[str]]:
+    """``(launcher, entry_script)`` used for the OS command.
+
+    * installed build → ``("<install dir>\\N13.exe", None)``
+    * source checkout → ``(python.exe, build/n13_entry.py)``
+    """
+    if is_frozen():
+        return str(installed_exe()), None
+    return sys.executable, str(_dev_entry_script())
+
+
+def protocol_launch_command() -> str:
+    """The exact command the OS must run for ``dldm://...``.
+
+    Production form, with the path resolved per installation::
+
+        "<install dir>\\N13.exe" "%1"
+
+    The raw URL is passed to N13.exe as a normal command-line argument and is
+    parsed by the application itself (``build/n13_entry.py``) — no Python
+    handler script, no interpreter, no console window.
+    """
+    launcher, entry = protocol_launcher()
+    if entry:
+        return f'"{launcher}" "{entry}" "%1"'
+    return f'"{launcher}" "%1"'
+
+
+def protocol_icon_command() -> str:
+    """``DefaultIcon`` value — the real application icon, never an interpreter."""
+    launcher, _entry = protocol_launcher()
+    return f'"{launcher}",0'
+
+
+def _normalise_command(command: str) -> str:
+    """Case/separator-insensitive form of a registry command line."""
+    return " ".join((command or "").strip().lower().replace("/", "\\").split())
+
+
+def _command_matches(current: str, expected: str) -> bool:
+    return _normalise_command(current) == _normalise_command(expected)
+
+
+def _is_production_safe_command(command: str) -> bool:
+    """True when *command* launches the installed application (not an interpreter)."""
+    lowered = (command or "").lower()
+    if not lowered.strip():
+        return False
+    if any(token in lowered for token in FORBIDDEN_IN_PRODUCTION_COMMAND):
+        return False
+    return PRODUCTION_EXE_NAME.lower() in lowered
+
+
+def read_protocol_command() -> Optional[str]:
+    """Current per-user ``dldm://`` command line, or ``None`` if unregistered."""
+    if not WINDOWS:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PROTOCOL_COMMAND_KEY) as key:
+            value, _type = winreg.QueryValueEx(key, "")
+            return str(value)
+    except OSError:
+        return None
+
+
+def protocol_registration_status() -> dict:
+    """Diagnostics for the current ``dldm://`` registration (per-user)."""
+    expected = protocol_launch_command()
+    current = read_protocol_command()
+    return {
+        "scheme": PROTOCOL_SCHEME,
+        "registered": current is not None,
+        "current": current or "",
+        "expected": expected,
+        "current_ok": bool(current) and _command_matches(current, expected),
+        "legacy": bool(current)
+        and is_frozen()
+        and not _is_production_safe_command(current or ""),
+    }
+
+
+def register_protocol(force: bool = False) -> bool:
+    """Register ``dldm://`` for the current user.
+
+    With ``force=False`` (default) an already-correct registration is left
+    completely untouched — no registry write at all.
+    """
     if WINDOWS:
-        return _register_protocol_windows()
+        return ensure_protocol_registration(force=force)
     if sys.platform == "darwin":
         return _register_protocol_macos()
     if sys.platform.startswith("linux"):
@@ -257,22 +456,48 @@ def register_protocol() -> bool:
     return False
 
 
-def _register_protocol_windows() -> bool:
-    script_path = _main_script_path()
-    handler_path = _handler_script_path()
-    python_exe = sys.executable
+def ensure_protocol_registration(force: bool = False) -> bool:
+    """Idempotently (re)assert the correct per-user ``dldm://`` registration.
 
+    Called on every application start, so it also *repairs* installations that
+    an older build left broken (for example ``N13.exe <...>\\dldm_handler.py
+    "%1"`` or a command pointing at a previous install directory):
+
+    * missing            → register
+    * stale / legacy     → rewrite with this installation's real path
+    * already correct    → no write
+
+    Only ``HKCU\\Software\\Classes\\dldm`` is ever touched, so other
+    applications' protocol registrations are never affected.
+    """
+    if not WINDOWS:
+        return False
+    if os_integration_disabled():
+        return False
     try:
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\dldm") as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "URL:Terminal Download Manager Protocol")
+        if not force:
+            current = read_protocol_command()
+            if current and _command_matches(current, protocol_launch_command()):
+                return True
+        return _register_protocol_windows()
+    except OSError:
+        return False
+
+
+def _register_protocol_windows() -> bool:
+    """Write the production registration for the current user (HKCU only)."""
+    command = protocol_launch_command()
+    icon = protocol_icon_command()
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PROTOCOL_KEY) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, PROTOCOL_DESCRIPTION)
             winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
 
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\dldm\DefaultIcon") as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f'"{python_exe}",0')
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PROTOCOL_ICON_KEY) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, icon)
 
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\dldm\shell\open\command") as key:
-            cmd = f'"{python_exe}" "{handler_path}" "%1"'
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, PROTOCOL_COMMAND_KEY) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
 
         return True
     except OSError as exc:
@@ -281,12 +506,13 @@ def _register_protocol_windows() -> bool:
 
 
 def _register_protocol_linux() -> bool:
-    handler = _handler_script_path()
+    launcher, entry = protocol_launcher()
+    exec_line = f'"{launcher}" "{entry}" %u' if entry else f'"{launcher}" %u'
     desktop = Path.home() / ".local" / "share" / "applications" / "dldm-handler.desktop"
     desktop.parent.mkdir(parents=True, exist_ok=True)
     content = f"""[Desktop Entry]
-Name=Terminal Download Manager
-Exec={sys.executable} {handler} %u
+Name=N13 Download Manager
+Exec={exec_line}
 Type=Application
 Terminal=false
 MimeType=x-scheme-handler/dldm;
@@ -305,6 +531,8 @@ def unregister_protocol() -> bool:
     if not WINDOWS:
         console.print("[yellow]Manual unregister may be required on this platform.[/yellow]")
         return False
+    if os_integration_disabled():
+        return False
     try:
         def delete_key(root, path):
             try:
@@ -319,7 +547,7 @@ def unregister_protocol() -> bool:
             except FileNotFoundError:
                 pass
 
-        delete_key(winreg.HKEY_CURRENT_USER, r"Software\Classes\dldm")
+        delete_key(winreg.HKEY_CURRENT_USER, PROTOCOL_KEY)
         return True
     except OSError as exc:
         console.print(f"[red]Failed to unregister: {exc}[/red]")
@@ -330,7 +558,7 @@ def is_protocol_registered() -> bool:
     if not WINDOWS:
         return False
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\dldm\shell\open\command"):
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PROTOCOL_COMMAND_KEY):
             return True
     except FileNotFoundError:
         return False

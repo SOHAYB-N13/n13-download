@@ -4,7 +4,10 @@ from browser.live_server import run_live_server
 from browser.protocol import (
     browser_integration_setup,
     create_chrome_extension,
+    ensure_protocol_registration,
     is_protocol_registered,
+    protocol_launch_command,
+    protocol_registration_status,
     register_protocol,
     unregister_protocol,
 )
@@ -13,7 +16,10 @@ __all__ = [
     "run_live_server",
     "browser_integration_setup",
     "create_chrome_extension",
+    "ensure_protocol_registration",
     "is_protocol_registered",
+    "protocol_launch_command",
+    "protocol_registration_status",
     "register_protocol",
     "unregister_protocol",
 ]

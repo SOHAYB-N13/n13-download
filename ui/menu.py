@@ -8,7 +8,15 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import pyfiglet
+try:
+    import pyfiglet
+except Exception:  # pragma: no cover - banner decoration is optional
+    # pyfiglet reads ``os.environ["APPDATA"]`` at import time on Windows, so a
+    # launcher with a minimal environment (ShellExecute/protocol handler, Task
+    # Scheduler, service context) would otherwise abort the WHOLE application —
+    # including the GUI, which imports this module transitively — with a bare
+    # KeyError before any window appears.  ``print_banner`` degrades gracefully.
+    pyfiglet = None
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Console

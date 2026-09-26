@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Standalone protocol handler — uses unique temp files per invocation.
+"""Internal N13 launcher helper — NOT the OS protocol handler.
 
-Receives a dldm:// URL from the OS, decodes it, writes it to a temp file, and
-launches the main download script in a new console (Windows) or background
-process (POSIX).
+INTERNAL MODULE ONLY.  This file must never be registered as an external
+protocol launcher (Windows ``shell\\open\\command``, Linux ``.desktop``, ...).
+The production ``dldm://`` registration always launches the application itself::
+
+    "<install dir>\\N13.exe" "%1"
+
+and ``build/n13_entry.py`` parses the raw ``dldm://`` URL.  This module only
+remains because :mod:`browser.native_host` reuses :func:`_launch_n13` to start
+the GUI when the Chrome extension asks for it.
+
+Receives a dldm:// URL (or the ``launch`` signal), decodes it, writes it to a
+temp file, and launches the main application in GUI mode.
 
 Robustness notes:
 - The encoded URL may arrive percent-encoded one or more times by the browser
