@@ -549,6 +549,34 @@ class Api:
         """Cap one download's bandwidth (bytes/second, 0 = unlimited)."""
         self._manager.set_task_speed_limit(task_id, int(bps or 0))
 
+    # ---- queue ordering (absolute) -------------------------------------
+    # ``move_task`` above shifts by a relative delta; these place tasks at an
+    # absolute position so drag-and-drop and "move to top/bottom" stay exact.
+
+    def reorder_tasks(
+        self, task_ids: List[str], position: Optional[int] = None
+    ) -> None:
+        """Move *task_ids* as a block to *position* (or their current spot)."""
+        self._manager.reorder_tasks(list(task_ids or []), position)
+
+    def move_task_to(self, task_id: str, position: int) -> None:
+        """Place one task at a 0-based absolute *position* in the queue."""
+        self._manager.move_task_to(task_id, int(position))
+
+    def move_to_top(self, task_id: str) -> None:
+        self._manager.move_to_top(task_id)
+
+    def move_to_bottom(self, task_id: str) -> None:
+        self._manager.move_to_bottom(task_id)
+
+    def queue_plan(self) -> List[Dict[str, Any]]:
+        """Effective start order + estimated start time for waiting tasks.
+
+        Values are ``None`` where they genuinely cannot be measured; the UI
+        must render those as "unknown" rather than inventing a number.
+        """
+        return self._manager.queue_plan()
+
     def rename_download(self, task_id: str, new_name: str) -> Dict[str, Any]:
         """Rename a download's target file (and the file on disk if finished)."""
         try:

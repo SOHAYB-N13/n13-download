@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set
 from urllib.parse import unquote, urlparse
 
 from rich.console import Console
@@ -333,6 +333,47 @@ class _TaskRecord:
         return self.task.id
 
 
+def _simulate_slot_starts(
+    durations: Sequence[Optional[float]],
+    capacity: int,
+) -> List[Optional[float]]:
+    """When each job in *durations* starts, given *capacity* parallel slots.
+
+    A plain list-scheduling simulation: every job takes the slot that frees
+    earliest, so the jobs ahead of you genuinely decide when you start instead
+    of us assuming they run one after another.  ``durations`` is ordered —
+    running downloads first (their own remaining time), then queued ones.
+
+    Every slot starts free at ``t=0``: the running downloads are already the
+    first entries of ``durations``, so they occupy their slots by being
+    scheduled, and must not *also* be pre-marked busy (that would double-count
+    them and stall the whole queue).
+
+    ``None`` means "unknown duration"; the job still occupies its slot, and any
+    job that cannot be placed behind it inherits ``None`` (an honest "cannot
+    estimate") rather than a fabricated number.
+    """
+    capacity = max(1, int(capacity))
+    # Slot free-at times; all slots are free when the simulation begins.
+    slot_free: List[Optional[float]] = [0.0] * capacity
+
+    starts: List[Optional[float]] = []
+    for duration in durations:
+        # Pick the slot that frees first; None (unknown) sorts last.
+        known = [(t, i) for i, t in enumerate(slot_free) if t is not None]
+        if known:
+            start, idx = min(known)
+            if duration is None:
+                slot_free[idx] = None
+            else:
+                slot_free[idx] = start + max(0.0, float(duration))
+            starts.append(float(start))
+        else:
+            # Every slot is held by a job of unknown length.
+            starts.append(None)
+    return starts
+
+
 # ---------------------------------------------------------------------------
 # TaskManager
 # ---------------------------------------------------------------------------
@@ -506,7 +547,11 @@ class TaskManager:
         request: DownloadRequest,
         autostart: bool = True,
         allow_duplicate: bool = False,
+        _save_order: bool = True,
     ) -> str:
+        """Add one download.  ``_save_order`` is an internal bulk-add hook:
+        ``add_many`` turns it off and persists the order once at the end
+        instead of rewriting the whole queue order per item."""
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             if not allow_duplicate:
@@ -537,6 +582,10 @@ class TaskManager:
             self._tasks[task_id] = rec
             self._order.append(task_id)
             self._save_task_locked(rec)
+            # Persist the new position immediately, otherwise `queue_order`
+            # drifts from the live order until some unrelated edit saves it.
+            if _save_order:
+                self._save_order_locked()
             events.append(("added", self._snap(rec)))
 
         for ev, sn in events:
@@ -635,7 +684,16 @@ class TaskManager:
         autostart: bool = False,
         allow_duplicate: bool = False,
     ) -> List[str]:
-        return [self.add(r, autostart=autostart, allow_duplicate=allow_duplicate) for r in requests]
+        # Suppress the per-item order write: each one rewrites the entire
+        # queue_order table, so a large batch would be quadratic.  One save at
+        # the end leaves the persisted order identical.
+        ids = [
+            self.add(r, autostart=autostart, allow_duplicate=allow_duplicate, _save_order=False)
+            for r in requests
+        ]
+        with self._lock:
+            self._save_order_locked()
+        return ids
 
     def start_all(self) -> None:
         self._start_next()
@@ -774,6 +832,172 @@ class TaskManager:
                     shifted.append(self._snap(rec))
         for snap in shifted:
             self._emit("updated", snap)
+
+    # ── Absolute ordering (drag & drop, move to top/bottom) ──────────
+    #
+    # `move_task` above stays the relative ±1 primitive; everything here is
+    # built on one absolute primitive so drag & drop and the keyboard
+    # shortcuts share a single, well-tested code path.
+
+    def reorder_tasks(
+        self,
+        task_ids: Sequence[str],
+        position: Optional[int] = None,
+    ) -> None:
+        """Move *task_ids* as one contiguous block, keeping the given order.
+
+        * With ``position=None`` the block lands where its first listed task
+          currently sits — which is what dragging a selection should do.
+        * With ``position=N`` the block's first task ends up at index N of the
+          resulting queue (0 = next up), which is the ``newIndex`` a drag &
+          drop handler naturally reports.
+
+        Tasks that are unknown, or that are not in the queue order, are
+        ignored rather than raising, so a stale UI selection can never wedge
+        the queue.  Ordering never starts or stops anything: it only decides
+        who goes next once a slot frees.
+        """
+        wanted = [t for t in dict.fromkeys(task_ids or []) if t]
+        if not wanted:
+            return
+        shifted: List[TaskSnapshot] = []
+        with self._lock:
+            present = [t for t in wanted if t in self._order]
+            if not present:
+                return
+            if position is None:
+                target = min(self._order.index(t) for t in present)
+            else:
+                try:
+                    target = int(position)
+                except (TypeError, ValueError):
+                    target = 0
+                target = max(0, min(len(self._order), target))
+            moving = set(present)
+            rest = [t for t in self._order if t not in moving]
+            # `target` is the block's FINAL index, which is exactly an index
+            # into `rest` — the moving tasks are already gone from `rest`, and
+            # the block is spliced back in at that spot.  No correction is
+            # needed (and applying one would shift the block by the number of
+            # moved items that happened to sit before the target).
+            insert_at = max(0, min(len(rest), target))
+            new_order = rest[:insert_at] + present + rest[insert_at:]
+            if new_order == self._order:
+                return
+            self._order = new_order
+            self._save_order_locked()
+            shifted = [self._snap(self._tasks[t]) for t in self._order if t in self._tasks]
+        for snap in shifted:
+            self._emit("updated", snap)
+
+    def move_task_to(self, task_id: str, position: int) -> None:
+        """Move one task so it ends up at absolute queue index *position*."""
+        self.reorder_tasks([task_id], position)
+
+    def move_to_top(self, task_id: str) -> None:
+        """Move one task to the front of the queue."""
+        self.reorder_tasks([task_id], 0)
+
+    def move_to_bottom(self, task_id: str) -> None:
+        """Move one task to the end of the queue."""
+        with self._lock:
+            if task_id not in self._order:
+                return
+            end = len(self._order)
+        self.reorder_tasks([task_id], end)
+
+    def queue_plan(self) -> List[Dict[str, Any]]:
+        """Effective execution plan for the waiting queue.
+
+        Returns one entry per QUEUED task, ordered by the order it will
+        actually start in — the same ``(priority, manual position)`` rule
+        ``_start_next`` uses, which is *not* the same as raw queue position
+        once priorities differ.
+
+        ``estimated_start_seconds`` is simulated, not guessed: running
+        downloads are scheduled by their own remaining time, queued tasks by
+        remaining bytes at the throughput actually being achieved per slot.
+        When there is nothing running and no measured throughput, the estimate
+        is ``None`` rather than a fabricated number.
+        """
+        with self._lock:
+            queued: List[tuple] = []
+            for index, tid in enumerate(self._order):
+                rec = self._tasks.get(tid)
+                if rec is None or rec.task.status != TaskStatus.QUEUED:
+                    continue
+                t = rec.task
+                try:
+                    pri = int(t.priority)
+                except (TypeError, ValueError):
+                    pri = 5
+                queued.append((pri, index, rec))
+            queued.sort(key=lambda item: (item[0], item[1]))
+
+            active: List[_TaskRecord] = [
+                rec for tid in self._order
+                if (rec := self._tasks.get(tid)) is not None
+                and rec.task.status in ACTIVE_STATES
+            ]
+
+            # Work that must clear before each queued task can start.
+            active_durations: List[Optional[float]] = []
+            for rec in active:
+                t = rec.task
+                remaining = max(0, int(t.total_size) - int(t.downloaded_size))
+                eta = t.eta_seconds
+                if eta is not None and eta >= 0:
+                    active_durations.append(float(eta))
+                elif t.current_speed and t.current_speed > 0 and remaining:
+                    active_durations.append(remaining / float(t.current_speed))
+                else:
+                    # Genuinely unknown.  It still holds its slot, but claiming
+                    # "0 seconds" would make the task behind it report
+                    # "starts immediately" — a fabricated number.  None keeps
+                    # the queue honest and everything behind it unestimated.
+                    active_durations.append(None)
+
+            total_speed = sum(float(r.task.current_speed or 0) for r in active)
+            slots_busy = len(active)
+            per_slot = (total_speed / slots_busy) if slots_busy and total_speed > 0 else 0.0
+
+            # Running downloads come first: they already hold their slots, so
+            # the simulation places them before any queued task.
+            durations: List[Optional[float]] = list(active_durations)
+            for _pri, _index, rec in queued:
+                t = rec.task
+                remaining = max(0, int(t.total_size) - int(t.downloaded_size))
+                if per_slot > 0 and remaining > 0:
+                    durations.append(remaining / per_slot)
+                else:
+                    durations.append(None)
+
+            starts = _simulate_slot_starts(durations, self._max_concurrent)
+
+            plan: List[Dict[str, Any]] = []
+            for offset, (pri, index, rec) in enumerate(queued):
+                t = rec.task
+                start = starts[len(active_durations) + offset]
+                plan.append({
+                    "id": t.id,
+                    # Same fallback chain as history entries: a queued task has
+                    # no probed filename yet, so the URL basename is what the
+                    # user actually recognises in the queue list.
+                    "name": t.filename or t.label or name_from_url(t.url),
+                    "state": t.status.value,
+                    "priority": pri,
+                    "position": offset + 1,          # 1-based effective start order
+                    "manual_index": index,           # raw position in _order
+                    "total": int(t.total_size or 0),
+                    "completed": int(t.downloaded_size or 0),
+                    "remaining": max(0, int(t.total_size) - int(t.downloaded_size)),
+                    "category": t.category or "General",
+                    "speed_limit_bps": int(t.speed_limit_bps or 0),
+                    "estimated_start_seconds": start,
+                    "expected_wait_seconds": start,
+                    "starts_immediately": start is not None and start <= 0.0,
+                })
+            return plan
 
     def retry_failed(self) -> int:
         """Re-queue every failed/cancelled task; returns how many."""
@@ -1067,26 +1291,53 @@ class TaskManager:
     # Worker management
     # ------------------------------------------------------------------
 
+    def _next_queued_locked(self, skip: Optional[set] = None) -> Optional[_TaskRecord]:
+        """The QUEUED task that should start next, or ``None``.
+
+        Selection key is ``(priority, manual position)``: a lower priority
+        number wins, and the user's explicit ordering (``_order`` — driven by
+        Move up/down, drag & drop and ``move_task_to``) breaks ties.
+
+        ``_order`` itself is deliberately **never** re-sorted here.  Keeping the
+        manual order intact is what makes priority and hand-ordering coexist:
+        raising one task's priority does not scramble everything the user
+        arranged by hand.
+        """
+        best: Optional[_TaskRecord] = None
+        best_key: Optional[tuple] = None
+        for index, tid in enumerate(self._order):
+            if skip and tid in skip:
+                continue
+            rec = self._tasks.get(tid)
+            if rec is None or rec.task.status != TaskStatus.QUEUED:
+                continue
+            try:
+                pri = int(rec.task.priority)
+            except (TypeError, ValueError):
+                pri = 5
+            key = (pri, index)
+            # Strictly-less keeps the FIRST task in manual order for a tie.
+            if best_key is None or key < best_key:
+                best, best_key = rec, key
+        return best
+
     def _start_next(self) -> None:
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             if self._closed or self._global_pause or self._scheduler_gate:
                 return
+            # Tasks that could not be transitioned are skipped for the rest of
+            # this pass.  Without this the loop would re-select the same task
+            # forever while holding the lock, hanging every other thread.
+            attempted: set = set()
             while self._active < self._max_concurrent:
-                rec = next(
-                    (
-                        self._tasks[tid]
-                        for tid in self._order
-                        if tid in self._tasks
-                        and self._tasks[tid].task.status == TaskStatus.QUEUED
-                    ),
-                    None,
-                )
+                rec = self._next_queued_locked(skip=attempted)
                 if rec is None:
                     break
                 try:
                     rec.task.transition(TaskStatus.ANALYZING)
                 except TransitionError:
+                    attempted.add(rec.id)
                     continue
                 rec.control = TaskControl()
                 rec.task.error = ""
@@ -1221,7 +1472,8 @@ class TaskManager:
                         if rec.task.status != TaskStatus.COMPLETED:
                             self._cleanup_task_files(rec.task)
                         snap = self._snap(rec)
-                        self._remove_record_locked(task_id)
+                        # This path has no other order write, so persist here.
+                        self._remove_record_locked(task_id, save_order=True)
                         events.append(("removed", snap))
                     else:
                         events.append(("finished", self._snap(rec)))
@@ -1564,7 +1816,13 @@ class TaskManager:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _remove_record_locked(self, task_id: str) -> None:
+    def _remove_record_locked(self, task_id: str, save_order: bool = False) -> None:
+        """Drop a task from memory and the database.
+
+        ``save_order`` defaults to False because most callers (``remove_task``,
+        ``_clear_states``) already persist the order themselves — writing it
+        per removal would be quadratic when clearing many tasks.
+        """
         self._tasks.pop(task_id, None)
         try:
             self._order.remove(task_id)
@@ -1574,6 +1832,8 @@ class TaskManager:
             self._store.delete_task(task_id)
         except Exception:
             pass
+        if save_order:
+            self._save_order_locked()
 
     @staticmethod
     def _write_json_atomic(path: Path, data: Any) -> None:
