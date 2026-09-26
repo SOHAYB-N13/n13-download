@@ -977,7 +977,7 @@ const App = {
     const limitBtn = Utils.$id("qsLimitBtn");
     if (limitBtn) limitBtn.addEventListener("click", () => this._editGlobalLimit());
     const schedBtn = Utils.$id("qsSchedBtn");
-    if (schedBtn) schedBtn.addEventListener("click", () => this.navigate("settings"));
+    if (schedBtn) schedBtn.addEventListener("click", () => this._editScheduler());
     const retryBtn = Utils.$id("qsRetryFailed");
     if (retryBtn) {
       retryBtn.addEventListener("click", async () => {
@@ -1140,9 +1140,7 @@ const App = {
     const schedBtn = Utils.$id("qsSchedBtn");
     if (schedBtn) {
       const on = !!sched.scheduler_enabled;
-      schedBtn.textContent = on
-        ? `${sched.schedule_start_time || "—"}–${sched.schedule_stop_time || "—"}`
-        : I18N.t("queue.off", "Off");
+      schedBtn.textContent = this._scheduleLabel(sched);
       schedBtn.classList.toggle("good", on);
     }
 
@@ -1169,6 +1167,44 @@ const App = {
         "success", 2400);
     } catch (e) {
       API.logJs("global limit: " + String(e));
+    }
+  },
+
+  /** Label for the current schedule, shared by the queue strip and toasts. */
+  _scheduleLabel(s = this.state.settings || {}) {
+    if (!s.scheduler_enabled) return I18N.t("queue.off", "Off");
+    const win = `${s.schedule_start_time || "—"}–${s.schedule_stop_time || "—"}`;
+    const days = Array.isArray(s.schedule_days) ? s.schedule_days : [];
+    // Only mention days when they actually narrow the window.
+    return days.length ? `${win} · ${days.length}/7` : win;
+  },
+
+  /** Quick scheduler editor driven from the queue strip (never leaves the page). */
+  async _editScheduler() {
+    const s = this.state.settings || {};
+    const res = await Components.schedulerDialog(s);
+    if (res === null) return;   // cancelled or closed — discard everything
+    try {
+      await API.updateSettings({
+        scheduler_enabled: res.enabled,
+        schedule_start_time: res.start,
+        schedule_stop_time: res.stop,
+        schedule_days: res.days,
+      });
+      this.state.settings = {
+        ...s,
+        scheduler_enabled: res.enabled,
+        schedule_start_time: res.start,
+        schedule_stop_time: res.stop,
+        schedule_days: res.days,
+      };
+      this._renderQueueStrip();
+      Components.toast(
+        I18N.t("toast.scheduler_set", "Scheduler updated"),
+        this._scheduleLabel(),
+        "success", 2400);
+    } catch (e) {
+      API.logJs("scheduler: " + String(e));
     }
   },
 
@@ -2566,29 +2602,69 @@ const App = {
     this._wireSettingsRail(container);
   },
 
-  /** Rail navigation: smooth-scroll to a section and highlight it. */
+  /**
+   * Rail navigation: scroll to a section and keep the highlight in sync.
+   *
+   * `card.offsetTop` is measured from the card's offsetParent (`#app`), not
+   * from the `#content` scroller, so using it directly overshot by the
+   * scroller's own distance from the top of the page — enough to land the
+   * *next* section under the top edge (clicking General showed Startup &
+   * clipboard).  Measure both rects instead; that is correct no matter which
+   * ancestor happens to be positioned.
+   */
   _wireSettingsRail(container) {
     const rail = Utils.$q(".set-rail", container);
     const scroller = Utils.$id("content");
     if (!rail) return;
 
+    // Settings can be rebuilt (language/theme change), so drop the previous
+    // listener or they pile up and fight each other.
+    if (this._railSpy && scroller) scroller.removeEventListener("scroll", this._railSpy);
+
     const btns = Utils.$qa(".set-rail-btn", rail);
+    if (!btns.length) return;
+
+    const setActive = (id) => btns.forEach((b) => b.classList.toggle("active", b.dataset.goto === id));
+
+    /** Distance from the top of the scroller's content to the card's top. */
+    const offsetInScroller = (card) => {
+      if (!scroller) return card.offsetTop;
+      const sr = scroller.getBoundingClientRect();
+      return card.getBoundingClientRect().top - sr.top + scroller.scrollTop;
+    };
+
+    let suppressSpy = 0;   // ignore the spy while a click-scroll is animating
     btns.forEach((btn) => {
       btn.addEventListener("click", () => {
         const card = Utils.$id("set-" + btn.dataset.goto);
         if (!card) return;
-        btns.forEach((b) => b.classList.remove("active"));
-        btn.classList.add("active");
+        setActive(btn.dataset.goto);
+        suppressSpy = Date.now() + 700;
         if (scroller) {
-          // Scroll within the content pane, accounting for the sticky offset.
-          scroller.scrollTo({ top: Math.max(0, card.offsetTop - 12), behavior: "smooth" });
+          scroller.scrollTo({ top: Math.max(0, offsetInScroller(card) - 12), behavior: "smooth" });
         } else {
           card.scrollIntoView({ block: "start", behavior: "smooth" });
         }
       });
     });
 
-    if (btns.length) btns[0].classList.add("active");
+    // Scroll-spy: the highlight must follow manual scrolling too, otherwise the
+    // rail and the visible panel drift apart.
+    if (scroller) {
+      this._railSpy = () => {
+        if (Date.now() < suppressSpy) return;
+        const sr = scroller.getBoundingClientRect();
+        let current = btns[0].dataset.goto;
+        for (const b of btns) {
+          const card = Utils.$id("set-" + b.dataset.goto);
+          if (card && card.getBoundingClientRect().top - sr.top <= 48) current = b.dataset.goto;
+        }
+        setActive(current);
+      };
+      scroller.addEventListener("scroll", this._railSpy, { passive: true });
+    }
+
+    setActive(btns[0].dataset.goto);
   },
 
   _fieldHtml(f, s, ctx) {

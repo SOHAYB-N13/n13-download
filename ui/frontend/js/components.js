@@ -285,6 +285,89 @@ const Components = {
   },
 
   /**
+   * Quick scheduler editor driven from the queue strip.
+   *
+   * Deliberately mirrors `speedLimitDialog` — same modal shell, width, close
+   * button and Cancel/Apply footer — so the two queue-strip controls behave
+   * identically.  Resolves to `{enabled, start, stop, days}`, or `null` when
+   * the user cancels / closes.
+   */
+  async schedulerDialog(current = {}) {
+    const L = (k, f) => I18N.t(k, f);
+    const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const selected = Array.isArray(current.schedule_days) ? current.schedule_days : [];
+
+    return new Promise((resolve) => {
+      const dlg = this.showModal(`
+        <div class="sched-body">
+          <div class="sched-row">
+            <div class="field-info">
+              <label class="field-label" for="scEnabled">${L("sched.enable", "Enable scheduler")}</label>
+              <p class="field-hint">${L("sched.enable_hint", "Only start downloads inside the window below.")}</p>
+            </div>
+            <span class="switch">
+              <input type="checkbox" id="scEnabled" ${current.scheduler_enabled ? "checked" : ""}>
+              <span class="switch-track"></span>
+            </span>
+          </div>
+          <div class="field">
+            <label class="field-label">${L("sched.window", "Active window")}</label>
+            <div class="sched-window">
+              <input class="input mono" type="time" id="scStart" value="${Utils.escapeHtml(current.schedule_start_time || "01:00")}">
+              <span class="sched-dash">–</span>
+              <input class="input mono" type="time" id="scStop" value="${Utils.escapeHtml(current.schedule_stop_time || "07:00")}">
+            </div>
+            <p class="field-hint">${L("sched.window_hint", "Downloads run between these times.")}</p>
+          </div>
+          <div class="field">
+            <label class="field-label">${L("sched.days", "Days")}</label>
+            <div class="sched-days" id="scDays">
+              ${days.map((d) => `<button type="button" class="chip${selected.includes(d) ? " active" : ""}" data-day="${d}">${L("day." + d, d)}</button>`).join("")}
+            </div>
+            <p class="field-hint">${L("sched.days_hint", "No selection means every day.")}</p>
+          </div>
+        </div>`,
+        { title: L("sched.title", "Scheduler"), width: 480, onClose: () => resolve(null) });
+
+      dlg.setFooter(`
+        <button class="btn btn-ghost" id="scCancel">${L("confirm.cancel", "Cancel")}</button>
+        <button class="btn btn-primary" id="scOk">${Utils.icon("check", 15)} ${L("confirm.apply", "Apply")}</button>`);
+
+      const enabledInp = dlg.qs("#scEnabled");
+      const startInp = dlg.qs("#scStart");
+      const stopInp = dlg.qs("#scStop");
+      const chips = Utils.$qa(".chip", dlg.qs("#scDays"));
+
+      chips.forEach((chip) => chip.addEventListener("click", () => chip.classList.toggle("active")));
+
+      // Grey out the window while the scheduler is off, so it is obvious that
+      // those values are not in effect yet.
+      const syncEnabled = () => {
+        const off = !enabledInp.checked;
+        [startInp, stopInp].forEach((i) => { i.disabled = off; });
+        chips.forEach((c) => { c.disabled = off; });
+        dlg.qs("#scDays").classList.toggle("off", off);
+      };
+      enabledInp.addEventListener("change", syncEnabled);
+      syncEnabled();
+
+      const submit = () => {
+        resolve({
+          enabled: enabledInp.checked,
+          start: startInp.value || "",
+          stop: stopInp.value || "",
+          days: chips.filter((c) => c.classList.contains("active")).map((c) => c.dataset.day),
+        });
+        dlg.close();
+      };
+      dlg.qs("#scOk").addEventListener("click", submit);
+      dlg.qs("#scCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      [startInp, stopInp].forEach((i) =>
+        i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }));
+    });
+  },
+
+  /**
    * Priority picker.
    *
    * The manager stores ``0`` = highest … ``10`` = lowest, which is the exact

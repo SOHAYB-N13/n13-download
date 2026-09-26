@@ -142,6 +142,9 @@ class AppConfig:
     scheduler_enabled: bool = False
     schedule_start_time: Optional[str] = None      # "HH:MM" — pause until
     schedule_stop_time: Optional[str] = None       # "HH:MM" — pause from
+    # Weekdays the start/stop window applies to, e.g. ["mon", "tue"].
+    # Empty means every day (the historical behaviour).
+    schedule_days: List[str] = field(default_factory=list)
     night_speed_limit_bps: int = 0                 # cap during the night window
     night_start_time: Optional[str] = "23:00"
     night_end_time: Optional[str] = "07:00"

@@ -3,7 +3,8 @@
 Runs one lightweight daemon thread that periodically applies three rules:
 
 * **Start window** — the queue stays gated (no new downloads start) until
-  ``schedule_start_time`` (daily, "HH:MM").
+  ``schedule_start_time`` (daily, "HH:MM").  An optional ``schedule_days`` list
+  limits the window to specific weekdays; on other days the queue runs freely.
 * **Stop window** — the queue is gated again from ``schedule_stop_time``.
 * **Night speed cap** — between ``night_start_time`` and ``night_end_time`` the
   global bandwidth limiter is overridden to ``night_speed_limit_bps`` so e.g.
@@ -46,6 +47,27 @@ def _in_window(now: dtime, start: Optional[dtime], end: Optional[dtime]) -> bool
         return start <= now < end
     # Window wraps past midnight (e.g. 23:00 -> 07:00).
     return now >= start or now < end
+
+
+# Index matches datetime.weekday() (0 = Monday).
+_DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _day_allowed(cfg) -> bool:
+    """True when the start/stop window applies today.
+
+    An empty/unset ``schedule_days`` means every day, which keeps the original
+    behaviour for configs written before the setting existed.  On a day the user
+    did not select the window is simply not applied, so the queue runs freely.
+    """
+    days = getattr(cfg, "schedule_days", None)
+    if not days:
+        return True
+    try:
+        today = _DAY_NAMES[datetime.now().weekday()]
+    except Exception:
+        return True
+    return today in {str(d).strip().lower() for d in days}
 
 
 class Scheduler:
@@ -113,10 +135,12 @@ class Scheduler:
 
         start = _parse_hhmm(getattr(cfg, "schedule_start_time", None))
         stop = _parse_hhmm(getattr(cfg, "schedule_stop_time", None))
-        if start is not None and now < start:
-            gate = True
-        if stop is not None and now >= stop:
-            gate = True
+        # Only gate on days the window applies to; other days run unrestricted.
+        if _day_allowed(cfg):
+            if start is not None and now < start:
+                gate = True
+            if stop is not None and now >= stop:
+                gate = True
         self._on_gate(gate)
 
         bps = int(getattr(cfg, "max_speed_bps", 0) or 0)

@@ -2303,6 +2303,19 @@ body.resizing * { cursor: inherit; }
    so give the stack an explicit rhythm. */
 .pri-body { display: flex; flex-direction: column; gap: 14px; }
 
+/* Quick scheduler editor, opened from the queue strip. Mirrors the speed-limit
+   dialog's shell so the two strip controls look and behave identically. */
+.sched-body { display: flex; flex-direction: column; gap: 16px; }
+.sched-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sched-row .field-info { min-width: 0; }
+.sched-window { display: flex; align-items: center; gap: 10px; }
+.sched-window .input { flex: 1 1 0; min-width: 0; }
+.sched-dash { color: var(--text-3); flex: none; }
+.sched-days { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Window/day controls are inert while the scheduler is off — show that. */
+.sched-body .input:disabled { opacity: .5; }
+.sched-days.off { opacity: .5; }
+
 /* Developer → diagnostics */
 .dev-tools { display: flex; flex-direction: column; gap: 14px; }
 .dev-actions { display: flex; flex-wrap: wrap; gap: 8px; }
