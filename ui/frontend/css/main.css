@@ -2461,6 +2461,16 @@ body.resizing * { cursor: inherit; }
 /* ── RTL (Persian) layout helpers ──────────────────────────────────────── */
 
 [dir="rtl"] body { direction: rtl; }
+
+/* The titlebar is window chrome, not application content.  The caption buttons
+   (─ □ ✕) must stay in the top-right corner in every language — mirroring them
+   to the left, as a naive `direction: rtl` does, is wrong even for RTL
+   locales: native Windows and well-localised Persian apps keep Close on the
+   right.  So the bar's own flex order stays LTR; only the search field inside
+   it reads right-to-left. */
+[dir="rtl"] #titlebar { direction: ltr; }
+[dir="rtl"] .tb-search { direction: rtl; }
+
 [dir="rtl"] #sidebar { border-right: 0; border-left: 1px solid var(--border); }
 [dir="rtl"] .nav-indicator { left: auto; right: 0; }
 [dir="rtl"] .nav-badge { margin-left: 0; margin-right: auto; }
