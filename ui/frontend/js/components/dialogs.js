@@ -212,9 +212,9 @@ const DialogsUI = {
             <div class="sched-window">
               <input class="input mono" type="time" id="scStart" value="${Utils.escapeHtml(current.schedule_start_time || "01:00")}">
               <span class="sched-dash">–</span>
-              <input class="input mono" type="time" id="scStop" value="${Utils.escapeHtml(current.schedule_stop_time || "07:00")}">
+              <input class="input mono" type="time" id="scStop" value="${Utils.escapeHtml(current.schedule_stop_time || "")}">
             </div>
-            <p class="field-hint">${L("sched.window_hint", "Downloads run between these times.")}</p>
+            <p class="field-hint">${L("sched.window_hint", "Downloads run between these times. Leave the end empty for no end time.")}</p>
           </div>
           <div class="field">
             <label class="field-label">${L("sched.days", "Days")}</label>

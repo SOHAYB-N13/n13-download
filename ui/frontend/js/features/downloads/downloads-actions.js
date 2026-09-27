@@ -272,6 +272,8 @@ const DownloadsActions = {
     if (limitBtn) limitBtn.addEventListener("click", () => app._editGlobalLimit());
     const schedBtn = Utils.$id("qsSchedBtn");
     if (schedBtn) schedBtn.addEventListener("click", () => app._editScheduler());
+    const shutBtn = Utils.$id("qsShutdownBtn");
+    if (shutBtn) shutBtn.addEventListener("click", () => app._toggleShutdown());
     const retryBtn = Utils.$id("qsRetryFailed");
     if (retryBtn) {
       retryBtn.addEventListener("click", async () => {

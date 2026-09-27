@@ -91,7 +91,8 @@ _settingsDef() {
       fields: [
         { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
         { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
-        { key: "schedule_stop_time", label: "Stop at", hint: "Queue pauses from this time (HH:MM)", type: "time" },
+        { key: "schedule_stop_time", label: "Stop at (optional)", hint: "Queue pauses from this time (HH:MM). Empty means no end time.", type: "time" },
+        { key: "shutdown_when_done", label: "Shut down when done", hint: "Shut down the computer after all downloads finish (60s warning, cancelled if anything fails)", type: "toggle" },
         { key: "schedule_days", label: "Active days", hint: "Days the window above applies to. None selected means every day.", type: "days", wide: true },
         { key: "_night_cap_enabled", label: "Night speed limit", hint: "Slow downloads during the night window", type: "toggle", of: "night_speed_limit_bps" },
         { key: "night_speed_limit_bps", label: "Night limit", hint: "Applied between night start and night end", type: "speed" },
@@ -489,7 +490,7 @@ _wireSettings(container, s) {
         Object.assign(this.state.settings, batch);
         // Scheduler settings are surfaced in the Queue strip, which lives on
         // another page; refresh it now instead of waiting for the idle poll.
-        if (ids.some((k) => k === "scheduler_enabled" || k.startsWith("schedule_"))) this._renderQueueStrip();
+        if (ids.some((k) => k === "scheduler_enabled" || k.startsWith("schedule_") || k === "shutdown_when_done")) this._renderQueueStrip();
         ids.forEach((k) => markSaved(secId || (container.querySelector(`[data-key="${k}"]`) || {}).closest?.(".set-card")?.id?.replace("set-", "") || "general"));
       } else {
         Components.toast(I18N.t("toast.not_saved", "Not saved"), I18N.t("toast.not_saved_msg", "A setting could not be applied"), "error");

@@ -141,7 +141,10 @@ class AppConfig:
     # --- Scheduler (queue-wide start/stop windows + night speed cap) --------
     scheduler_enabled: bool = False
     schedule_start_time: Optional[str] = None      # "HH:MM" — pause until
-    schedule_stop_time: Optional[str] = None       # "HH:MM" — pause from
+    schedule_stop_time: Optional[str] = None       # "HH:MM" — pause from; empty = no end
+    # Shut the computer down once every queued/active download has finished.
+    # One-shot: the backend disarms it after firing (or when failures remain).
+    shutdown_when_done: bool = False
     # Weekdays the start/stop window applies to, e.g. ["mon", "tue"].
     # Empty means every day (the historical behaviour).
     schedule_days: List[str] = field(default_factory=list)
@@ -287,6 +290,7 @@ class AppConfig:
         if instance.duplicate_policy not in ("ask", "allow", "rename", "replace"):
             instance.duplicate_policy = "ask"
         instance.rules_enabled = bool(getattr(instance, "rules_enabled", True))
+        instance.shutdown_when_done = bool(getattr(instance, "shutdown_when_done", False))
         instance.minimize_to_tray = bool(getattr(instance, "minimize_to_tray", True))
         instance.close_to_tray = bool(getattr(instance, "close_to_tray", False))
         instance.notifications_enabled = bool(getattr(instance, "notifications_enabled", True))

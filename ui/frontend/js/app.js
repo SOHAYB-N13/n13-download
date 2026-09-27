@@ -382,6 +382,7 @@ const App = {
   async _editGlobalLimit() { return DownloadsView.editGlobalLimit(this); },
   _scheduleLabel(s) { return DownloadsView.scheduleLabel(this, s); },
   async _editScheduler() { return DownloadsView.editScheduler(this); },
+  async _toggleShutdown() { return DownloadsView.toggleShutdown(this); },
 
   //  New Download dialog
   // ══════════════════════════════════════════════════════════════════════

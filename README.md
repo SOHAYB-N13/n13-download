@@ -49,7 +49,7 @@ updated automatically from the app.
 | 🍪 Cookie support | Raw header, `cookies.txt`, or live browser cookies |
 | 🛡️ SSRF protection | Blocks access to private / local IP ranges |
 | ⏱️ Speed controls | Throttle bandwidth, pause/resume tasks |
-| 🔌 Shutdown after | Optional auto shutdown when the queue finishes |
+| 🔌 Auto shutdown | Queue-strip toggle: shut the PC down when every download finishes (60s warning, skipped if anything fails) |
 | 💾 Persistent config | Settings saved to `~/.config/terminal-download-manager/` |
 | 🗓️ Scheduler | Start / stop time windows and a night-time speed cap |
 | 📋 Clipboard monitor | Opt-in: auto-captures URLs copied to the clipboard |
@@ -68,8 +68,20 @@ updated automatically from the app.
 | ✅ Selection action bar | Multi-select with bulk pause, resume, retry, remove and priority |
 | 🗂️ Categories & priority | Per-download category routing, category filters, queue position control |
 | 🗓️ Scheduler modal | Inline start/stop windows, weekday selection and night speed cap |
+| 🗓️ Optional end time | Leave the scheduler End empty for an open-ended window from Start onwards |
 | 🩺 Extension repair | One-click repair for the browser extension pairing |
 | ⭐ Download properties | Rich properties dialog with checksum, category and connection details |
+
+### 🆕 What's new in v1.2.0
+
+- 🔌 **Auto shutdown** — a new toggle in the queue strip (next to Scheduler)
+  shuts the computer down once every active and queued download has finished
+  successfully. One-shot with a 60-second abort window (`shutdown /a`);
+  paused or failed downloads cancel it with a notice instead of powering off.
+  The choice persists and is also available in Settings → Scheduler.
+- 🗓️ **Optional scheduler end time** — the End field starts empty and may stay
+  empty, meaning the window runs open-ended from the Start time onwards
+  (days selection still applies). The strip label shows `from 01:00` in that case.
 
 ### 🆕 What's new in v1.1.0
 
@@ -186,7 +198,6 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 | 🍪 پشتیبانی از کوکی | هدر کوکی، فایل `cookies.txt` یا کوکی‌های زنده مرورگر |
 | 🛡️ محافظت SSRF | مسدودسازی دسترسی به آدرس‌های خصوصی / لوکال |
 | ⏱️ کنترل سرعت | محدودسازی پهنای باند و توقف/ادامه وظایف |
-| 🔌 خاموش‌شدن خودکار | خاموش کردن سیستم پس از پایان صف دانلود |
 | 💾 ذخیره تنظیمات | ذخیره تنظیمات در `~/.config/terminal-download-manager/` |
 | 🗓️ زمان‌بندی | پنجره‌های شروع/توقف و سقف سرعت در ساعات شب |
 | 📋 مانیتور کلیپ‌بورد | اختیاری: دریافت خودکار لینک‌های کپی‌شده |
@@ -205,8 +216,20 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 | ✅ نوار عملیات انتخاب | انتخاب چندتایی با توقف/ادامه/تلاش‌مجدد/حذف و اولویت گروهی |
 | 🗂️ دسته‌بندی و اولویت | مسیریابی خودکار هر دانلود به دسته مناسب، فیلتر دسته و کنترل ترتیب صف |
 | 🗓️ پنجره زمان‌بندی | پنجره شروع/توقف درون‌برنامه‌ای، انتخاب روزهای هفته و سقف سرعت شبانه |
+| 🗓️ پایان اختیاری | خالی گذاشتن پایان زمان‌بند یعنی بازه باز از زمان شروع به بعد |
 | 🩺 تعمیر اکستنشن | تعمیر یک‌کلیکه اتصال اکستنشن مرورگر |
 | ⭐ جزئیات دانلود | پنجره ویژگی‌ها با چکسام، دسته و جزئیات اتصال‌ها |
+| 🔌 خاموش‌شدن خودکار | دکمه نوار صف: خاموش کردن کامپیوتر پس از پایان همه دانلودها (هشدار ۶۰ ثانیه‌ای؛ در صورت خطا لغو می‌شود) |
+
+### 🆕 تازه‌های نسخه 1.2.0
+
+- 🔌 **خاموش‌شدن خودکار** — دکمه جدید نوار صف (کنار زمان‌بند) کامپیوتر را پس
+  از پایان موفق همه دانلودهای فعال و در انتظار خاموش می‌کند. یک‌بارمصرف با
+  فرصت ۶۰ ثانیه‌ای برای لغو (`shutdown /a`)؛ دانلود متوقف‌شده یا ناموفق باعث
+  لغو با اعلان می‌شود. انتخاب ذخیره می‌شود و در تنظیمات ← زمان‌بندی هم هست.
+- 🗓️ **پایان اختیاری زمان‌بند** — فیلد پایان خالی شروع می‌شود و می‌تواند خالی
+  بماند؛ یعنی بازه از زمان شروع به‌صورت باز ادامه دارد (انتخاب روزها همچنان
+  اعمال می‌شود). برچسب نوار در این حالت «از ۰۱:۰۰» را نشان می‌دهد.
 
 ### 🆕 تازه‌های نسخه 1.1.0
 

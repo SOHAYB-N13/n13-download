@@ -110,6 +110,22 @@ const Events = {
       }
     } else if (evt.type === "window") {
       app._setMaxState(!!evt.maximized);
+    } else if (evt.type === "auto_shutdown") {
+      // One-shot flag was disarmed backend-side — mirror it so the strip
+      // toggle flips back to Off without a settings round-trip.
+      app.state.settings = { ...(app.state.settings || {}), shutdown_when_done: false };
+      app._renderQueueStrip();
+      if (evt.action === "executing") {
+        Components.toast(
+          I18N.t("toast.shutdown_firing", "Shutting down"),
+          I18N.t("toast.shutdown_firing_msg", "All downloads finished — the computer shuts down in 60 seconds (run 'shutdown /a' to cancel)"),
+          "warning", 12000);
+      } else {
+        Components.toast(
+          I18N.t("toast.shutdown_skipped", "Auto shutdown skipped"),
+          I18N.fmt("toast.shutdown_skipped_msg", { n: evt.failed || 0 }, `${evt.failed || 0} download(s) failed — the computer stays on`),
+          "error", 8000);
+      }
     } else if (evt.type === "update_state") {
       app._applyUpdateState(evt.state);
       const st = evt.state;

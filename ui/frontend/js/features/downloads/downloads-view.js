@@ -483,6 +483,13 @@ const DownloadsView = {
       schedBtn.classList.toggle("good", on);
     }
 
+    const shutBtn = Utils.$id("qsShutdownBtn");
+    if (shutBtn) {
+      const on = !!sched.shutdown_when_done;
+      shutBtn.textContent = on ? I18N.t("queue.on", "On") : I18N.t("queue.off", "Off");
+      shutBtn.classList.toggle("warn", on);
+    }
+
     const retryBtn = Utils.$id("qsRetryFailed");
     if (retryBtn) {
       retryBtn.hidden = failed.length === 0;
@@ -512,7 +519,13 @@ const DownloadsView = {
   /** Label for the current schedule, shared by the queue strip and toasts. */
   scheduleLabel(app, s = app.state.settings || {}) {
     if (!s.scheduler_enabled) return I18N.t("queue.off", "Off");
-    const win = `${s.schedule_start_time || "—"}–${s.schedule_stop_time || "—"}`;
+    const start = s.schedule_start_time || "";
+    const stop = s.schedule_stop_time || "";
+    // End time is optional — without it the window runs from the start time
+    // onwards (days selection still applies).
+    const win = (start && stop) ? `${start}–${stop}`
+      : start ? I18N.fmt("queue.from_time", { t: start }, `from ${start}`)
+      : I18N.t("queue.on", "On");
     const days = Array.isArray(s.schedule_days) ? s.schedule_days : [];
     // Only mention days when they actually narrow the window.
     return days.length ? `${win} · ${days.length}/7` : win;
@@ -544,6 +557,24 @@ const DownloadsView = {
         "success", 2400);
     } catch (e) {
       API.logJs("scheduler: " + String(e));
+    }
+  },
+
+  /** Auto-shutdown toggle driven from the queue strip (persisted). */
+  async toggleShutdown(app) {
+    const s = app.state.settings || {};
+    const on = !s.shutdown_when_done;
+    try {
+      await API.updateSettings({ shutdown_when_done: on });
+      app.state.settings = { ...s, shutdown_when_done: on };
+      app._renderQueueStrip();
+      Components.toast(
+        I18N.t("queue.auto_shutdown", "Auto shutdown"),
+        on ? I18N.t("toast.shutdown_on", "The computer will shut down when all downloads finish")
+           : I18N.t("toast.shutdown_off", "Auto shutdown turned off"),
+        on ? "warning" : "info", 3000);
+    } catch (e) {
+      API.logJs("auto shutdown: " + String(e));
     }
   },
 };

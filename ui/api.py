@@ -289,6 +289,7 @@ class Api:
             "task": snapshot.to_dict(),
         })
         self._maybe_notify(event, snapshot)
+        self._maybe_auto_shutdown(event)
         self._tray_tick()
 
     def _on_update_state(self, state: Dict[str, Any]) -> None:
@@ -316,6 +317,54 @@ class Api:
                                 f"{name} — {snapshot.error or 'unknown error'}")
         except Exception:
             pass
+
+    # ── Auto shutdown ───────────────────────────────────────────
+
+    def _maybe_auto_shutdown(self, event: str) -> None:
+        """Shut the PC down once the queue fully drains (one-shot).
+
+        Fires only on a ``finished`` task event while ``shutdown_when_done``
+        is armed.  The shutdown happens exclusively when nothing is left
+        unfinished (no active, queued or paused task) *and* nothing failed —
+        a failed download disarms the option with a notice instead of
+        powering off.  The flag is always disarmed after firing so it can
+        never trigger twice, and the frontend is told to refresh its toggle.
+        """
+        if event != "finished":
+            return
+        cfg = self._config
+        if not getattr(cfg, "shutdown_when_done", False):
+            return
+        try:
+            snaps = self._manager.snapshots()
+        except Exception:
+            return
+        terminal = (TaskState.COMPLETED, TaskState.FAILED,
+                    TaskState.CANCELLED, TaskState.REMOVED)
+        unfinished = [s for s in snaps if s.state not in terminal]
+        if unfinished:
+            return
+        failed = sum(1 for s in snaps if s.state == TaskState.FAILED)
+        # One-shot: disarm first so this can never fire twice.
+        try:
+            cfg.shutdown_when_done = False
+            save_config(cfg)
+        except Exception:
+            pass
+        if failed:
+            self._event_queue.put_nowait(
+                {"type": "auto_shutdown", "action": "skipped", "failed": failed})
+            return
+        self._event_queue.put_nowait(
+            {"type": "auto_shutdown", "action": "executing"})
+        try:
+            import subprocess
+            subprocess.Popen(
+                ["shutdown", "/s", "/t", "60", "/c",
+                 "N13: all downloads finished - shutting down (run 'shutdown /a' to cancel)"],
+            )
+        except Exception as exc:
+            log.warning("Auto shutdown failed: %s", exc)
 
     # ── Event polling ─────────────────────────────────────────────
 
