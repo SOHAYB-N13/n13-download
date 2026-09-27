@@ -1,0 +1,94 @@
+/* ── 23. Toasts ────────────────────────────────────────────────────────── */
+
+#toastStack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 350px;
+  pointer-events: none;
+}
+
+.toast {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px 15px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--glass-strong);
+  backdrop-filter: blur(26px);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+  cursor: default;
+  animation: toastIn var(--dur-3) var(--ease-spring);
+}
+.toast.out { animation: toastOut 240ms var(--ease-out) forwards; }
+
+.toast-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.toast-success .toast-bar { background: var(--success); }
+.toast-error .toast-bar { background: var(--danger); }
+.toast-warning .toast-bar { background: var(--warning); }
+.toast-info .toast-bar { background: var(--accent); }
+
+.toast-ico {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+}
+.toast-success .toast-ico { color: var(--success); background: var(--success-soft); }
+.toast-error .toast-ico { color: var(--danger); background: var(--danger-soft); }
+.toast-warning .toast-ico { color: var(--warning); background: var(--warning-soft); }
+.toast-info .toast-ico { color: var(--accent); background: var(--accent-soft); }
+
+.toast-body { flex: 1; min-width: 0; }
+.toast-title { font-size: 13px; font-weight: 620; }
+.toast-msg {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toast-close { width: 24px; height: 24px; margin: -3px -5px 0 0; }
+
+.toast-action {
+  margin-top: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.toast-action:hover { background: var(--bg-active); border-color: var(--accent); }
+
+.toast-life {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left;
+  animation-name: life;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  opacity: 0.55;
+}
+.toast-success .toast-life { background: var(--success); }
+.toast-error .toast-life { background: var(--danger); }
+.toast-warning .toast-life { background: var(--warning); }
+.toast-info .toast-life { background: var(--accent); }

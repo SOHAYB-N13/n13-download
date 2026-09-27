@@ -61,7 +61,32 @@ updated automatically from the app.
 | 🖱️ System tray | Tray icon with pause/resume/folder/settings and a live speed tooltip |
 | 🔄 Auto-updater | Checks GitHub Releases, verifies SHA-256, installs & restarts |
 | 💿 Installer | One-click Windows installer — no Python required |
-| 🌍 Multi-language | English and Persian (Farsi) UI with an i18n system |
+| 🌍 Multi-language | English and Persian (Farsi) UI with an i18n system, full RTL layout |
+| 📊 Dashboard overview | Dense grouped analytics: downloads, speed/network and storage at a glance |
+| 📥 Queue page | Drag & drop ordering, priorities, scheduler-aware planning, keyboard control |
+| 🧰 Command bar | Always-visible New download / Paste URL / Add batch actions |
+| ✅ Selection action bar | Multi-select with bulk pause, resume, retry, remove and priority |
+| 🗂️ Categories & priority | Per-download category routing, category filters, queue position control |
+| 🗓️ Scheduler modal | Inline start/stop windows, weekday selection and night speed cap |
+| 🩺 Extension repair | One-click repair for the browser extension pairing |
+| ⭐ Download properties | Rich properties dialog with checksum, category and connection details |
+
+### 🆕 What's new in v1.1.0
+
+- 📥 **Queue page** — see what's running and what starts next, reorder with
+  drag & drop, set priorities and keyboard-navigate the plan.
+- 📊 **Dashboard redesign** — compact grouped overview (downloads, speed &
+  network, storage) instead of oversized cards; active downloads and recent
+  activity stay right below.
+- 🧰 **Download workflow** — always-visible command bar, multi-select action
+  bar, category filters, queue position control and a repaired properties dialog.
+- 🗓️ **Scheduler modal** — inline start/stop windows with weekday selection
+  and a night-time speed cap, wired to Settings → Scheduler.
+- 🌍 **RTL/Persian polish** — window controls stay on the right, measurements
+  keep LTR order inside RTL text, and coverage extends beyond the download list.
+- 🔌 **Protocol & extension fixes** — `dldm://` always launches the installed
+  app (never a script/interpreter) and self-heals on upgrade; one-click
+  extension repair from the UI.
 
 ### 🚀 Install & run from source
 
@@ -173,7 +198,30 @@ python d.py "https://example.com/file.zip" --checksum "sha256:..."
 | 🖱️ سینی سیستم | آیکون سینی با توقف/ادامه/پوشه/تنظیمات و تولتیپ سرعت زنده |
 | 🔄 به‌روزرسانی خودکار | بررسی ریلیز گیت‌هاب، تأیید SHA-256، نصب و اجرای مجدد |
 | 💿 نصب‌کننده | نصب یک‌کلیکه ویندوز — بدون نیاز به پایتون |
-| 🌍 چندزبانه | رابط انگلیسی و فارسی با سیستم i18n |
+| 🌍 چندزبانه | رابط انگلیسی و فارسی با سیستم i18n و چیدمان کامل راست‌به‌چپ |
+| 📊 نمای داشبورد | تحلیل فشرده گروه‌بندی‌شده: دانلودها، سرعت/شبکه و حافظه در یک نگاه |
+| 📥 صفحه صف | مرتب‌سازی با درگ‌واندراپ، اولویت‌بندی، برنامه‌ریزی زمان‌بندی و کنترل با صفحه‌کلید |
+| 🧰 نوار فرمان | دکمه‌های همیشه‌قابل‌دسترس دانلود جدید / چسباندن لینک / افزودن گروهی |
+| ✅ نوار عملیات انتخاب | انتخاب چندتایی با توقف/ادامه/تلاش‌مجدد/حذف و اولویت گروهی |
+| 🗂️ دسته‌بندی و اولویت | مسیریابی خودکار هر دانلود به دسته مناسب، فیلتر دسته و کنترل ترتیب صف |
+| 🗓️ پنجره زمان‌بندی | پنجره شروع/توقف درون‌برنامه‌ای، انتخاب روزهای هفته و سقف سرعت شبانه |
+| 🩺 تعمیر اکستنشن | تعمیر یک‌کلیکه اتصال اکستنشن مرورگر |
+| ⭐ جزئیات دانلود | پنجره ویژگی‌ها با چکسام، دسته و جزئیات اتصال‌ها |
+
+### 🆕 تازه‌های نسخه 1.1.0
+
+- 📥 **صفحه صف** — مشاهده دانلودهای در حال اجرا و بعدی، مرتب‌سازی با
+  درگ‌واندراپ، تعیین اولویت و ناوبری با صفحه‌کلید.
+- 📊 **بازطراحی داشبورد** — نمای فشرده گروه‌بندی‌شده (دانلودها، سرعت و شبکه،
+  حافظه) به‌جای کارت‌های بزرگ؛ دانلودهای فعال و فعالیت اخیر همچنان پایین صفحه.
+- 🧰 **گردش‌کار دانلود** — نوار فرمان همیشه‌قابل‌دسترس، نوار عملیات انتخاب
+  چندتایی، فیلتر دسته‌بندی، کنترل ترتیب صف و پنجره ویژگی‌های تعمیرشده.
+- 🗓️ **پنجره زمان‌بندی** — پنجره شروع/توقف درون‌برنامه‌ای با انتخاب روزهای
+  هفته و سقف سرعت شبانه، متصل به تنظیمات ← زمان‌بندی.
+- 🌍 **بهبود راست‌به‌چپ و فارسی** — دکمه‌های پنجره سمت راست می‌مانند، اعداد و
+  واحدها در متن فارسی به‌هم نمی‌ریزند و پوشش فراتر از لیست دانلود است.
+- 🔌 **رفع پروتکل و اکستنشن** — `dldm://` همیشه خود برنامه نصب‌شده را اجرا
+  می‌کند و هنگام ارتقا خودترمیم است؛ تعمیر یک‌کلیکه اکستنشن از رابط کاربری.
 
 ### 🚀 نصب و اجرا از سورس
 

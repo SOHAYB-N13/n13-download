@@ -1,0 +1,44 @@
+/* ── 19. History table ─────────────────────────────────────────────────── */
+
+.table-card {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.table td { padding: 11px 18px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.table tbody tr { transition: background var(--dur-1); }
+.table tbody tr:hover { background: var(--bg-hover); }
+.table tbody tr:last-child td { border-bottom: 0; }
+
+.h-date { width: 150px; color: var(--text-2); white-space: nowrap; font-size: 12.5px; }
+.h-name { min-width: 220px; }
+.h-name .h-ico { display: inline-flex; color: var(--text-3); margin-right: 10px; vertical-align: -3px; }
+.h-name-t { font-weight: 550; }
+.h-size { width: 90px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.h-dir { max-width: 240px; }
+.h-dir-t {
+  display: inline-block;
+  max-width: calc(100% - 36px);
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.h-open { vertical-align: middle; margin-left: 6px; }
+#historyEmpty .empty { padding: 64px 24px; }

@@ -1,0 +1,275 @@
+/* ── 5. App shell ──────────────────────────────────────────────────────── */
+
+#app {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  /* Sidebar always on the LEFT in every language.  Both knobs matter:
+     - normal flex row lays out the first DOM child (#sidebar) first, i.e.
+       on the left;
+     - direction: ltr stops the RTL document direction from flipping that
+       row (under dir=rtl a plain flex row lays out first-child-right).
+       Feature containers re-enable rtl individually. */
+  direction: ltr;
+  flex-direction: row;
+  height: 100vh;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* #app pins its own layout direction (see above); the main column restores
+     the document direction so Persian content flows RTL again. */
+  direction: rtl;
+}
+html:not([dir="rtl"]) .app-main { direction: ltr; }
+
+#content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 30px 34px;
+  scroll-behavior: smooth;
+}
+
+/* ── 6. Sidebar ────────────────────────────────────────────────────────── */
+
+#sidebar {
+  position: relative;
+  width: var(--sidebar-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 14px 14px;
+  background: color-mix(in srgb, var(--bg-secondary) 82%, transparent);
+  backdrop-filter: blur(18px);
+  /* Sidebar sits on the LEFT and faces the content on its right edge.
+     direction: ltr pins the internal layout — icon/text order, badge side,
+     indicator edge — so the RTL document direction never mirrors it. */
+  direction: ltr;
+  border-right: 1px solid var(--border);
+  transition: width var(--dur-3) var(--ease-out);
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 8px 20px;
+  user-select: none;
+}
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 11px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: opacity var(--dur-2);
+}
+.brand-text strong { font-size: 16px; font-weight: 700; letter-spacing: 0.02em; }
+.brand-text span { font-size: 11.5px; color: var(--text-3); }
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Thin separator between the everyday nav group and the management group.
+   Sidebar has its own LTR direction (see #sidebar), so the divider renders
+   identically in LTR and RTL. */
+.nav-divider {
+  height: 1px;
+  margin: 7px 6px;
+  background: var(--border);
+  flex: none;
+}
+
+.nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 42px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-ring);
+  transition: transform var(--dur-3) var(--ease-spring), height var(--dur-3) var(--ease-spring);
+  z-index: 1;
+}
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background var(--dur-2), color var(--dur-2);
+}
+.nav-item .ico { width: 19px; height: 19px; transition: transform var(--dur-2) var(--ease-spring); }
+.nav-item:hover { background: var(--bg-hover); color: var(--text-1); }
+.nav-item:hover .ico { transform: scale(1.08); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); }
+[data-theme="light"] .nav-item.active { color: var(--accent); }
+
+.nav-label { transition: opacity var(--dur-2); }
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--dur-2);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.side-speed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.side-speed-pulse {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 0 var(--success-soft);
+  animation: pulse 2.4s infinite;
+}
+.side-speed-text { display: flex; flex-direction: column; line-height: 1.25; transition: opacity var(--dur-2); }
+.side-speed-val { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.side-speed-lbl { font-size: 11px; color: var(--text-3); }
+
+/* Collapsed */
+body.sidebar-collapsed #sidebar { width: var(--sidebar-w-min); }
+body.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+body.sidebar-collapsed .brand-text,
+body.sidebar-collapsed .nav-label,
+body.sidebar-collapsed .side-speed-text { opacity: 0; pointer-events: none; width: 0; }
+body.sidebar-collapsed .nav-item { justify-content: center; padding: 0; gap: 0; }
+body.sidebar-collapsed .nav-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  min-width: 15px;
+  height: 15px;
+  font-size: 9.5px;
+  padding: 0 4px;
+}
+body.sidebar-collapsed .side-speed { justify-content: center; padding: 11px 0; }
+body.sidebar-collapsed .nav-indicator { left: 4px; }
+
+/* ── 7. Titlebar ───────────────────────────────────────────────────────── */
+
+#titlebar {
+  height: var(--titlebar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-app) 66%, transparent);
+  backdrop-filter: blur(18px);
+  user-select: none;
+  z-index: 30;
+}
+
+.tb-cluster { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tb-right { padding-right: 0; }
+
+.tb-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 320px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-3);
+  transition: border-color var(--dur-2), box-shadow var(--dur-2), width var(--dur-3) var(--ease-out), background var(--dur-2);
+}
+.tb-search:focus-within {
+  width: 380px;
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--bg-card);
+  color: var(--text-1);
+}
+.tb-search .ico { width: 15px; height: 15px; }
+.tb-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  color: var(--text-1);
+  font-size: 13px;
+}
+.tb-search input::placeholder { color: var(--text-3); }
+.tb-search input::-webkit-search-cancel-button { display: none; }
+.tb-search kbd { transition: opacity var(--dur-2); }
+.tb-search:focus-within kbd { opacity: 0; width: 0; padding: 0; border: 0; }
+
+.tb-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border-strong);
+  margin: 0 4px;
+  flex: none;
+}
+
+.win-controls { display: flex; align-items: stretch; height: var(--titlebar-h); }
+.win-btn {
+  width: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  transition: background var(--dur-1), color var(--dur-1);
+}
+.win-btn svg { width: 15px; height: 15px; }
+.win-btn:hover { background: var(--bg-hover); color: var(--text-1); }
+.win-close:hover { background: #E81123; color: #fff; }
+.win-close:active { background: #C50F1F; color: #fff; }

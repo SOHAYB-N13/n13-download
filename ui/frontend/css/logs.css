@@ -1,0 +1,17 @@
+/* ── 20. Logs ──────────────────────────────────────────────────────────── */
+
+.log-view {
+  height: calc(100vh - var(--titlebar-h) - 210px);
+  min-height: 300px;
+  overflow-y: auto;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-app) 60%, transparent);
+  padding: 14px 18px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.log-line { color: var(--text-2); white-space: pre-wrap; word-break: break-all; }
+.log-line.warn { color: var(--warning); }
+.log-line.err { color: var(--danger); }

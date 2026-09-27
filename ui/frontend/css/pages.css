@@ -1,0 +1,29 @@
+/* ── 9. Page header & pages ────────────────────────────────────────────── */
+
+.page-head { padding: 20px 2px 22px; user-select: none; }
+.page-head h1 {
+  font-size: 25px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.page-head p { margin-top: 4px; font-size: 13.5px; color: var(--text-2); }
+
+.page { display: none; }
+.page.active { display: block; }
+
+.page-enter .stat,
+.page-enter .panel,
+.page-enter .card,
+.page-enter .set-card,
+.page-enter .table-card,
+.page-enter .dl-toolbar,
+.page-enter .server-card {
+  animation: rise var(--dur-3) var(--ease-out) backwards;
+}
+.page-enter .stat { animation-delay: var(--d, 0ms); }
+.page-enter .panel:nth-child(2) { animation-delay: 60ms; }
+
+.page-actions {
+  display: flex;
+  justify-content: flex-end;

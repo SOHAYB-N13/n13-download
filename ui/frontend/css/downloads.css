@@ -1,0 +1,413 @@
+/* ── 12. Downloads toolbar ─────────────────────────────────────────────── */
+
+.dl-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.chips {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+}
+
+.chip {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-2);
+  transition: background var(--dur-2), color var(--dur-2);
+}
+.chip:hover { color: var(--text-1); background: var(--bg-hover); }
+.chip.active { background: var(--accent-soft); color: var(--accent); }
+.chip-n {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-3);
+  background: var(--bg-active);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+  font-variant-numeric: tabular-nums;
+  transition: color var(--dur-2), background var(--dur-2);
+}
+.chip.active .chip-n { color: var(--accent); background: var(--accent-soft); }
+
+.dl-toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+.sort-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--text-3);
+  transition: border-color var(--dur-2);
+}
+.sort-wrap:hover, .sort-wrap:focus-within { border-color: var(--border-strong); }
+.sort-wrap .ico { width: 15px; height: 15px; }
+.sort-wrap select {
+  background: none;
+  border: 0;
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  outline: none;
+}
+.sort-wrap option { background: var(--bg-elevated); color: var(--text-1); }
+
+/* ── 13. Downloads list ────────────────────────────────────────────────── */
+
+.dl-head {
+  display: grid;
+  grid-template-columns: var(--dl-cols);
+  gap: 14px;
+  align-items: center;
+  padding: 0 16px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  user-select: none;
+}
+.dl-head::before { content: ""; }
+
+.dl-list { display: flex; flex-direction: column; gap: 8px; }
+
+.dl-row {
+  display: grid;
+  grid-template-columns: var(--dl-cols);
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 84%, transparent);
+  transition: border-color var(--dur-2), background var(--dur-2), box-shadow var(--dur-2), transform var(--dur-2);
+}
+.dl-row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+.dl-row.sel,
+.dl-row.sel:hover {
+  border-color: var(--accent-ring);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--bg-card));
+  box-shadow: 0 0 0 1px var(--accent-soft), 0 4px 18px var(--accent-ring);
+}
+.dl-row.flash { animation: flash 1.6s var(--ease-out); }
+
+.dl-ico {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+.dl-ico[data-type="archive"] { color: var(--warning); background: var(--warning-soft); }
+.dl-ico[data-type="video"] { color: var(--violet); background: var(--violet-soft); }
+.dl-ico[data-type="audio"] { color: var(--info); background: var(--info-soft); }
+.dl-ico[data-type="image"] { color: var(--success); background: var(--success-soft); }
+.dl-ico[data-type="document"] { color: var(--accent); background: var(--accent-soft); }
+.dl-ico[data-type="app"] { color: var(--danger); background: var(--danger-soft); }
+
+.dl-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dl-name {
+  font-size: 13.5px;
+  font-weight: 580;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dl-progress { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+/* Unified progress component:
+   [Elapsed]━━━━━━━━━[ 79% ]━━━━━━━━━━[Remaining]  */
+.dl-time {
+  flex: none;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+.progress {
+  flex: 1;
+  height: 14px;
+  min-width: 70px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hi));
+  transition: width 0.45s linear;
+}
+.progress-fill.p-downloading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.35) 50%, transparent 80%);
+  background-size: 200% 100%;
+  animation: sheen 1.6s linear infinite;
+}
+.progress-fill.p-complete { background: var(--success); }
+.progress-fill.p-failed { background: var(--danger); }
+.progress-fill.p-paused { background: var(--warning); }
+.progress-fill.p-stopped { background: var(--text-3); }
+.progress-fill.p-queued { background: var(--bg-active); }
+.dl-pct {
+  position: relative;
+  z-index: 1;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75), 0 0 3px rgba(0, 0, 0, 0.45);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.dl-cell {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-cell-main { font-weight: 550; color: var(--text-1); }
+.dl-cell-dim { color: var(--text-3); font-weight: 450; }
+.dl-speed { color: var(--accent); font-weight: 580; }
+.dl-row[data-state="Failed"] .dl-speed,
+.dl-row[data-state="Complete"] .dl-speed,
+.dl-row[data-state="Paused"] .dl-speed { color: var(--text-3); font-weight: 450; }
+
+.dl-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dl-err { color: var(--danger); display: inline-flex; cursor: help; }
+.dl-err .ico { width: 13px; height: 13px; }
+
+.dl-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.dl-actions .icon-btn { width: 30px; height: 30px; border-radius: 8px; }
+.dl-actions .icon-btn .ico { width: 15px; height: 15px; }
+.dl-actions .icon-btn { opacity: 0.65; }
+.dl-row:hover .dl-actions .icon-btn,
+.dl-row:focus-within .dl-actions .icon-btn { opacity: 1; }
+
+.row-enter { animation: rowIn var(--dur-3) var(--ease-out) backwards; }
+.row-leave { animation: rowOut 180ms var(--ease-out) forwards; }
+
+/* ── 26c-bis. Category filter strip ────────────────────────────────────── */
+
+/* Sits between the queue strip and the list.  Only rendered when the list
+   actually spans more than one category, so it costs nothing in the common
+   single-category case. */
+.cat-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.cat-strip[hidden] { display: none; }
+
+/* Reuses the .cat-chip look from the new-download dialog, plus a count. */
+.cat-strip .cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+}
+.cat-strip .cat-n {
+  font-size: 11px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--text-1) 8%, transparent);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+  line-height: 1.5;
+}
+.cat-strip .cat-chip.active .cat-n {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* ── 26d. Selection action bar ─────────────────────────────────────────── */
+
+/* Docked under the content area.  Present only while a download is selected,
+   so common actions never require a right-click. */
+.sel-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--glass-strong);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.26);
+  z-index: 25;
+  animation: selBarIn var(--dur-2) var(--ease-out);
+}
+.sel-bar[hidden] { display: none; }
+
+.sb-count { display: inline-flex; align-items: center; gap: 7px; padding-inline-end: 4px; }
+.sb-count-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.sb-count-lbl { font-size: 12.5px; color: var(--text-2); }
+.sb-clear { width: 26px; height: 26px; border-radius: 7px; }
+.sb-clear .ico { width: 13px; height: 13px; }
+
+.sb-divider { width: 1px; height: 22px; background: var(--border); flex: none; }
+.sb-spacer { flex: 1; }
+.sb-more-hint { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+
+.sb-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 11px;
+  border-radius: var(--r-xs);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+  position: relative;
+  overflow: hidden;
+  transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
+}
+.sb-btn .ico { width: 15px; height: 15px; }
+.sb-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border); }
+.sb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sb-btn:disabled { opacity: 0.36; cursor: default; }
+.sb-btn.primary { background: var(--accent); color: var(--on-accent); }
+.sb-btn.primary:hover:not(:disabled) { background: var(--accent-hi); border-color: transparent; }
+.sb-btn.danger { color: var(--danger); }
+.sb-btn.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger-soft); }
+
+/* Connections cell */
+.dl-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.dl-conn .ico { width: 13px; height: 13px; color: var(--text-3); }
+.dl-conn.live { color: var(--text-1); font-weight: 580; }
+.dl-conn.live .ico { color: var(--accent); }
+
+/* Per-download speed-limit badge shown in the row when a cap is set */
+.dl-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-weight: 620;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+}
+
+@keyframes selBarIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Rename / speed-limit dialog bits */
+.rename-row { display: flex; align-items: center; gap: 8px; }
+.rename-row .input { flex: 1; min-width: 0; }
+.rename-ext {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 9px 11px;
+  white-space: nowrap;
+}
+.unit-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  /* Units and numeric ranges are LTR data, not prose.  Without isolating
+     them the bidi algorithm reorders "0–10" to "10-0" under `dir="rtl"`. */
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-size: 12.5px;
+  font-weight: 580;
+  color: var(--text-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }

@@ -279,6 +279,9 @@ const I18N = {
       "stat.download_speed": "Download speed",
       "stat.network_usage": "Network usage",
       "stat.disk_free": "Disk free",
+      "ov.downloads": "Downloads",
+      "ov.transfer": "Speed & network",
+      "ov.storage": "Storage",
 
       // Download list / history columns
       "col.name": "Name",
@@ -1134,6 +1137,9 @@ const I18N = {
       "stat.download_speed": "سرعت دانلود",
       "stat.network_usage": "استفاده از شبکه",
       "stat.disk_free": "فضای آزاد دیسک",
+      "ov.downloads": "دانلودها",
+      "ov.transfer": "سرعت و شبکه",
+      "ov.storage": "حافظه",
 
       // Download list / history columns
       "col.name": "نام",

@@ -1,0 +1,300 @@
+/* ── 10. Dashboard overview (dense analytics) ──────────────────────────────
+   Grouped, information-dense layout:
+   [ Downloads (4 tiles) | Throughput (2 tiles) | Storage (1 tile) ]
+   Wide: 3 group columns (6/3/3 of a 12-col grid). Medium: 2 columns.
+   Narrow: single column. Tiles are ~62px tall so everything sits above
+   the fold. Logical properties are used throughout for LTR/RTL parity. */
+
+.ov-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+  align-items: stretch;
+}
+.ov-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 10px;
+  gap: 8px;
+}
+.ov-group--downloads { grid-column: span 6; }
+.ov-group--transfer { grid-column: span 3; }
+.ov-group--storage { grid-column: span 3; }
+
+.ov-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.ov-group-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.ov-group-title::after {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 18px;
+  margin-top: 3px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  opacity: 0.7;
+}
+.ov-group-hint {
+  margin-inline-start: auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ov-tiles { display: grid; gap: 8px; min-width: 0; }
+.ov-tiles--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ov-tiles--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ov-tiles--1 { grid-template-columns: minmax(0, 1fr); flex: 1; }
+
+/* Keep legacy .stats-grid selector working (tests / cached markup). */
+.stats-grid { display: contents; }
+
+/* ── Compact stat tile ─────────────────────────────────────────────────── */
+.stat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+  overflow: hidden;
+  transition: transform var(--dur-2) var(--ease-out), border-color var(--dur-2), box-shadow var(--dur-2);
+}
+.stat:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.stat::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  opacity: 0;
+}
+.stat:hover::before, .stat:focus-within::before { opacity: 0.8; }
+
+.stat-ico {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.stat-ico .ico { width: 15px; height: 15px; }
+.tint-accent { color: var(--accent); background: var(--accent-soft); }
+.tint-blue { color: var(--info); background: var(--info-soft); }
+.tint-green { color: var(--success); background: var(--success-soft); }
+.tint-red { color: var(--danger); background: var(--danger-soft); }
+.tint-amber { color: var(--warning); background: var(--warning-soft); }
+.tint-violet { color: var(--violet); background: var(--violet-soft); }
+.tint-cyan { color: var(--info); background: var(--info-soft); }
+
+.stat-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.stat-value {
+  font-size: 19px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stat-label {
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-2);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stat-sub {
+  font-size: 10.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stat-sub:empty { display: none; }
+
+/* Speed tile keeps its live sparkline, tucked to the inline-end edge. */
+.stat-spark {
+  position: absolute;
+  inset-inline-end: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 84px;
+  height: 34px;
+  opacity: 0.8;
+  pointer-events: none;
+  mask-image: linear-gradient(90deg, transparent, #000 30%);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 30%);
+}
+.stat:has(.stat-spark) .stat-info { max-width: calc(100% - 92px); }
+[dir="rtl"] .stat-spark { transform: translateY(-50%) scaleX(-1); }
+
+.ring {
+  --p: 0;
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-inline-start: auto;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--bg-active) 0);
+  transition: background var(--dur-3);
+}
+.ring::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--bg-card);
+}
+.ring.warn { background: conic-gradient(var(--danger) calc(var(--p) * 1%), var(--bg-active) 0); }
+
+/* ── Responsive: 2 columns on medium, 1 on narrow ───────────────────────── */
+@media (max-width: 1200px) {
+  .ov-group--downloads { grid-column: span 12; }
+  .ov-group--transfer { grid-column: span 6; }
+  .ov-group--storage { grid-column: span 6; }
+}
+@media (max-width: 760px) {
+  .ov-tiles--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-tiles--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-group--transfer, .ov-group--storage { grid-column: span 12; }
+}
+@media (max-width: 460px) {
+  .ov-tiles--2 { grid-template-columns: minmax(0, 1fr); }
+  .stat-spark { display: none; }
+  .stat:has(.stat-spark) .stat-info { max-width: 100%; }
+}
+
+/* ── 11. Dashboard panels ──────────────────────────────────────────────── */
+
+.dash-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.panel {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 86%, transparent);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-head h2 { font-size: 14.5px; font-weight: 620; }
+.panel-head .btn { margin-inline-start: auto; }
+.panel-count {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.panel-count:empty { display: none; }
+.panel-body { padding: 10px; display: flex; flex-direction: column; gap: 4px; min-height: 120px; }
+
+.mini-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur-2);
+}
+.mini-row:hover { background: var(--bg-hover); }
+
+.mini-ico {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+.mini-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.mini-name {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-sub { font-size: 11.5px; color: var(--text-3); }
+.mini-progress {
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.mini-fill { display: block; height: 100%; border-radius: inherit; transition: width 0.4s linear; }
+.mini-speed {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 74px;
+  text-align: end;
+}
+.mini-status {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mini-status.ok { color: var(--success); background: var(--success-soft); }
+.mini-status.bad { color: var(--danger); background: var(--danger-soft); }

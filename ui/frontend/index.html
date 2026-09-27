@@ -35,11 +35,7 @@ try {
     </div>
 
     <nav class="nav" id="mainNav" aria-label="Main navigation">
-      <button class="nav-item active" data-page="dashboard" data-i18n-tip="nav.dashboard" aria-current="page">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>
-        <span class="nav-label" data-i18n="nav.dashboard">Dashboard</span>
-      </button>
-      <button class="nav-item" data-page="downloads" data-i18n-tip="nav.downloads">
+      <button class="nav-item active" data-page="downloads" data-i18n-tip="nav.downloads" aria-current="page">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg>
         <span class="nav-label" data-i18n="nav.downloads">Downloads</span>
         <span class="nav-badge" id="navBadge" hidden>0</span>
@@ -61,6 +57,19 @@ try {
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.3 2.2 3.5 5.2 3.5 8.5s-1.2 6.3-3.5 8.5c-2.3-2.2-3.5-5.2-3.5-8.5s1.2-6.3 3.5-8.5Z"/></svg>
         <span class="nav-label" data-i18n="nav.browser">Browser</span>
       </button>
+      <div class="nav-divider" role="separator" aria-hidden="true"></div>
+      <button class="nav-item" data-page="logs" data-i18n-tip="nav.logs">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5"/><path d="M11.5 17h7"/><rect x="3" y="4" width="18" height="16" rx="2.5"/></svg>
+        <span class="nav-label" data-i18n="nav.logs">Logs</span>
+      </button>
+      <button class="nav-item" data-page="dashboard" data-i18n-tip="nav.dashboard">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>
+        <span class="nav-label" data-i18n="nav.dashboard">Dashboard</span>
+      </button>
+      <button class="nav-item" data-page="settings" data-i18n-tip="nav.settings">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8c.6 0 1 .4 1.1 1l.3 1.5c.5.2 1 .5 1.5.8l1.4-.6c.6-.2 1.2 0 1.5.5l1 1.7c.3.5.2 1.2-.2 1.6l-1.2 1.1c.1.5.1.9.1 1.4s0 1-.1 1.4l1.2 1.1c.4.4.5 1 .2 1.6l-1 1.7c.3.5-1 .7-1.5.5l-1.4-.6c-.5.3-1 .6-1.5.8l-.3 1.5c-.1.6-.6 1-1.1 1h-2c-.6 0-1-.4-1.1-1l-.3-1.5a7 7 0 0 1-1.5-.8l-1.4.6c-.6.2-1.2 0-1.5-.5l-1-1.7a1.2 1.2 0 0 1 .2-1.6l1.2-1.1a7.3 7.3 0 0 1 0-2.8L5.2 9.3a1.2 1.2 0 0 1-.2-1.6l1-1.7c.3-.5 1-.7 1.5-.5l1.4.6c.5-.3 1-.6 1.5-.8l.3-1.5c.1-.6.6-1 1.1-1h2Z"/></svg>
+        <span class="nav-label" data-i18n="nav.settings">Settings</span>
+      </button>
     </nav>
 
     <div class="sidebar-foot">
@@ -71,14 +80,6 @@ try {
           <span class="side-speed-lbl" data-i18n="sidebar.total_speed">Total speed</span>
         </div>
       </div>
-      <button class="nav-item" data-page="settings" data-i18n-tip="nav.settings">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8c.6 0 1 .4 1.1 1l.3 1.5c.5.2 1 .5 1.5.8l1.4-.6c.6-.2 1.2 0 1.5.5l1 1.7c.3.5.2 1.2-.2 1.6l-1.2 1.1c.1.5.1.9.1 1.4s0 1-.1 1.4l1.2 1.1c.4.4.5 1 .2 1.6l-1 1.7c-.3.5-1 .7-1.5.5l-1.4-.6c-.5.3-1 .6-1.5.8l-.3 1.5c-.1.6-.6 1-1.1 1h-2c-.6 0-1-.4-1.1-1l-.3-1.5a7 7 0 0 1-1.5-.8l-1.4.6c-.6.2-1.2 0-1.5-.5l-1-1.7a1.2 1.2 0 0 1 .2-1.6l1.2-1.1a7.3 7.3 0 0 1 0-2.8L5.2 9.3a1.2 1.2 0 0 1-.2-1.6l1-1.7c.3-.5 1-.7 1.5-.5l1.4.6c.5-.3 1-.6 1.5-.8l.3-1.5c.1-.6.6-1 1.1-1h2Z"/></svg>
-        <span class="nav-label" data-i18n="nav.settings">Settings</span>
-      </button>
-      <button class="nav-item" data-page="logs" data-i18n-tip="nav.logs">
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7.5 4.5 4.5L5 16.5"/><path d="M11.5 17h7"/><rect x="3" y="4" width="18" height="16" rx="2.5"/></svg>
-        <span class="nav-label" data-i18n="nav.logs">Logs</span>
-      </button>
     </div>
   </aside>
 
@@ -167,18 +168,23 @@ try {
       </header>
 
       <!-- ── Dashboard ─────────────────────────────────────────────── -->
-      <section class="page active" id="page-dashboard" aria-label="Dashboard">
-        <div class="stats-grid">
+      <section class="page" id="page-dashboard" aria-label="Dashboard">
+        <div class="ov-grid" role="group" aria-label="Overview">
+          <section class="ov-group ov-group--downloads" aria-label="Downloads">
+            <header class="ov-group-head">
+              <span class="ov-group-title" data-i18n="ov.downloads">Downloads</span>
+              <span class="ov-group-hint" id="stTodaySub">0 B downloaded</span>
+            </header>
+            <div class="ov-tiles ov-tiles--4">
           <article class="stat" style="--d:0ms">
             <span class="stat-ico tint-accent"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stToday">0</span>
               <span class="stat-label" data-i18n="stat.downloads_today">Downloads today</span>
-              <span class="stat-sub" id="stTodaySub">0 B downloaded</span>
             </div>
           </article>
 
-          <article class="stat" style="--d:50ms">
+          <article class="stat" style="--d:40ms">
             <span class="stat-ico tint-blue"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M4.5 20.5h15"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stActive">0</span>
@@ -187,7 +193,7 @@ try {
             </div>
           </article>
 
-          <article class="stat" style="--d:100ms">
+          <article class="stat" style="--d:80ms">
             <span class="stat-ico tint-green"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5L19.5 7"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stDone">0</span>
@@ -196,7 +202,7 @@ try {
             </div>
           </article>
 
-          <article class="stat" style="--d:150ms">
+          <article class="stat" style="--d:120ms">
             <span class="stat-ico tint-red"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8.5V13"/><path d="M12 16.8h.01"/><path d="M10.2 3.6 2.4 17.3a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.8 3.6a2 2 0 0 0-3.6 0Z"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stFailed">0</span>
@@ -204,8 +210,16 @@ try {
               <span class="stat-sub" data-i18n="fmt.retry_available">retry available</span>
             </div>
           </article>
+            </div>
+          </section>
 
-          <article class="stat stat-wide" style="--d:200ms">
+          <section class="ov-group ov-group--transfer" aria-label="Throughput">
+            <header class="ov-group-head">
+              <span class="ov-group-title" data-i18n="ov.transfer">Speed & network</span>
+            </header>
+            <div class="ov-tiles ov-tiles--1">
+
+          <article class="stat" style="--d:160ms">
             <span class="stat-ico tint-cyan"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 13.5 3.5-3.5"/><path d="M3.8 19.3a9 9 0 1 1 16.4 0"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stSpeed">0 B/s</span>
@@ -215,7 +229,7 @@ try {
             <canvas class="stat-spark" id="speedSpark" aria-hidden="true"></canvas>
           </article>
 
-          <article class="stat" style="--d:250ms">
+          <article class="stat" style="--d:200ms">
             <span class="stat-ico tint-violet"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 12h-3.8l-2.7 8L9.3 4l-2.7 8H2.5"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stNetwork">0 B</span>
@@ -223,8 +237,15 @@ try {
               <span class="stat-sub" data-i18n="fmt.this_session">this session</span>
             </div>
           </article>
+            </div>
+          </section>
 
-          <article class="stat" style="--d:300ms">
+          <section class="ov-group ov-group--storage" aria-label="Storage">
+            <header class="ov-group-head">
+              <span class="ov-group-title" data-i18n="ov.storage">Storage</span>
+            </header>
+            <div class="ov-tiles ov-tiles--1">
+          <article class="stat" style="--d:240ms">
             <span class="stat-ico tint-amber"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2v-11Z"/><circle cx="12" cy="11.5" r="2.8"/><path d="M8 17.5h8"/></svg></span>
             <div class="stat-info">
               <span class="stat-value" id="stDisk">—</span>
@@ -233,6 +254,8 @@ try {
             </div>
             <span class="ring" id="diskRing" style="--p:0" role="img" data-i18n-aria-label="stat.disk_free"></span>
           </article>
+            </div>
+          </section>
         </div>
 
         <div class="dash-cols">
@@ -255,7 +278,7 @@ try {
       </section>
 
       <!-- ── Downloads ─────────────────────────────────────────────── -->
-      <section class="page" id="page-downloads" aria-label="Downloads">
+      <section class="page active" id="page-downloads" aria-label="Downloads">
         <div class="dl-toolbar">
           <div class="chips" id="filterChips" role="tablist" aria-label="Filter downloads">
             <button class="chip active" data-filter="all"><span data-i18n="filter.all">All</span> <span class="chip-n">0</span></button>
@@ -571,10 +594,32 @@ try {
 <div class="rz rz-se" data-dir="se" aria-hidden="true"></div>
 <div class="rz rz-sw" data-dir="sw" aria-hidden="true"></div>
 
+<!-- Load order (intentional, dependency-safe):
+     1. platform layer: utils → i18n → api
+     2. component modules → Components facade
+     3. core layer: prefs, navigation, events, shortcuts
+     4. feature modules: downloads, add-download, settings (SettingsUI)
+     5. app (bootstrap/orchestration) → queue (self-bootstrapping feature)
+     All files are plain globals — no ES modules yet. -->
 <script src="js/utils.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/api.js"></script>
+<script src="js/components/toast.js"></script>
+<script src="js/components/modal.js"></script>
+<script src="js/components/context-menu.js"></script>
+<script src="js/components/download-row.js"></script>
+<script src="js/components/dialogs.js"></script>
+<script src="js/components/rule-editor.js"></script>
+<script src="js/components/empty-state.js"></script>
 <script src="js/components.js"></script>
+<script src="js/core/prefs.js"></script>
+<script src="js/core/navigation.js"></script>
+<script src="js/core/events.js"></script>
+<script src="js/core/shortcuts.js"></script>
+<script src="js/features/downloads/downloads-view.js"></script>
+<script src="js/features/downloads/downloads-actions.js"></script>
+<script src="js/features/add-download/add-download.js"></script>
+<script src="js/features/settings/settings.js"></script>
 <script src="js/app.js"></script>
 <script src="js/queue.js"></script>
 </body>

@@ -1,0 +1,51 @@
+/* ── 27. Accessibility & motion preferences ────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .stat, .panel, .card, .dl-row, .set-card, .table-card, .modal, #contextMenu, .toast {
+    border: 1px solid CanvasText;
+  }
+  .btn-primary { border: 1px solid CanvasText; }
+  .badge { border: 1px solid currentColor; }
+}
+
+/* ── 28. Responsive ────────────────────────────────────────────────────── */
+
+/* Hidden columns must keep occupying their (0-width) grid tracks, otherwise
+   auto-placement shifts the remaining cells into the wrong columns. */
+@media (max-width: 1500px) {
+  :root { --dl-cols: 40px minmax(180px, 1.5fr) minmax(140px, 0.9fr) 118px 92px 72px 124px 100px; }
+}
+
+@media (max-width: 1340px) {
+  :root { --dl-cols: 40px minmax(170px, 1.5fr) minmax(130px, 0.9fr) 0 88px 64px 118px 96px; }
+  .dl-size, .dl-head .c-size { visibility: hidden; overflow: hidden; }
+  .dash-cols { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1220px) {
+  :root { --dl-cols: 40px minmax(150px, 1.4fr) minmax(110px, 0.8fr) 0 0 0 110px 92px; }
+  .dl-speed, .dl-head .c-speed { visibility: hidden; overflow: hidden; }
+  .dl-conn, .dl-head .c-conn { visibility: hidden; overflow: hidden; }
+  #content { padding: 8px 20px 28px; }
+}
+
+@media (min-width: 1500px) {
+  .stat-wide { grid-column: span 2; }
+}
+
+@media (min-width: 2200px) {
+  /* 4K breathing room */
+  #content { padding: 12px 44px 44px; }
+  .page-head h1 { font-size: 28px; }
+  .stats-grid { gap: 14px; }
+  .settings-wrap { max-width: 1320px; }
+}

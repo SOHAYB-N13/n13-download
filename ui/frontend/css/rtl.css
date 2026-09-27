@@ -1,0 +1,99 @@
+/* ── Bidi isolation for data values ────────────────────────────────────────
+   These elements hold measurements ("3.2 GB / 7.6 GB", "5.9 MB/s", "43%",
+   "621 MB", "Today · 04:45 AM"), not prose.  Under `dir="rtl"` the bidi
+   algorithm lays the runs out right-to-left and scrambles them — "3.2 GB /
+   7.6 GB" became "7.6 GB / 3.2 GB", "621 MB" became "MB 621", and
+   "04:45 AM" became "AM 04:45".  `plaintext` resolves each element's
+   direction from its own first strong character, so measurements stay LTR
+   while genuinely translated values ("نامحدود") still read RTL.
+
+   Keep this list exhaustive: the same class of bug reappears on every new
+   surface that prints a number, so cover the downloads table, the dashboard
+   stat cards, the mini lists, the history table and the queue strip. */
+.dl-cell,
+.dl-time,
+.dl-pct,
+.dl-conn,
+.prop-val,
+.cat-n,
+.qs-val,
+.stat-value,
+.stat-sub,
+.ov-group-hint,
+.mini-sub,
+.mini-speed,
+.mini-name,
+.h-date,
+.h-size,
+.h-meta,
+.h-name-t,
+.h-dir-t {
+  unicode-bidi: plaintext;
+}
+
+/* Multi-field dialog body: sibling .field blocks have no margin of their own,
+   so give the stack an explicit rhythm. */
+.pri-body { display: flex; flex-direction: column; gap: 14px; }
+
+/* Quick scheduler editor, opened from the queue strip. Mirrors the speed-limit
+   dialog's shell so the two strip controls look and behave identically.
+   `.sched-days` is shared with Settings → Scheduler, which reuses the same
+   weekday chips for `schedule_days`. */
+.sched-body { display: flex; flex-direction: column; gap: 16px; }
+.sched-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sched-row .field-info { min-width: 0; }
+.sched-window { display: flex; align-items: center; gap: 10px; }
+.sched-window .input { flex: 1 1 0; min-width: 0; }
+.sched-dash { color: var(--text-3); flex: none; }
+.sched-days { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Window/day controls are inert while the scheduler is off — show that. */
+.sched-body .input:disabled { opacity: .5; }
+.sched-days.off { opacity: .5; }
+
+/* Developer → diagnostics */
+.dev-tools { display: flex; flex-direction: column; gap: 14px; }
+.dev-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── RTL (Persian) layout helpers ──────────────────────────────────────── */
+
+[dir="rtl"] body { direction: rtl; }
+
+/* The titlebar is window chrome, not application content.  The caption buttons
+   (─ □ ✕) must stay in the top-right corner in every language — mirroring them
+   to the left, as a naive `direction: rtl` does, is wrong even for RTL
+   locales: native Windows and well-localised Persian apps keep Close on the
+   right.  So the bar's own flex order stays LTR; only the search field inside
+   it reads right-to-left. */
+[dir="rtl"] #titlebar { direction: ltr; }
+[dir="rtl"] .tb-search { direction: rtl; }
+
+/* The sidebar is pinned to the right by #app { flex-direction: row-reverse }
+   and runs its own internal LTR layout (see layout.css), so the RTL document
+   needs no sidebar overrides. */
+[dir="rtl"] .panel-head .btn { margin-inline-start: auto; margin-inline-end: 0; }
+[dir="rtl"] .dl-pct { text-align: left; }
+[dir="rtl"] .mini-speed { text-align: left; }
+[dir="rtl"] .h-name .h-ico { margin-right: 0; margin-left: 10px; }
+[dir="rtl"] .h-open { margin-left: 0; margin-right: 6px; }
+[dir="rtl"] .h-actions { text-align: left; }
+[dir="rtl"] .table th { text-align: right; }
+[dir="rtl"] .set-saved { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .stat-spark { /* positioned with inset-inline-end; only mirror the drawing */ transform: translateY(-50%) scaleX(-1); }
+[dir="rtl"] .stat:has(.stat-spark) .stat-info { max-width: calc(100% - 92px); }
+[dir="rtl"] .ring { /* positioned with margin-inline-start; no override needed */ }
+[dir="rtl"] .switch-track::after { left: auto; right: 2px; }
+[dir="rtl"] .switch input:checked + .switch-track::after { transform: translateX(-18px); }
+[dir="rtl"] .ctx-item { text-align: right; }
+[dir="rtl"] .ctx-item kbd { margin-left: 0; margin-right: auto; }
+[dir="rtl"] #toastStack { right: auto; left: 18px; }
+[dir="rtl"] .nd-url-ico { left: auto; right: 14px; }
+[dir="rtl"] .nd-paste { right: auto; left: 8px; }
+[dir="rtl"] .nd-url { padding-left: 48px; padding-right: 42px; }
+[dir="rtl"] .catdir-name { text-align: right; }
+[dir="rtl"] .step-text { text-align: right; }
+[dir="rtl"] .server-kv code { direction: ltr; }
+[dir="rtl"] .h-dir-t { direction: ltr; text-align: right; }
+/* Log lines are technical output, always LTR.  Without this the neutral "["
+   opening the timestamp takes the RTL paragraph direction and the timestamp
+   jumps to the end of the line, so the same log reads differently in fa. */
+[dir="rtl"] .log-line { direction: ltr; text-align: left; }

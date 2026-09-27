@@ -1,0 +1,136 @@
+/* ── 26b. Command bar ──────────────────────────────────────────────────── */
+
+/* The primary actions live in a permanent strip under the titlebar so they
+   are reachable from every page without opening a menu. */
+.command-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 55%, transparent);
+  z-index: 20;
+}
+.cmd-spacer { flex: 1; }
+
+.cmd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-size: 13.5px;
+  font-weight: 580;
+  font-family: inherit;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: background var(--dur-2), border-color var(--dur-2), transform var(--dur-2);
+}
+.cmd-btn .ico { width: 17px; height: 17px; }
+.cmd-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.cmd-btn:active { transform: translateY(1px); }
+.cmd-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cmd-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hi));
+  border-color: transparent;
+  color: var(--on-accent);
+  box-shadow: var(--shadow-accent);
+}
+.cmd-primary:hover { background: linear-gradient(135deg, var(--accent-hi), var(--accent)); border-color: transparent; }
+.cmd-primary kbd { background: rgba(255, 255, 255, 0.2); color: var(--on-accent); border-color: transparent; }
+
+.cmd-btn kbd {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-3);
+}
+
+/* Browser-extension status pill */
+.ext-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
+  max-width: 320px;
+  transition: background var(--dur-2), border-color var(--dur-2);
+}
+.ext-pill:hover { background: var(--bg-hover); }
+.ext-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.ext-pill.on .ext-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.ext-pill.off .ext-dot { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.ext-pill.busy .ext-dot { background: var(--info); box-shadow: 0 0 0 3px var(--info-soft); animation: pulse 1.4s ease-in-out infinite; }
+.ext-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ext-title { font-size: 12.5px; font-weight: 600; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-sub { font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ext-action {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 620;
+  color: var(--accent);
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--border);
+}
+.ext-pill.on .ext-action { color: var(--text-3); }
+
+/* ── 26c. Queue strip ──────────────────────────────────────────────────── */
+
+.queue-strip {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+}
+.qs-item { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.qs-item .ico { width: 14px; height: 14px; color: var(--text-3); }
+.qs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.qs-dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.qs-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-soft); }
+.qs-val { font-weight: 640; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.qs-lbl { color: var(--text-3); }
+.qs-spacer { flex: 1; }
+.qs-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 580;
+  color: var(--text-1);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+.qs-btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.qs-btn.warn { color: var(--warning); border-color: var(--warning-soft); }
+.qs-btn.good { color: var(--success); border-color: var(--success-soft); }
