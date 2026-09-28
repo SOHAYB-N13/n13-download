@@ -1,315 +1,541 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+"/>
-  <img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="License: MIT"/>
-  <img src="https://img.shields.io/badge/Platform-Windows-blue.svg?style=for-the-badge&logo=windows&logoColor=white" alt="Platform: Windows"/>
-</p>
+⬇️ N13 Download Manager
 
-<h1 align="center">⬇️ N13 Download Manager</h1>
+A modern, open-source download manager for Windows — built for speed, control, and reliability.
 
-<p align="center">
-  <em>مدیر دانلود چندریسمانی</em> ·
-  <em>Multi-threaded download manager</em>
-</p>
+N13 Download Manager is a multi-threaded download manager designed to make downloading large files easier, faster, and more reliable.
+
+Split downloads into parallel connections, resume interrupted downloads, organize your queue, schedule downloads, send links directly from your browser, control bandwidth, and manage everything from a modern graphical interface.
+
+«No Python required for the Windows installer.»
 
 ---
 
-## 🇬🇧 English
+✨ Why N13?
 
-### 📖 About
+Downloading a file should be simple.
 
-**N13 Download Manager** (Terminal Download Manager, TDM) is a fast,
-multi-threaded download manager for Windows. It splits downloads into
-**multiple parallel parts**, supports **resume**, **batch downloads**, and even
-integrates with your **browser** so you can send any link straight to the
-manager.
+Copy a link → send it to N13 → let N13 handle the rest.
 
-Two interfaces are included:
+N13 combines the features you would expect from a modern download manager with tools for users who want more control over how their downloads work.
 
-- 🖥️ **Terminal (TUI)** — a polished Rich-based menu with live progress bars
-- 🌐 **Graphical (GUI)** — a dark, modern web UI (pywebview)
+🚀 Built for real downloads
 
-### 💿 Download the app (Windows)
+- ⚡ Multi-threaded downloads
+- ▶️ Resume interrupted downloads
+- 📦 Batch downloads
+- 🌐 Browser integration
+- 📋 Clipboard monitoring
+- 🗓️ Download scheduling
+- ⏱️ Bandwidth control
+- 🧠 Smart connection optimization
+- 🗂️ Automatic download rules and categories
+- 🖥️ Modern graphical interface
+- 💻 Terminal interface
+- 🖱️ System tray integration
+- 🔄 Automatic updates
+- 🗄️ Persistent download history
+- 🔐 Checksum verification
+- 🌍 English and Persian UI
 
-Get the ready-to-run **installer** — no Python required:
+---
 
-[⬇️ Download N13-Download-Manager-Setup.exe](https://github.com/SOHAYB-N13/n13-download/releases/latest)
+🎯 What makes N13 different?
 
-The installer bundles WebView2 setup, registers the `dldm://` protocol and is
-updated automatically from the app.
+N13 is not just a downloader that starts a request and waits for it to finish.
 
-### ✨ Features
+It is designed around the entire download workflow.
 
-| Feature | Description |
-| --- | --- |
-| ⚡ Multi-threaded | Downloads split into parallel parts (up to 64 threads) |
-| ▶️ Resume | Interrupted downloads restart from where they stopped |
-| 📦 Batch mode | Scan URL patterns, import lists from CSV / text files |
-| 🌐 Browser integration | Chrome extension + `dldm://` protocol + local relay server |
-| ✅ Checksum check | Verify downloads with MD5 or SHA-256 |
-| 🍪 Cookie support | Raw header, `cookies.txt`, or live browser cookies |
-| 🛡️ SSRF protection | Blocks access to private / local IP ranges |
-| ⏱️ Speed controls | Throttle bandwidth, pause/resume tasks |
-| 🔌 Auto shutdown | Queue-strip toggle: shut the PC down when every download finishes (60s warning, skipped if anything fails) |
-| 💾 Persistent config | Settings saved to `~/.config/terminal-download-manager/` |
-| 🗓️ Scheduler | Start / stop time windows and a night-time speed cap |
-| 📋 Clipboard monitor | Opt-in: auto-captures URLs copied to the clipboard |
-| 🗄️ SQLite task store | Crash-safe, persistent queue & download history |
-| 🔬 URL analyzer | Inspects a link first (name, size, type, range support) |
-| 🚦 Single instance | A second launch forwards the URL to the running instance |
-| 🧠 Smart optimizer | Auto-tunes connection count by file size and server stability |
-| ⚙️ Download rules | Rules route each link to the right folder/category automatically |
-| 🖱️ System tray | Tray icon with pause/resume/folder/settings and a live speed tooltip |
-| 🔄 Auto-updater | Checks GitHub Releases, verifies SHA-256, installs & restarts |
-| 💿 Installer | One-click Windows installer — no Python required |
-| 🌍 Multi-language | English and Persian (Farsi) UI with an i18n system, full RTL layout |
-| 📊 Dashboard overview | Dense grouped analytics: downloads, speed/network and storage at a glance |
-| 📥 Queue page | Drag & drop ordering, priorities, scheduler-aware planning, keyboard control |
-| 🧰 Command bar | Always-visible New download / Paste URL / Add batch actions |
-| ✅ Selection action bar | Multi-select with bulk pause, resume, retry, remove and priority |
-| 🗂️ Categories & priority | Per-download category routing, category filters, queue position control |
-| 🗓️ Scheduler modal | Inline start/stop windows, weekday selection and night speed cap |
-| 🗓️ Optional end time | Leave the scheduler End empty for an open-ended window from Start onwards |
-| 🩺 Extension repair | One-click repair for the browser extension pairing |
-| ⭐ Download properties | Rich properties dialog with checksum, category and connection details |
+1. Download
 
-### 🆕 What's new in v1.2.0
+Start downloads using a URL, clipboard, batch list, command line, or directly from your browser.
 
-- 🔌 **Auto shutdown** — a new toggle in the queue strip (next to Scheduler)
-  shuts the computer down once every active and queued download has finished
-  successfully. One-shot with a 60-second abort window (`shutdown /a`);
-  paused or failed downloads cancel it with a notice instead of powering off.
-  The choice persists and is also available in Settings → Scheduler.
-- 🗓️ **Optional scheduler end time** — the End field starts empty and may stay
-  empty, meaning the window runs open-ended from the Start time onwards
-  (days selection still applies). The strip label shows `from 01:00` in that case.
+2. Manage
 
-### 🆕 What's new in v1.1.0
+Pause, resume, retry, remove, prioritize, reorder, and organize downloads from one place.
 
-- 📥 **Queue page** — see what's running and what starts next, reorder with
-  drag & drop, set priorities and keyboard-navigate the plan.
-- 📊 **Dashboard redesign** — compact grouped overview (downloads, speed &
-  network, storage) instead of oversized cards; active downloads and recent
-  activity stay right below.
-- 🧰 **Download workflow** — always-visible command bar, multi-select action
-  bar, category filters, queue position control and a repaired properties dialog.
-- 🗓️ **Scheduler modal** — inline start/stop windows with weekday selection
-  and a night-time speed cap, wired to Settings → Scheduler.
-- 🌍 **RTL/Persian polish** — window controls stay on the right, measurements
-  keep LTR order inside RTL text, and coverage extends beyond the download list.
-- 🔌 **Protocol & extension fixes** — `dldm://` always launches the installed
-  app (never a script/interpreter) and self-heals on upgrade; one-click
-  extension repair from the UI.
+3. Automate
 
-### 🚀 Install & run from source
+Use scheduling, automatic categories, download rules, bandwidth limits, and optional shutdown after the queue finishes.
 
-Prerequisites: **Python 3.10 or newer**
+4. Monitor
 
-```bash
-# 1. Install dependencies
+Track progress, speed, network activity, memory usage, download details, and history from the application.
+
+---
+
+⚡ Features
+
+🚀 Multi-threaded Downloads
+
+N13 can split a download into multiple parallel parts and download them simultaneously.
+
+This allows the application to make better use of available connections when the server supports range requests.
+
+Up to 64 download threads are supported.
+
+---
+
+▶️ Resume Interrupted Downloads
+
+A failed connection or interrupted download does not necessarily mean starting again from zero.
+
+When supported by the server, N13 can resume a download from where it stopped.
+
+---
+
+📦 Batch Downloads
+
+Need to download many files?
+
+N13 supports batch workflows including:
+
+- URL lists
+- Text files
+- CSV imports
+- URL pattern scanning
+- Multiple downloads in a managed queue
+
+---
+
+🌐 Browser Integration
+
+Send downloads directly from your browser to N13.
+
+N13 provides:
+
+- Chrome extension integration
+- "dldm://" protocol support
+- Local relay server
+- Right-click Send to N13 Download Manager
+- Extension repair from the application
+
+The browser integration is designed so you do not have to manually copy and paste every download link.
+
+---
+
+📋 Clipboard Monitor
+
+Enable the optional clipboard monitor and N13 can detect copied URLs automatically.
+
+This is especially useful when working with download links repeatedly.
+
+---
+
+🧠 Smart Connection Optimizer
+
+N13 can automatically adjust the number of connections based on factors such as:
+
+- File size
+- Server stability
+- Download conditions
+
+The goal is to avoid blindly using the maximum number of connections for every file.
+
+---
+
+🗂️ Download Rules & Categories
+
+Automatically organize downloads.
+
+Create rules that route downloads to the appropriate folder or category instead of manually choosing a destination every time.
+
+For example:
+
+Videos      → D:/Downloads/Videos
+Programs    → D:/Downloads/Programs
+Archives    → D:/Downloads/Archives
+Documents  → D:/Downloads/Documents
+
+---
+
+📥 Powerful Download Queue
+
+The queue gives you control over what happens next.
+
+You can:
+
+- Reorder downloads with drag & drop
+- Set priorities
+- Pause and resume tasks
+- Retry failed downloads
+- Remove multiple tasks
+- Perform actions on multiple selected downloads
+- Navigate the queue using the keyboard
+- Control the order of upcoming downloads
+
+---
+
+🗓️ Scheduler
+
+Schedule when downloads are allowed to run.
+
+Configure:
+
+- Start time
+- Optional end time
+- Days of the week
+- Night-time speed limits
+
+This makes it possible to let large downloads run during specific hours without manually starting them.
+
+---
+
+⏱️ Bandwidth Control
+
+Do not let downloads consume all available bandwidth.
+
+N13 provides speed controls so downloads can be limited when you need the connection for other tasks.
+
+---
+
+🔌 Shutdown After Downloads
+
+Going to sleep while a large download is running?
+
+N13 can optionally shut down Windows after the download queue finishes successfully.
+
+The shutdown includes a cancellation window so you can stop it if needed.
+
+---
+
+🔐 Download Verification
+
+N13 supports checksum verification using:
+
+- MD5
+- SHA-256
+
+This allows you to verify that a downloaded file matches an expected checksum.
+
+---
+
+🍪 Cookie Support
+
+Some downloads require browser authentication or cookies.
+
+N13 supports cookie-based download workflows through:
+
+- Raw cookie headers
+- "cookies.txt"
+- Live browser cookies
+
+---
+
+🔬 URL Analyzer
+
+Before starting a download, N13 can inspect the URL and determine information such as:
+
+- File name
+- File size
+- Content type
+- Range support
+
+This helps the application understand how a download can be handled before it begins.
+
+---
+
+🛡️ Security
+
+N13 includes SSRF protection designed to prevent downloads from accessing private or local IP ranges.
+
+Browser communication also uses a per-machine relay token.
+
+Sensitive "token.json" files are intentionally excluded from Git.
+
+---
+
+🗄️ Persistent Download History
+
+N13 uses SQLite for persistent task and download history storage.
+
+Your queue and download information can survive application restarts instead of disappearing when the application closes.
+
+---
+
+🖥️ Two Interfaces
+
+N13 provides two ways to interact with the application.
+
+🌐 Graphical Interface
+
+A modern dark graphical interface built with PyWebView.
+
+The GUI includes:
+
+- Dashboard
+- Download queue
+- Download details
+- Categories
+- Scheduling
+- Settings
+- System tray
+- Multi-selection actions
+- Keyboard navigation
+- English and Persian localization
+- Full RTL support for Persian
+
+💻 Terminal Interface
+
+Prefer the command line?
+
+N13 also provides a Rich-based terminal interface with live download progress.
+
+---
+
+📊 Dashboard
+
+The dashboard gives you an overview of your downloads without forcing you to open multiple screens.
+
+It provides grouped information about:
+
+- Active downloads
+- Download activity
+- Speed and network usage
+- Memory usage
+
+---
+
+🖱️ System Tray
+
+N13 can run from the Windows system tray.
+
+From the tray you can access actions such as:
+
+- Pause / Resume
+- Open download folder
+- Settings
+- Current download speed
+
+---
+
+🔄 Automatic Updates
+
+N13 can check GitHub Releases for new versions.
+
+Updates are verified using SHA-256 before installation and the application can restart itself after updating.
+
+---
+
+🌍 Languages
+
+N13 currently supports:
+
+- 🇬🇧 English
+- 🇮🇷 Persian / Farsi
+
+The Persian interface includes RTL layout support.
+
+---
+
+💿 Installation
+
+Windows — Recommended
+
+Download the latest Windows installer and run it.
+
+The installer:
+
+- Requires no Python installation
+- Installs the application
+- Handles WebView2 setup
+- Registers the "dldm://" protocol
+- Supports application updates
+
+For normal Windows users, the installer is the easiest way to get started.
+
+---
+
+🛠️ Run From Source
+
+If you want to develop or run N13 directly from source, you need:
+
+- Windows
+- Python 3.10+
+- Git
+
+Clone the repository:
+
+git clone https://github.com/SOHAYB-N13/n13-download.git
+cd n13-download
+
+Install dependencies:
+
 pip install -r requirements.txt
 
-# 2a. Launch the terminal UI
+Launch the terminal interface
+
 python d.py
 
-# 2b. Launch the graphical UI
+Launch the graphical interface
+
 python d.py --gui
-```
-
-### 🎯 Usage
-
-Download a file directly:
-
-```bash
-python d.py "https://example.com/file.zip"
-```
-
-Download with 8 threads into a specific folder:
-
-```bash
-python d.py "https://example.com/file.zip" -t 8 -d "D:/Downloads"
-```
-
-Download and verify its checksum:
-
-```bash
-python d.py "https://example.com/file.zip" --checksum "sha256:..."
-```
-
-#### Command-line options
-
-| Option | Description |
-| --- | --- |
-| `<url>` | Download URL |
-| `-d, --dir <path>` | Download directory |
-| `-t, --threads <n>` | Number of download threads |
-| `--checksum <hash>` | Expected MD5 or SHA-256 hash to verify |
-| `--insecure-ssl` | Disable SSL verification (requires `TDM_INSECURE_SSL=1`) |
-| `--from-browser` | Treat the URL as a browser-originated download |
-| `--url-file <path>` | Read the URL from a file |
-| `--register` | Register the `dldm://` protocol handler |
-| `--unregister` | Remove the `dldm://` protocol handler |
-| `--create-extension` | Generate a ready-to-load Chrome extension |
-| `--gui` | Launch the graphical interface |
-
-### 🌐 Browser integration
-
-1. `python d.py --register` — register the `dldm://` handler.
-2. `python d.py --create-extension` — generates the Chrome extension folder
-   with a local `token.json` (auto-ignored by git).
-3. Load the extension from `chrome://extensions` (Developer mode → Load unpacked).
-4. Right-click any link in Chrome and choose **Send to N13 Download Manager**.
-
-> 🔒 The `token.json` files are intentionally **git-ignored** — they contain a
-> per-machine relay token and must never be committed.
 
 ---
 
-## 🇮🇷 فارسی
+🎯 Command Line Usage
 
-### 📖 معرفی
+Download a file
 
-**مدیر دانلود N13** یک دانلود منیجر چندریسمانی و سریع برای ویندوز است. دانلودها را به
-**چند بخش موازی** تقسیم می‌کند، از **ادامه‌دهی (Resume)** و **دانلود گروهی** پشتیبانی
-می‌کند و حتی به **مرورگر** متصل می‌شود تا هر لینکی را مستقیم به مدیر دانلود بفرستید.
-
-دو رابط کاربری دارد:
-
-- 🖥️ **رابط ترمینال (TUI)** — منوی زیبای مبتنی بر Rich با نوار پیشرفت زنده
-- 🌐 **رابط گرافیکی (GUI)** — وب‌یو تاریک و مدرن (pywebview)
-
-### 💿 دانلود برنامه (ویندوز)
-
-**نصب‌کننده آماده** را دانلود کنید — نیازی به پایتون نیست:
-
-[⬇️ دانلود N13-Download-Manager-Setup.exe](https://github.com/SOHAYB-N13/n13-download/releases/latest)
-
-نصب‌کننده شامل تنظیم WebView2 و ثبت پروتکل `dldm://` است و برنامه خودش از داخل،
-به‌روزرسانی‌ها را نصب می‌کند.
-
-### ✨ امکانات
-
-| امکانات | توضیح |
-| --- | --- |
-| ⚡ چندریسمانی | تقسیم دانلود به بخش‌های موازی (تا ۶۴ ریسمان) |
-| ▶️ ادامه‌دهی | دانلود قطع‌شده از همان نقطه‌ای که ماند ادامه می‌یابد |
-| 📦 دانلود گروهی | اسکن الگوی لینک‌ها و وارد کردن لیست از فایل CSV / متنی |
-| 🌐 اتصال به مرورگر | اکستنشن کروم + پروتکل `dldm://` + سرور واسط لوکال |
-| ✅ بررسی Checksum | تأیید صحت دانلود با MD5 یا SHA-256 |
-| 🍪 پشتیبانی از کوکی | هدر کوکی، فایل `cookies.txt` یا کوکی‌های زنده مرورگر |
-| 🛡️ محافظت SSRF | مسدودسازی دسترسی به آدرس‌های خصوصی / لوکال |
-| ⏱️ کنترل سرعت | محدودسازی پهنای باند و توقف/ادامه وظایف |
-| 💾 ذخیره تنظیمات | ذخیره تنظیمات در `~/.config/terminal-download-manager/` |
-| 🗓️ زمان‌بندی | پنجره‌های شروع/توقف و سقف سرعت در ساعات شب |
-| 📋 مانیتور کلیپ‌بورد | اختیاری: دریافت خودکار لینک‌های کپی‌شده |
-| 🗄️ پایگاه داده SQLite | ذخیره امن و پایدار صف و تاریخچه دانلود |
-| 🔬 تحلیل لینک | بررسی پیش از دانلود (نام، حجم، نوع، پشتیبانی Range) |
-| 🚦 تک‌نمونه‌ای | اجرای دوم، لینک را به نمونه در حال اجرا می‌دهد |
-| 🧠 بهینه‌ساز هوشمند | تنظیم خودکار تعداد اتصال‌ها بر اساس حجم فایل و پایداری سرور |
-| ⚙️ قوانین دانلود | قوانین، هر لینک را خودکار به پوشه/دسته مناسب می‌برند |
-| 🖱️ سینی سیستم | آیکون سینی با توقف/ادامه/پوشه/تنظیمات و تولتیپ سرعت زنده |
-| 🔄 به‌روزرسانی خودکار | بررسی ریلیز گیت‌هاب، تأیید SHA-256، نصب و اجرای مجدد |
-| 💿 نصب‌کننده | نصب یک‌کلیکه ویندوز — بدون نیاز به پایتون |
-| 🌍 چندزبانه | رابط انگلیسی و فارسی با سیستم i18n و چیدمان کامل راست‌به‌چپ |
-| 📊 نمای داشبورد | تحلیل فشرده گروه‌بندی‌شده: دانلودها، سرعت/شبکه و حافظه در یک نگاه |
-| 📥 صفحه صف | مرتب‌سازی با درگ‌واندراپ، اولویت‌بندی، برنامه‌ریزی زمان‌بندی و کنترل با صفحه‌کلید |
-| 🧰 نوار فرمان | دکمه‌های همیشه‌قابل‌دسترس دانلود جدید / چسباندن لینک / افزودن گروهی |
-| ✅ نوار عملیات انتخاب | انتخاب چندتایی با توقف/ادامه/تلاش‌مجدد/حذف و اولویت گروهی |
-| 🗂️ دسته‌بندی و اولویت | مسیریابی خودکار هر دانلود به دسته مناسب، فیلتر دسته و کنترل ترتیب صف |
-| 🗓️ پنجره زمان‌بندی | پنجره شروع/توقف درون‌برنامه‌ای، انتخاب روزهای هفته و سقف سرعت شبانه |
-| 🗓️ پایان اختیاری | خالی گذاشتن پایان زمان‌بند یعنی بازه باز از زمان شروع به بعد |
-| 🩺 تعمیر اکستنشن | تعمیر یک‌کلیکه اتصال اکستنشن مرورگر |
-| ⭐ جزئیات دانلود | پنجره ویژگی‌ها با چکسام، دسته و جزئیات اتصال‌ها |
-| 🔌 خاموش‌شدن خودکار | دکمه نوار صف: خاموش کردن کامپیوتر پس از پایان همه دانلودها (هشدار ۶۰ ثانیه‌ای؛ در صورت خطا لغو می‌شود) |
-
-### 🆕 تازه‌های نسخه 1.2.0
-
-- 🔌 **خاموش‌شدن خودکار** — دکمه جدید نوار صف (کنار زمان‌بند) کامپیوتر را پس
-  از پایان موفق همه دانلودهای فعال و در انتظار خاموش می‌کند. یک‌بارمصرف با
-  فرصت ۶۰ ثانیه‌ای برای لغو (`shutdown /a`)؛ دانلود متوقف‌شده یا ناموفق باعث
-  لغو با اعلان می‌شود. انتخاب ذخیره می‌شود و در تنظیمات ← زمان‌بندی هم هست.
-- 🗓️ **پایان اختیاری زمان‌بند** — فیلد پایان خالی شروع می‌شود و می‌تواند خالی
-  بماند؛ یعنی بازه از زمان شروع به‌صورت باز ادامه دارد (انتخاب روزها همچنان
-  اعمال می‌شود). برچسب نوار در این حالت «از ۰۱:۰۰» را نشان می‌دهد.
-
-### 🆕 تازه‌های نسخه 1.1.0
-
-- 📥 **صفحه صف** — مشاهده دانلودهای در حال اجرا و بعدی، مرتب‌سازی با
-  درگ‌واندراپ، تعیین اولویت و ناوبری با صفحه‌کلید.
-- 📊 **بازطراحی داشبورد** — نمای فشرده گروه‌بندی‌شده (دانلودها، سرعت و شبکه،
-  حافظه) به‌جای کارت‌های بزرگ؛ دانلودهای فعال و فعالیت اخیر همچنان پایین صفحه.
-- 🧰 **گردش‌کار دانلود** — نوار فرمان همیشه‌قابل‌دسترس، نوار عملیات انتخاب
-  چندتایی، فیلتر دسته‌بندی، کنترل ترتیب صف و پنجره ویژگی‌های تعمیرشده.
-- 🗓️ **پنجره زمان‌بندی** — پنجره شروع/توقف درون‌برنامه‌ای با انتخاب روزهای
-  هفته و سقف سرعت شبانه، متصل به تنظیمات ← زمان‌بندی.
-- 🌍 **بهبود راست‌به‌چپ و فارسی** — دکمه‌های پنجره سمت راست می‌مانند، اعداد و
-  واحدها در متن فارسی به‌هم نمی‌ریزند و پوشش فراتر از لیست دانلود است.
-- 🔌 **رفع پروتکل و اکستنشن** — `dldm://` همیشه خود برنامه نصب‌شده را اجرا
-  می‌کند و هنگام ارتقا خودترمیم است؛ تعمیر یک‌کلیکه اکستنشن از رابط کاربری.
-
-### 🚀 نصب و اجرا از سورس
-
-پیش‌نیازها: **پایتون ۳.۱۰ یا بالاتر**
-
-```bash
-# ۱. نصب وابستگی‌ها
-pip install -r requirements.txt
-
-# ۲الف. اجرای رابط ترمینال
-python d.py
-
-# ۲ب. اجرای رابط گرافیکی
-python d.py --gui
-```
-
-### 🎯 روش استفاده
-
-دانلود مستقیم یک فایل:
-
-```bash
 python d.py "https://example.com/file.zip"
-```
 
-دانلود با ۸ ریسمان در پوشه دلخواه:
+Download using 8 threads
 
-```bash
-python d.py "https://example.com/file.zip" -t 8 -d "D:/Downloads"
-```
+python d.py "https://example.com/file.zip" -t 8
 
-دانلود و بررسی Checksum:
+Choose a download directory
 
-```bash
+python d.py "https://example.com/file.zip" -d "D:/Downloads"
+
+Verify a download
+
 python d.py "https://example.com/file.zip" --checksum "sha256:..."
-```
-
-#### پارامترهای خط فرمان
-
-| پارامتر | توضیح |
-| --- | --- |
-| `<url>` | لینک دانلود |
-| `-d, --dir <مسیر>` | پوشه مقصد دانلود |
-| `-t, --threads <تعداد>` | تعداد ریسمان‌های دانلود |
-| `--checksum <هش>` | هش MD5 یا SHA-256 برای بررسی صحت فایل |
-| `--insecure-ssl` | غیرفعال‌سازی بررسی SSL (با شرط `TDM_INSECURE_SSL=1`) |
-| `--from-browser` | در نظر گرفتن لینک به عنوان دانلود از مرورگر |
-| `--url-file <مسیر>` | خواندن لینک از یک فایل |
-| `--register` | ثبت پردازشگر پروتکل `dldm://` |
-| `--unregister` | حذف پردازشگر پروتکل `dldm://` |
-| `--create-extension` | ساخت اکستنشن آماده کروم |
-| `--gui` | اجرای رابط گرافیکی |
-
-### 🌐 اتصال به مرورگر
-
-1. `python d.py --register` — ثبت پردازشگر `dldm://`
-2. `python d.py --create-extension` — ساخت پوشه اکستنشن کروم همراه با `token.json` محلی
-   (به صورت خودکار از git حذف می‌شود)
-3. اکستنشن را از `chrome://extensions` بارگذاری کنید (Developer mode → Load unpacked)
-4. روی هر لینکی در کروم کلیک راست کنید و **Send to N13 Download Manager** را بزنید
-
-> 🔒 فایل‌های `token.json` عمداً در **git-ignored** هستند — آن‌ها حاوی رمز واسط
-> مخصوص هر سیستم هستند و هرگز نباید در ریپازیتوری قرار بگیرند.
 
 ---
 
-## 📄 License
+🌐 Browser Setup
 
-Released under the [MIT License](LICENSE) · Copyright © 2026 **SOHAYB N13**
+N13 can integrate with Chrome so links can be sent directly to the download manager.
+
+1. Register the protocol
+
+python d.py --register
+
+2. Create the Chrome extension
+
+python d.py --create-extension
+
+3. Open Chrome extensions
+
+Go to:
+
+chrome://extensions
+
+Enable Developer mode and choose Load unpacked.
+
+Select the generated extension folder.
+
+4. Send a link to N13
+
+Right-click a link in Chrome and choose:
+
+Send to N13 Download Manager
+
+«🔒 "token.json" contains a machine-specific relay token and is intentionally ignored by Git. Never commit it to the repository.»
+
+---
+
+⚙️ Command Line Options
+
+Option| Description
+"<url>"| Download URL
+"-d, --dir <path>"| Download directory
+"-t, --threads <n>"| Number of download threads
+"--checksum <hash>"| Expected MD5 or SHA-256 hash
+"--insecure-ssl"| Disable SSL verification when explicitly enabled
+"--from-browser"| Treat the URL as browser-originated
+"--url-file <path>"| Read URLs from a file
+"--register"| Register the "dldm://" protocol
+"--unregister"| Remove the "dldm://" protocol
+"--create-extension"| Generate the Chrome extension
+"--gui"| Launch the graphical interface
+
+---
+
+🧩 Project Structure
+
+N13 is organized into separate components so the download engine, browser integration, interface, configuration, and packaging can evolve independently.
+
+n13-download/
+├── batch/
+├── browser/
+├── chrome_extension/
+├── config/
+├── core/
+├── extension/
+├── installer/
+├── ui/
+├── d.py
+├── requirements.txt
+├── PACKAGING.md
+├── SECURITY.md
+└── README.md
+
+---
+
+🧪 Development
+
+N13 is an open-source project and development is ongoing.
+
+The project focuses on:
+
+- Reliable downloading
+- Better queue management
+- Browser integration
+- Windows integration
+- Performance
+- User experience
+- Security
+- Internationalization
+
+Bug reports, feature requests, and improvements are welcome.
+
+---
+
+🛣️ Roadmap
+
+N13 is actively evolving.
+
+Future development may focus on areas such as:
+
+- More browser integrations
+- Improved download detection
+- Better connection management
+- More automation
+- Additional platform support
+- UI and UX improvements
+- More download protocols and sources
+
+---
+
+🤝 Contributing
+
+Contributions are welcome.
+
+If you find a bug, have an idea, or want to improve N13:
+
+1. Open an issue.
+2. Describe the problem or proposed improvement.
+3. Include reproduction steps when reporting a bug.
+4. Submit a pull request for code changes.
+
+Please read the project security guidelines before reporting security-related issues.
+
+---
+
+📄 License
+
+N13 Download Manager is released under the MIT License.
+
+Copyright © 2026 SOHAYB N13
+
+---
+
+⭐ Support the Project
+
+If you find N13 useful:
+
+- ⭐ Star the repository
+- 🐛 Report bugs
+- 💡 Suggest improvements
+- 🔧 Contribute code
+- 📢 Share the project with others
+
+Every star, issue, and contribution helps the project grow.
+
+---
+
+Built with Python ❤️
+
+N13 Download Manager
+
+Download faster. Download smarter. Stay in control.
