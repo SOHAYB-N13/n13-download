@@ -1,173 +1,248 @@
-⬇️ N13 Download Manager
+# ⬇️ N13 Download Manager
 
-A modern, open-source download manager for Windows — built for speed, control, and reliability.
+> **A modern, open-source download manager for Windows — built for speed, control, and reliability.**  
+> **یک دانلود منیجر مدرن و متن‌باز برای ویندوز — ساخته‌شده برای سرعت، کنترل و دانلود قابل‌اعتماد.**
 
-N13 Download Manager is a multi-threaded download manager designed to make downloading large files easier, faster, and more reliable.
-
-Split downloads into parallel connections, resume interrupted downloads, organize your queue, schedule downloads, send links directly from your browser, control bandwidth, and manage everything from a modern graphical interface.
-
-«No Python required for the Windows installer.»
+[English](#-english) · [فارسی](#-فارسی)
 
 ---
 
-✨ Why N13?
+<a id="-english"></a>
 
-Downloading a file should be simple.
+# 🇬🇧 English
 
-Copy a link → send it to N13 → let N13 handle the rest.
+## 🚀 N13 Download Manager
 
-N13 combines the features you would expect from a modern download manager with tools for users who want more control over how their downloads work.
+N13 is a modern, open-source, multi-threaded download manager for Windows.
 
-🚀 Built for real downloads
+It is designed to make downloading large files easier, more reliable, and more manageable — from the first click to the completed download.
 
-- ⚡ Multi-threaded downloads
-- ▶️ Resume interrupted downloads
-- 📦 Batch downloads
+N13 combines a graphical interface, browser integration, download queues, scheduling, bandwidth control, automatic organization, persistent history, checksum verification, and a terminal interface in one application.
+
+### ✨ Why N13?
+
+Downloading should be simple:
+
+**Copy a link → send it to N13 → let N13 handle the rest.**
+
+N13 gives you control when you need it, while keeping everyday downloads simple.
+
+---
+
+## ⚡ Highlights
+
+- 🚀 Multi-threaded downloads with up to **64 connections**
+- ▶️ Resume interrupted downloads when supported by the server
+- 📦 Batch downloads and URL lists
 - 🌐 Browser integration
 - 📋 Clipboard monitoring
-- 🗓️ Download scheduling
-- ⏱️ Bandwidth control
+- 🗓️ Download scheduler
+- ⏱️ Bandwidth and speed limits
 - 🧠 Smart connection optimization
-- 🗂️ Automatic download rules and categories
+- 🗂️ Automatic categories and download rules
+- 📥 Powerful download queue
+- 🔐 MD5 and SHA-256 checksum verification
+- 🍪 Cookie support
+- 🔬 URL analyzer
+- 🛡️ SSRF protection and secure browser relay
+- 🗄️ Persistent SQLite download history
 - 🖥️ Modern graphical interface
-- 💻 Terminal interface
-- 🖱️ System tray integration
-- 🔄 Automatic updates
-- 🗄️ Persistent download history
-- 🔐 Checksum verification
-- 🌍 English and Persian UI
+- 💻 Rich terminal interface
+- 🖱️ Windows system tray integration
+- 🔄 Automatic update support
+- 🌍 English and Persian / RTL interface
 
 ---
 
-🎯 What makes N13 different?
+## 🎯 Built Around the Whole Download Workflow
 
-N13 is not just a downloader that starts a request and waits for it to finish.
+N13 is more than a program that starts a download and waits.
 
-It is designed around the entire download workflow.
+### 1. Download
 
-1. Download
+Start downloads using:
 
-Start downloads using a URL, clipboard, batch list, command line, or directly from your browser.
+- Direct URLs
+- Browser integration
+- Clipboard detection
+- URL files
+- Batch workflows
+- Command line
 
-2. Manage
+### 2. Manage
 
-Pause, resume, retry, remove, prioritize, reorder, and organize downloads from one place.
+Control your downloads from a single queue:
 
-3. Automate
+- Pause
+- Resume
+- Retry
+- Remove
+- Reorder
+- Prioritize
+- Multi-select actions
 
-Use scheduling, automatic categories, download rules, bandwidth limits, and optional shutdown after the queue finishes.
+### 3. Automate
 
-4. Monitor
+Let N13 handle repetitive tasks:
 
-Track progress, speed, network activity, memory usage, download details, and history from the application.
+- Schedule downloads
+- Apply automatic rules
+- Sort downloads into categories
+- Limit bandwidth
+- Shut down Windows after the queue finishes
+
+### 4. Verify
+
+Make sure your downloaded files are what you expected:
+
+- MD5 verification
+- SHA-256 verification
+- Download metadata
+- Persistent task history
 
 ---
 
-⚡ Features
+# 🖥️ Modern Graphical Interface
 
-🚀 Multi-threaded Downloads
+N13 includes a modern Windows GUI designed around everyday download management.
 
-N13 can split a download into multiple parallel parts and download them simultaneously.
+The interface provides:
 
-This allows the application to make better use of available connections when the server supports range requests.
+- 📊 Dashboard
+- 📥 Download queue
+- 🔎 Download details
+- 🗂️ Categories
+- 🗓️ Scheduler
+- ⚙️ Settings
+- 🖱️ System tray
+- ⌨️ Keyboard navigation
+- 🌍 English / Persian localization
+- ↔️ Full RTL support for Persian
 
-Up to 64 download threads are supported.
+The GUI is designed to keep important information visible without turning the application into a complicated control panel.
 
 ---
 
-▶️ Resume Interrupted Downloads
+# 🚀 Multi-threaded Downloads
 
-A failed connection or interrupted download does not necessarily mean starting again from zero.
+N13 can split supported downloads into multiple parallel connections.
 
-When supported by the server, N13 can resume a download from where it stopped.
+This can improve utilization of available bandwidth when the remote server supports HTTP range requests.
+
+You can control the number of connections per download, with support for up to **64 threads**.
+
+> Actual speed depends on the server, network, file size, connection limits, and other conditions. N13 does not guarantee a specific download speed.
 
 ---
 
-📦 Batch Downloads
+# ▶️ Resume Interrupted Downloads
+
+Network interruptions happen.
+
+When the server supports resuming, N13 can continue an interrupted download instead of forcing you to start again from zero.
+
+This is especially useful for:
+
+- Large files
+- Unstable connections
+- Long-running downloads
+- Scheduled downloads
+
+---
+
+# 📦 Batch Downloads
 
 Need to download many files?
 
-N13 supports batch workflows including:
+N13 supports batch workflows such as:
 
 - URL lists
 - Text files
 - CSV imports
+- Multiple queued downloads
 - URL pattern scanning
-- Multiple downloads in a managed queue
+
+Instead of starting each download manually, add them to the queue and let N13 process them.
 
 ---
 
-🌐 Browser Integration
+# 🌐 Browser Integration
 
-Send downloads directly from your browser to N13.
+N13 can connect your browser directly to the download manager.
 
-N13 provides:
+Supported workflows include:
 
 - Chrome extension integration
-- "dldm://" protocol support
-- Local relay server
-- Right-click Send to N13 Download Manager
-- Extension repair from the application
+- `dldm://` protocol
+- Local browser relay
+- Right-click **Send to N13 Download Manager**
+- Extension creation and repair
 
-The browser integration is designed so you do not have to manually copy and paste every download link.
+The goal is simple:
 
----
-
-📋 Clipboard Monitor
-
-Enable the optional clipboard monitor and N13 can detect copied URLs automatically.
-
-This is especially useful when working with download links repeatedly.
+**Find a file in your browser → send it to N13 → manage it from the download manager.**
 
 ---
 
-🧠 Smart Connection Optimizer
+# 📋 Clipboard Monitoring
 
-N13 can automatically adjust the number of connections based on factors such as:
+When enabled, N13 can watch the clipboard for copied URLs.
+
+This is useful when you frequently copy download links and want N13 to detect them without repeatedly opening the application.
+
+Clipboard monitoring is optional and can be disabled.
+
+---
+
+# 🧠 Smart Connection Optimization
+
+N13 can adjust connection usage based on download conditions such as:
 
 - File size
-- Server stability
-- Download conditions
+- Server behavior
+- Connection stability
 
-The goal is to avoid blindly using the maximum number of connections for every file.
+The purpose is to avoid blindly using the maximum number of connections for every file.
 
 ---
 
-🗂️ Download Rules & Categories
+# 🗂️ Automatic Rules & Categories
 
-Automatically organize downloads.
+Keep your downloads organized automatically.
 
-Create rules that route downloads to the appropriate folder or category instead of manually choosing a destination every time.
+Create rules that send files to the appropriate folders or categories based on your workflow.
 
-For example:
+Example:
 
+```text
 Videos      → D:/Downloads/Videos
 Programs    → D:/Downloads/Programs
 Archives    → D:/Downloads/Archives
 Documents  → D:/Downloads/Documents
+```
 
 ---
 
-📥 Powerful Download Queue
+# 📥 Powerful Download Queue
 
-The queue gives you control over what happens next.
+The queue is the center of N13's workflow.
 
 You can:
 
-- Reorder downloads with drag & drop
+- Drag & drop to reorder downloads
 - Set priorities
 - Pause and resume tasks
 - Retry failed downloads
 - Remove multiple tasks
-- Perform actions on multiple selected downloads
-- Navigate the queue using the keyboard
-- Control the order of upcoming downloads
+- Perform actions on selected downloads
+- Navigate using the keyboard
+- Control what downloads next
 
 ---
 
-🗓️ Scheduler
+# 🗓️ Scheduler
 
-Schedule when downloads are allowed to run.
+Schedule downloads instead of starting them manually.
 
 Configure:
 
@@ -176,147 +251,128 @@ Configure:
 - Days of the week
 - Night-time speed limits
 
-This makes it possible to let large downloads run during specific hours without manually starting them.
+This is useful for large downloads that you prefer to run during specific hours.
 
 ---
 
-⏱️ Bandwidth Control
+# ⏱️ Bandwidth Control
 
-Do not let downloads consume all available bandwidth.
+Do not let downloads consume your entire connection.
 
-N13 provides speed controls so downloads can be limited when you need the connection for other tasks.
+N13 provides speed and bandwidth controls so you can leave enough network capacity for:
+
+- Browsing
+- Streaming
+- Gaming
+- Video calls
+- Other downloads
 
 ---
 
-🔌 Shutdown After Downloads
+# 🔌 Shutdown After Downloads
 
-Going to sleep while a large download is running?
+Starting a large download before going to sleep?
 
 N13 can optionally shut down Windows after the download queue finishes successfully.
 
-The shutdown includes a cancellation window so you can stop it if needed.
+A cancellation window is provided so you can stop the shutdown if necessary.
 
 ---
 
-🔐 Download Verification
+# 🔐 Checksum Verification
 
-N13 supports checksum verification using:
+N13 supports file integrity verification using:
 
-- MD5
-- SHA-256
+- **MD5**
+- **SHA-256**
 
-This allows you to verify that a downloaded file matches an expected checksum.
+You can compare the downloaded file against an expected checksum and detect corrupted or unexpected files.
 
 ---
 
-🍪 Cookie Support
+# 🍪 Cookie Support
 
-Some downloads require browser authentication or cookies.
+Some download links require browser authentication or cookies.
 
-N13 supports cookie-based download workflows through:
+N13 supports cookie-based workflows through:
 
 - Raw cookie headers
-- "cookies.txt"
+- `cookies.txt`
 - Live browser cookies
 
 ---
 
-🔬 URL Analyzer
+# 🔬 URL Analyzer
 
-Before starting a download, N13 can inspect the URL and determine information such as:
+Before a download begins, N13 can inspect a URL and retrieve information such as:
 
 - File name
 - File size
 - Content type
 - Range support
 
-This helps the application understand how a download can be handled before it begins.
+This helps N13 determine how a download can be handled before it starts.
 
 ---
 
-🛡️ Security
+# 🛡️ Security
 
-N13 includes SSRF protection designed to prevent downloads from accessing private or local IP ranges.
+Security is part of the project architecture.
 
-Browser communication also uses a per-machine relay token.
+N13 includes protections and controls such as:
 
-Sensitive "token.json" files are intentionally excluded from Git.
+- SSRF protection against private/local network targets
+- Machine-specific browser relay token
+- SHA-256 verification for update packages
+- Sensitive `token.json` excluded from Git
 
----
-
-🗄️ Persistent Download History
-
-N13 uses SQLite for persistent task and download history storage.
-
-Your queue and download information can survive application restarts instead of disappearing when the application closes.
+For security-related issues, please follow the project's security guidelines.
 
 ---
 
-🖥️ Two Interfaces
+# 🗄️ Persistent Download History
 
-N13 provides two ways to interact with the application.
+N13 uses SQLite for persistent download/task information.
 
-🌐 Graphical Interface
+Your download state and history can remain available across application restarts instead of disappearing when the program closes.
 
-A modern dark graphical interface built with PyWebView.
+---
 
-The GUI includes:
-
-- Dashboard
-- Download queue
-- Download details
-- Categories
-- Scheduling
-- Settings
-- System tray
-- Multi-selection actions
-- Keyboard navigation
-- English and Persian localization
-- Full RTL support for Persian
-
-💻 Terminal Interface
+# 💻 Terminal Interface
 
 Prefer the command line?
 
-N13 also provides a Rich-based terminal interface with live download progress.
+N13 also includes a Rich-based terminal interface with live download progress.
+
+This makes N13 useful for both:
+
+- Everyday desktop downloads
+- Scripted and developer workflows
 
 ---
 
-📊 Dashboard
-
-The dashboard gives you an overview of your downloads without forcing you to open multiple screens.
-
-It provides grouped information about:
-
-- Active downloads
-- Download activity
-- Speed and network usage
-- Memory usage
-
----
-
-🖱️ System Tray
+# 🖱️ Windows System Tray
 
 N13 can run from the Windows system tray.
 
-From the tray you can access actions such as:
+Tray actions can include:
 
 - Pause / Resume
 - Open download folder
-- Settings
-- Current download speed
+- Open settings
+- View current download speed
 
 ---
 
-🔄 Automatic Updates
+# 🔄 Automatic Updates
 
 N13 can check GitHub Releases for new versions.
 
-Updates are verified using SHA-256 before installation and the application can restart itself after updating.
+Update packages are verified using SHA-256 before installation, and the application can restart after updating.
 
 ---
 
-🌍 Languages
+# 🌍 Localization
 
 N13 currently supports:
 
@@ -327,27 +383,27 @@ The Persian interface includes RTL layout support.
 
 ---
 
-💿 Installation
+# 📥 Installation
 
-Windows — Recommended
-
-Download the latest Windows installer and run it.
-
-The installer:
-
-- Requires no Python installation
-- Installs the application
-- Handles WebView2 setup
-- Registers the "dldm://" protocol
-- Supports application updates
+## Windows — Recommended
 
 For normal Windows users, the installer is the easiest way to get started.
 
+The Windows installer is designed to:
+
+- Require no separate Python installation
+- Install the application
+- Handle WebView2 setup
+- Register the `dldm://` protocol
+- Support application updates
+
+Download the latest release from the repository's **Releases** page.
+
 ---
 
-🛠️ Run From Source
+# 🛠️ Run From Source
 
-If you want to develop or run N13 directly from source, you need:
+### Requirements
 
 - Windows
 - Python 3.10+
@@ -355,96 +411,118 @@ If you want to develop or run N13 directly from source, you need:
 
 Clone the repository:
 
+```bash
 git clone https://github.com/SOHAYB-N13/n13-download.git
 cd n13-download
+```
 
 Install dependencies:
 
+```bash
 pip install -r requirements.txt
+```
 
-Launch the terminal interface
+Launch the terminal interface:
 
+```bash
 python d.py
+```
 
-Launch the graphical interface
+Launch the graphical interface:
 
+```bash
 python d.py --gui
+```
 
 ---
 
-🎯 Command Line Usage
+# 🌐 Browser Setup
 
-Download a file
+To connect Chrome with N13:
 
-python d.py "https://example.com/file.zip"
+### 1. Register the protocol
 
-Download using 8 threads
-
-python d.py "https://example.com/file.zip" -t 8
-
-Choose a download directory
-
-python d.py "https://example.com/file.zip" -d "D:/Downloads"
-
-Verify a download
-
-python d.py "https://example.com/file.zip" --checksum "sha256:..."
-
----
-
-🌐 Browser Setup
-
-N13 can integrate with Chrome so links can be sent directly to the download manager.
-
-1. Register the protocol
-
+```bash
 python d.py --register
+```
 
-2. Create the Chrome extension
+### 2. Create the browser extension
 
+```bash
 python d.py --create-extension
+```
 
-3. Open Chrome extensions
+### 3. Load the extension in Chrome
 
-Go to:
+Open:
 
+```text
 chrome://extensions
+```
 
-Enable Developer mode and choose Load unpacked.
+Enable **Developer mode**, choose **Load unpacked**, and select the generated extension directory.
 
-Select the generated extension folder.
+### 4. Send downloads to N13
 
-4. Send a link to N13
+Right-click a supported link and choose:
 
-Right-click a link in Chrome and choose:
-
+```text
 Send to N13 Download Manager
+```
 
-«🔒 "token.json" contains a machine-specific relay token and is intentionally ignored by Git. Never commit it to the repository.»
-
----
-
-⚙️ Command Line Options
-
-Option| Description
-"<url>"| Download URL
-"-d, --dir <path>"| Download directory
-"-t, --threads <n>"| Number of download threads
-"--checksum <hash>"| Expected MD5 or SHA-256 hash
-"--insecure-ssl"| Disable SSL verification when explicitly enabled
-"--from-browser"| Treat the URL as browser-originated
-"--url-file <path>"| Read URLs from a file
-"--register"| Register the "dldm://" protocol
-"--unregister"| Remove the "dldm://" protocol
-"--create-extension"| Generate the Chrome extension
-"--gui"| Launch the graphical interface
+> 🔒 `token.json` contains a machine-specific relay token and must never be committed to the repository.
 
 ---
 
-🧩 Project Structure
+# 🎯 Command Line Usage
 
-N13 is organized into separate components so the download engine, browser integration, interface, configuration, and packaging can evolve independently.
+### Download a file
 
+```bash
+python d.py "https://example.com/file.zip"
+```
+
+### Use multiple connections
+
+```bash
+python d.py "https://example.com/file.zip" -t 8
+```
+
+### Choose a download directory
+
+```bash
+python d.py "https://example.com/file.zip" -d "D:/Downloads"
+```
+
+### Verify a download
+
+```bash
+python d.py "https://example.com/file.zip" --checksum "sha256:..."
+```
+
+---
+
+# ⚙️ Command Line Options
+
+| Option | Description |
+|---|---|
+| `<url>` | Download URL |
+| `-d, --dir <path>` | Download directory |
+| `-t, --threads <n>` | Number of download threads |
+| `--checksum <hash>` | Expected MD5 or SHA-256 hash |
+| `--insecure-ssl` | Disable SSL verification when explicitly enabled |
+| `--from-browser` | Treat the URL as browser-originated |
+| `--url-file <path>` | Read URLs from a file |
+| `--register` | Register the `dldm://` protocol |
+| `--unregister` | Remove the `dldm://` protocol |
+| `--create-extension` | Generate the browser extension |
+| `--gui` | Launch the graphical interface |
+
+---
+
+# 🧩 Project Structure
+
+```text
 n13-download/
 ├── batch/
 ├── browser/
@@ -459,68 +537,72 @@ n13-download/
 ├── PACKAGING.md
 ├── SECURITY.md
 └── README.md
+```
+
+The project separates the download engine, browser integration, interface, configuration, packaging, and supporting components so they can evolve independently.
 
 ---
 
-🧪 Development
+# 🧪 Development
 
-N13 is an open-source project and development is ongoing.
+N13 is an actively developed open-source project.
 
-The project focuses on:
+Development focuses on:
 
-- Reliable downloading
-- Better queue management
+- Download reliability
+- Performance
+- Queue management
 - Browser integration
 - Windows integration
-- Performance
-- User experience
+- Automation
 - Security
+- User experience
 - Internationalization
 
-Bug reports, feature requests, and improvements are welcome.
+Bug reports, feature requests, documentation improvements, and code contributions are welcome.
 
 ---
 
-🛣️ Roadmap
+# 🛣️ Roadmap
 
-N13 is actively evolving.
+N13 is continuously evolving.
 
-Future development may focus on areas such as:
+Possible future improvements include:
 
 - More browser integrations
-- Improved download detection
-- Better connection management
-- More automation
+- More powerful link detection
+- Improved connection management
+- Additional automation features
+- UI / UX improvements
+- More protocols and download sources
 - Additional platform support
-- UI and UX improvements
-- More download protocols and sources
 
 ---
 
-🤝 Contributing
+# 🤝 Contributing
 
 Contributions are welcome.
 
-If you find a bug, have an idea, or want to improve N13:
+If you find a bug or want to improve N13:
 
 1. Open an issue.
-2. Describe the problem or proposed improvement.
-3. Include reproduction steps when reporting a bug.
+2. Clearly describe the problem or proposed improvement.
+3. Include reproduction steps for bugs whenever possible.
 4. Submit a pull request for code changes.
 
-Please read the project security guidelines before reporting security-related issues.
+Please read `SECURITY.md` before reporting security-related issues.
 
 ---
 
-📄 License
+# 📄 License
 
-N13 Download Manager is released under the MIT License.
+N13 Download Manager is released under the **MIT License**.
 
 Copyright © 2026 SOHAYB N13
 
 ---
 
-⭐ Support the Project
+# ⭐ Support N13
 
 If you find N13 useful:
 
@@ -528,14 +610,637 @@ If you find N13 useful:
 - 🐛 Report bugs
 - 💡 Suggest improvements
 - 🔧 Contribute code
-- 📢 Share the project with others
+- 📢 Share the project
 
-Every star, issue, and contribution helps the project grow.
+Every star, issue, contribution, and piece of feedback helps N13 grow.
 
 ---
 
-Built with Python ❤️
+<div align="center">
 
-N13 Download Manager
+### ⬇️ Download faster. Manage smarter. Stay in control.
 
-Download faster. Download smarter. Stay in control.
+**N13 Download Manager**
+
+Built with ❤️ and Python.
+
+</div>
+
+---
+
+<a id="-فارسی"></a>
+
+# 🇮🇷 فارسی
+
+## 🚀 دانلود منیجر N13
+
+N13 یک دانلود منیجر مدرن، متن‌باز و چندریسمانی برای ویندوز است.
+
+هدف N13 این است که دانلود فایل‌های بزرگ را **ساده‌تر، قابل‌اعتمادتر و قابل‌کنترل‌تر** کند؛ از لحظه‌ای که لینک را دریافت می‌کنید تا زمانی که فایل به‌طور کامل دانلود شود.
+
+N13 رابط گرافیکی، اتصال به مرورگر، صف دانلود، زمان‌بندی، کنترل پهنای باند، دسته‌بندی خودکار، تاریخچه دائمی، بررسی صحت فایل، و رابط خط فرمان را در یک برنامه ترکیب می‌کند.
+
+### ✨ چرا N13؟
+
+دانلود کردن باید ساده باشد:
+
+**لینک را کپی کن → به N13 بده → بقیه کار را به N13 بسپار.**
+
+N13 در عین سادگی برای استفاده روزمره، ابزارهای لازم برای کنترل دقیق دانلودها را هم در اختیار شما قرار می‌دهد.
+
+---
+
+## ⚡ امکانات اصلی
+
+- 🚀 دانلود چندریسمانی با حداکثر **۶۴ اتصال**
+- ▶️ ادامه دانلودهای قطع‌شده در صورت پشتیبانی سرور
+- 📦 دانلود گروهی و لیست لینک‌ها
+- 🌐 اتصال مستقیم به مرورگر
+- 📋 نظارت بر کلیپ‌بورد
+- 🗓️ زمان‌بندی دانلود
+- ⏱️ محدود کردن سرعت و پهنای باند
+- 🧠 بهینه‌سازی هوشمند تعداد اتصال‌ها
+- 🗂️ دسته‌بندی و قوانین خودکار دانلود
+- 📥 صف دانلود قدرتمند
+- 🔐 بررسی MD5 و SHA-256
+- 🍪 پشتیبانی از Cookie
+- 🔬 تحلیل لینک قبل از دانلود
+- 🛡️ محافظت در برابر SSRF و ارتباط امن مرورگر
+- 🗄️ ذخیره دائمی اطلاعات دانلود با SQLite
+- 🖥️ رابط گرافیکی مدرن
+- 💻 رابط خط فرمان
+- 🖱️ پشتیبانی از System Tray ویندوز
+- 🔄 پشتیبانی از بروزرسانی خودکار
+- 🌍 رابط انگلیسی و فارسی با پشتیبانی کامل RTL
+
+---
+
+# 🎯 N13 فقط یک دانلودر ساده نیست
+
+N13 کل فرایند دانلود را مدیریت می‌کند.
+
+### ۱. دریافت
+
+می‌توانید دانلود را از روش‌های مختلف شروع کنید:
+
+- لینک مستقیم
+- مرورگر
+- کلیپ‌بورد
+- فایل حاوی URLها
+- دانلود گروهی
+- خط فرمان
+
+### ۲. مدیریت
+
+تمام دانلودها را از یک صف مدیریت کنید:
+
+- توقف
+- ادامه
+- تلاش مجدد
+- حذف
+- جابه‌جایی
+- تعیین اولویت
+- عملیات روی چند دانلود به‌صورت همزمان
+
+### ۳. خودکارسازی
+
+کارهای تکراری را به N13 بسپارید:
+
+- زمان‌بندی دانلود
+- اعمال قوانین خودکار
+- دسته‌بندی فایل‌ها
+- محدود کردن پهنای باند
+- خاموش کردن ویندوز پس از پایان صف دانلود
+
+### ۴. بررسی
+
+اطمینان حاصل کنید فایل دانلودشده همان چیزی است که انتظار داشتید:
+
+- بررسی MD5
+- بررسی SHA-256
+- اطلاعات دانلود
+- تاریخچه دائمی وظایف
+
+---
+
+# 🖥️ رابط گرافیکی مدرن
+
+N13 یک رابط گرافیکی مدرن برای مدیریت دانلودها در ویندوز دارد.
+
+امکانات رابط گرافیکی شامل:
+
+- 📊 داشبورد
+- 📥 صف دانلود
+- 🔎 جزئیات دانلود
+- 🗂️ دسته‌بندی‌ها
+- 🗓️ زمان‌بندی
+- ⚙️ تنظیمات
+- 🖱️ System Tray
+- ⌨️ کنترل با صفحه‌کلید
+- 🌍 زبان انگلیسی و فارسی
+- ↔️ پشتیبانی کامل از RTL در فارسی
+
+هدف رابط N13 این است که اطلاعات مهم را در دسترس نگه دارد، بدون اینکه برنامه به یک پنل پیچیده و شلوغ تبدیل شود.
+
+---
+
+# 🚀 دانلود چندریسمانی
+
+N13 می‌تواند دانلودهای پشتیبانی‌شده را به چند اتصال موازی تقسیم کند.
+
+در صورتی که سرور از HTTP Range Request پشتیبانی کند، این روش می‌تواند استفاده از پهنای باند موجود را بهتر کند.
+
+تعداد اتصال‌ها قابل کنترل است و N13 از حداکثر **۶۴ ریسمان** پشتیبانی می‌کند.
+
+> سرعت واقعی به سرور، اینترنت، اندازه فایل، محدودیت‌های اتصال و شرایط شبکه بستگی دارد. N13 سرعت مشخصی را تضمین نمی‌کند.
+
+---
+
+# ▶️ ادامه دانلودهای قطع‌شده
+
+قطع شدن اینترنت نباید همیشه به معنی شروع دوباره دانلود باشد.
+
+اگر سرور از ادامه دانلود پشتیبانی کند، N13 می‌تواند دانلود را از محل توقف ادامه دهد.
+
+این قابلیت برای موارد زیر بسیار کاربردی است:
+
+- فایل‌های حجیم
+- اینترنت ناپایدار
+- دانلودهای طولانی
+- دانلودهای زمان‌بندی‌شده
+
+---
+
+# 📦 دانلود گروهی
+
+اگر تعداد زیادی فایل برای دانلود دارید، لازم نیست همه را یکی‌یکی شروع کنید.
+
+N13 از مواردی مانند زیر پشتیبانی می‌کند:
+
+- لیست URL
+- فایل متنی
+- CSV
+- چند دانلود در صف
+- اسکن الگوهای URL
+
+لینک‌ها را وارد صف کنید و اجازه دهید N13 آن‌ها را مدیریت کند.
+
+---
+
+# 🌐 اتصال به مرورگر
+
+N13 می‌تواند مرورگر را مستقیماً به دانلود منیجر متصل کند.
+
+روش‌های پشتیبانی‌شده شامل:
+
+- اتصال به افزونه Chrome
+- پروتکل `dldm://`
+- Browser Relay محلی
+- گزینه **Send to N13 Download Manager**
+- ساخت و تعمیر افزونه
+
+فرایند ساده است:
+
+**فایل را در مرورگر پیدا کن → به N13 بفرست → دانلود را در N13 مدیریت کن.**
+
+---
+
+# 📋 نظارت بر کلیپ‌بورد
+
+در صورت فعال بودن، N13 می‌تواند کلیپ‌بورد را برای URLهای کپی‌شده بررسی کند.
+
+این قابلیت برای زمانی مفید است که مرتب لینک دانلود کپی می‌کنید و نمی‌خواهید هر بار برنامه را به‌صورت دستی باز کنید.
+
+این قابلیت اختیاری است و می‌توان آن را غیرفعال کرد.
+
+---
+
+# 🧠 بهینه‌سازی هوشمند اتصال‌ها
+
+N13 می‌تواند تعداد اتصال‌ها را بر اساس شرایط دانلود تنظیم کند؛ از جمله:
+
+- اندازه فایل
+- رفتار سرور
+- پایداری اتصال
+
+هدف این است که برنامه برای هر فایل بدون توجه به شرایط، به‌صورت کورکورانه از حداکثر اتصال‌ها استفاده نکند.
+
+---
+
+# 🗂️ قوانین و دسته‌بندی خودکار
+
+دانلودها را به‌صورت خودکار مرتب کنید.
+
+می‌توانید قوانینی تعریف کنید تا فایل‌ها بر اساس روند کاری شما در پوشه یا دسته مناسب قرار بگیرند.
+
+مثال:
+
+```text
+Videos      → D:/Downloads/Videos
+Programs    → D:/Downloads/Programs
+Archives    → D:/Downloads/Archives
+Documents  → D:/Downloads/Documents
+```
+
+---
+
+# 📥 صف دانلود قدرتمند
+
+صف دانلود مرکز مدیریت دانلودهای N13 است.
+
+می‌توانید:
+
+- دانلودها را با Drag & Drop جابه‌جا کنید
+- اولویت تعیین کنید
+- دانلودها را متوقف و ادامه دهید
+- دانلودهای ناموفق را دوباره امتحان کنید
+- چند دانلود را همزمان حذف کنید
+- روی چند دانلود انتخاب‌شده عملیات انجام دهید
+- با صفحه‌کلید در صف حرکت کنید
+- ترتیب دانلودهای بعدی را کنترل کنید
+
+---
+
+# 🗓️ زمان‌بندی دانلود
+
+به‌جای شروع دستی دانلودها، زمان آن‌ها را مشخص کنید.
+
+امکان تنظیم موارد زیر وجود دارد:
+
+- ساعت شروع
+- ساعت پایان اختیاری
+- روزهای هفته
+- محدودیت سرعت در ساعات مشخص
+
+این قابلیت برای فایل‌های حجیمی که می‌خواهید در ساعات خاصی دانلود شوند بسیار مناسب است.
+
+---
+
+# ⏱️ کنترل پهنای باند
+
+اجازه ندهید دانلود تمام اینترنت شما را مصرف کند.
+
+N13 امکان کنترل سرعت و پهنای باند را فراهم می‌کند تا بتوانید همزمان از اینترنت برای کارهای دیگری مانند:
+
+- وب‌گردی
+- استریم
+- بازی
+- تماس تصویری
+- دانلودهای دیگر
+
+استفاده کنید.
+
+---
+
+# 🔌 خاموش شدن خودکار ویندوز
+
+اگر یک دانلود حجیم را قبل از خواب شروع می‌کنید، می‌توانید N13 را طوری تنظیم کنید که پس از پایان موفق صف دانلود، ویندوز را خاموش کند.
+
+برای جلوگیری از خاموش شدن ناخواسته، امکان لغو خاموش شدن نیز وجود دارد.
+
+---
+
+# 🔐 بررسی صحت فایل
+
+N13 از بررسی صحت فایل با الگوریتم‌های زیر پشتیبانی می‌کند:
+
+- **MD5**
+- **SHA-256**
+
+با این قابلیت می‌توانید فایل دانلودشده را با Hash مورد انتظار مقایسه کنید و خرابی یا تغییر فایل را تشخیص دهید.
+
+---
+
+# 🍪 پشتیبانی از Cookie
+
+برخی لینک‌های دانلود به احراز هویت یا Cookie مرورگر نیاز دارند.
+
+N13 از روش‌های مختلف Cookie پشتیبانی می‌کند:
+
+- Raw Cookie Header
+- فایل `cookies.txt`
+- Cookieهای زنده مرورگر
+
+---
+
+# 🔬 تحلیل لینک
+
+قبل از شروع دانلود، N13 می‌تواند اطلاعات لینک را بررسی کند، مانند:
+
+- نام فایل
+- حجم فایل
+- نوع محتوا
+- پشتیبانی از Range Request
+
+این کار به N13 کمک می‌کند قبل از شروع دانلود، نحوه مدیریت فایل را بهتر مشخص کند.
+
+---
+
+# 🛡️ امنیت
+
+امنیت بخشی از معماری N13 است.
+
+برخی از کنترل‌ها و محافظت‌های پروژه شامل:
+
+- محافظت SSRF در برابر دسترسی به شبکه‌های خصوصی و محلی
+- توکن اختصاصی برای Browser Relay هر دستگاه
+- بررسی SHA-256 بسته‌های بروزرسانی
+- قرار گرفتن `token.json` در Git Ignore
+
+برای گزارش مشکلات امنیتی، دستورالعمل‌های امنیتی پروژه را مطالعه کنید.
+
+---
+
+# 🗄️ تاریخچه دائمی دانلود
+
+N13 برای ذخیره اطلاعات وظایف و تاریخچه دانلود از SQLite استفاده می‌کند.
+
+اطلاعات دانلودها می‌تواند بعد از بسته شدن و اجرای دوباره برنامه نیز حفظ شود.
+
+---
+
+# 💻 رابط خط فرمان
+
+اگر با Command Line راحت‌تر هستید، N13 یک رابط مبتنی بر Rich نیز دارد که پیشرفت دانلود را به‌صورت زنده نمایش می‌دهد.
+
+بنابراین N13 هم برای:
+
+- استفاده روزمره روی دسکتاپ
+- اسکریپت‌ها و کارهای توسعه‌دهندگان
+
+قابل استفاده است.
+
+---
+
+# 🖱️ System Tray ویندوز
+
+N13 می‌تواند در System Tray ویندوز اجرا شود.
+
+از طریق Tray می‌توانید به گزینه‌هایی مانند موارد زیر دسترسی داشته باشید:
+
+- توقف / ادامه دانلود
+- باز کردن پوشه دانلود
+- تنظیمات
+- مشاهده سرعت فعلی دانلود
+
+---
+
+# 🔄 بروزرسانی خودکار
+
+N13 می‌تواند نسخه‌های جدید را از GitHub Releases بررسی کند.
+
+بسته‌های بروزرسانی قبل از نصب با SHA-256 بررسی می‌شوند و برنامه می‌تواند پس از بروزرسانی دوباره اجرا شود.
+
+---
+
+# 🌍 زبان‌ها
+
+N13 در حال حاضر از این زبان‌ها پشتیبانی می‌کند:
+
+- 🇬🇧 انگلیسی
+- 🇮🇷 فارسی
+
+رابط فارسی دارای پشتیبانی از **RTL** است.
+
+---
+
+# 📥 نصب
+
+## ویندوز — روش پیشنهادی
+
+برای کاربران عادی ویندوز، استفاده از Installer ساده‌ترین روش نصب N13 است.
+
+نصب‌کننده ویندوز برای موارد زیر طراحی شده است:
+
+- عدم نیاز به نصب جداگانه Python
+- نصب برنامه
+- مدیریت WebView2
+- ثبت پروتکل `dldm://`
+- پشتیبانی از بروزرسانی برنامه
+
+آخرین نسخه را از بخش **Releases** ریپازیتوری دریافت کنید.
+
+---
+
+# 🛠️ اجرای پروژه از سورس
+
+### پیش‌نیازها
+
+- Windows
+- Python 3.10+
+- Git
+
+ریپازیتوری را دریافت کنید:
+
+```bash
+git clone https://github.com/SOHAYB-N13/n13-download.git
+cd n13-download
+```
+
+وابستگی‌ها را نصب کنید:
+
+```bash
+pip install -r requirements.txt
+```
+
+اجرای رابط خط فرمان:
+
+```bash
+python d.py
+```
+
+اجرای رابط گرافیکی:
+
+```bash
+python d.py --gui
+```
+
+---
+
+# 🌐 راه‌اندازی مرورگر
+
+برای اتصال Chrome به N13:
+
+### ۱. ثبت پروتکل
+
+```bash
+python d.py --register
+```
+
+### ۲. ساخت افزونه
+
+```bash
+python d.py --create-extension
+```
+
+### ۳. اضافه کردن افزونه به Chrome
+
+در Chrome وارد شوید:
+
+```text
+chrome://extensions
+```
+
+گزینه **Developer mode** را فعال کنید، سپس **Load unpacked** را انتخاب کرده و پوشه افزونه ساخته‌شده را انتخاب کنید.
+
+### ۴. ارسال لینک به N13
+
+روی یک لینک مناسب کلیک راست کنید و گزینه زیر را انتخاب کنید:
+
+```text
+Send to N13 Download Manager
+```
+
+> 🔒 فایل `token.json` شامل توکن اختصاصی Browser Relay است و نباید در Git commit شود.
+
+---
+
+# 🎯 استفاده از خط فرمان
+
+### دانلود یک فایل
+
+```bash
+python d.py "https://example.com/file.zip"
+```
+
+### استفاده از چند اتصال
+
+```bash
+python d.py "https://example.com/file.zip" -t 8
+```
+
+### انتخاب پوشه دانلود
+
+```bash
+python d.py "https://example.com/file.zip" -d "D:/Downloads"
+```
+
+### بررسی فایل
+
+```bash
+python d.py "https://example.com/file.zip" --checksum "sha256:..."
+```
+
+---
+
+# ⚙️ گزینه‌های خط فرمان
+
+| گزینه | توضیح |
+|---|---|
+| `<url>` | لینک دانلود |
+| `-d, --dir <path>` | پوشه دانلود |
+| `-t, --threads <n>` | تعداد اتصال‌های دانلود |
+| `--checksum <hash>` | Hash مورد انتظار MD5 یا SHA-256 |
+| `--insecure-ssl` | غیرفعال کردن SSL Verification در صورت فعال‌سازی صریح |
+| `--from-browser` | مشخص کردن اینکه URL از مرورگر آمده است |
+| `--url-file <path>` | دریافت URLها از یک فایل |
+| `--register` | ثبت پروتکل `dldm://` |
+| `--unregister` | حذف پروتکل `dldm://` |
+| `--create-extension` | ساخت افزونه مرورگر |
+| `--gui` | اجرای رابط گرافیکی |
+
+---
+
+# 🧩 ساختار پروژه
+
+```text
+n13-download/
+├── batch/
+├── browser/
+├── chrome_extension/
+├── config/
+├── core/
+├── extension/
+├── installer/
+├── ui/
+├── d.py
+├── requirements.txt
+├── PACKAGING.md
+├── SECURITY.md
+└── README.md
+```
+
+ساختار پروژه بخش‌های مربوط به موتور دانلود، اتصال مرورگر، رابط کاربری، تنظیمات، بسته‌بندی و اجزای جانبی را از یکدیگر جدا نگه می‌دارد.
+
+---
+
+# 🧪 توسعه
+
+N13 یک پروژه متن‌باز است که توسعه آن ادامه دارد.
+
+تمرکز توسعه پروژه روی موارد زیر است:
+
+- قابلیت اطمینان دانلود
+- عملکرد و سرعت
+- مدیریت صف
+- اتصال به مرورگر
+- یکپارچگی با ویندوز
+- خودکارسازی
+- امنیت
+- تجربه کاربری
+- چندزبانه بودن
+
+گزارش باگ، پیشنهاد قابلیت جدید، بهبود مستندات و Pull Request همگی مورد استقبال هستند.
+
+---
+
+# 🛣️ مسیر توسعه
+
+N13 همچنان در حال پیشرفت است.
+
+برخی از زمینه‌های احتمالی توسعه آینده:
+
+- پشتیبانی از مرورگرهای بیشتر
+- تشخیص قدرتمندتر لینک‌ها
+- مدیریت بهتر اتصال‌ها
+- قابلیت‌های بیشتر برای خودکارسازی
+- بهبود رابط کاربری و تجربه کاربری
+- پشتیبانی از پروتکل‌ها و منابع دانلود بیشتر
+- پشتیبانی از پلتفرم‌های بیشتر
+
+---
+
+# 🤝 مشارکت در پروژه
+
+اگر باگی پیدا کردید یا می‌خواهید N13 را بهتر کنید:
+
+1. یک Issue ایجاد کنید.
+2. مشکل یا پیشنهاد خود را واضح توضیح دهید.
+3. برای باگ‌ها، مراحل بازتولید مشکل را تا حد امکان بنویسید.
+4. برای تغییرات کد، Pull Request ارسال کنید.
+
+قبل از گزارش مشکلات امنیتی، فایل `SECURITY.md` را مطالعه کنید.
+
+---
+
+# 📄 مجوز
+
+N13 Download Manager تحت **MIT License** منتشر شده است.
+
+Copyright © 2026 SOHAYB N13
+
+---
+
+# ⭐ حمایت از N13
+
+اگر N13 برای شما مفید است:
+
+- ⭐ به ریپازیتوری Star بدهید
+- 🐛 باگ‌ها را گزارش کنید
+- 💡 قابلیت‌های جدید پیشنهاد دهید
+- 🔧 در توسعه مشارکت کنید
+- 📢 پروژه را با دیگران به اشتراک بگذارید
+
+هر Star، Issue، Contribution و بازخورد به رشد N13 کمک می‌کند.
+
+---
+
+<div align="center">
+
+### ⬇️ سریع‌تر دانلود کن. هوشمندانه‌تر مدیریت کن. کنترل دست خودت باشد.
+
+**N13 Download Manager**
+
+ساخته‌شده با ❤️ و Python.
+
+</div>
