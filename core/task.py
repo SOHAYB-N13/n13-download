@@ -83,7 +83,16 @@ _TRANSITIONS: Dict[TaskStatus, frozenset] = {
         }
     ),
     TaskStatus.PAUSED: frozenset(
-        {TaskStatus.DOWNLOADING, TaskStatus.CANCELLED, TaskStatus.REMOVED}
+        {
+            TaskStatus.DOWNLOADING,
+            # A pause that survived a restart has no worker left to release, so
+            # returning it to the waiting queue is the only way it can ever run
+            # again.  A live pause resumes via DOWNLOADING instead.  See
+            # docs/QUEUE.md §5.
+            TaskStatus.QUEUED,
+            TaskStatus.CANCELLED,
+            TaskStatus.REMOVED,
+        }
     ),
     TaskStatus.MERGING: frozenset(
         {TaskStatus.VERIFYING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.REMOVED}
@@ -97,17 +106,13 @@ _TRANSITIONS: Dict[TaskStatus, frozenset] = {
     TaskStatus.REMOVED: frozenset(),
 }
 
-# Statuses that can be force-requeued by the crash-recovery scanner.
-_RESTORABLE_TO_QUEUED = frozenset(
-    {
-        TaskStatus.ANALYZING,
-        TaskStatus.STARTING,
-        TaskStatus.DOWNLOADING,
-        TaskStatus.PAUSED,
-        TaskStatus.MERGING,
-        TaskStatus.VERIFYING,
-    }
-)
+# Statuses that mean "a worker was mid-transfer when the process died" and that
+# therefore have to go back to the waiting queue on the next launch.
+#
+# PAUSED is deliberately absent: it is an explicit user decision, not an
+# interruption, so it survives a restart *as PAUSED*.  A restored pause owns no
+# worker, so resuming it means returning it to QUEUED.  See docs/QUEUE.md §5.
+INTERRUPTED_STATES = ACTIVE_STATES - {TaskStatus.PAUSED}
 
 
 def _now() -> float:

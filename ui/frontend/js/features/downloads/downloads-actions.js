@@ -231,6 +231,39 @@ const DownloadsActions = {
       "info", 3200);
   },
 
+  /**
+   * Close the queue gate without touching the downloads already in flight.
+   *
+   * Deliberately not the same action as pausing a download: this stops the
+   * queue feeding the next task in, and the backend reports the new state so
+   * the banner is never guessed.  See docs/QUEUE.md §1.
+   */
+  async pauseQueue(app) {
+    try {
+      const status = await API.pauseQueue();
+      if (status) Events.applyQueueStatus(app, status);
+      Components.toast(
+        I18N.t("toast.queue_paused", "Queue paused"),
+        I18N.t("toast.queue_paused_msg", "Running downloads continue; nothing new will start"),
+        "info", 3000);
+    } catch (e) {
+      API.logJs("pause queue: " + String(e));
+    }
+  },
+
+  async resumeQueue(app) {
+    try {
+      const status = await API.resumeQueue();
+      if (status) Events.applyQueueStatus(app, status);
+      Components.toast(
+        I18N.t("toast.queue_resumed", "Queue resumed"),
+        I18N.t("toast.queue_resumed_msg", "Waiting downloads can start again"),
+        "info", 2600);
+    } catch (e) {
+      API.logJs("resume queue: " + String(e));
+    }
+  },
+
   /** Page-level toolbar bindings (chips, sort, bulk buttons, queue strip). */
   bindPage(app) {
     Utils.$qa("#filterChips .chip").forEach((chip) => {
@@ -250,12 +283,20 @@ const DownloadsActions = {
       app._renderDownloads(true);
     });
 
+    // "Pause everything" / "Resume everything" are the *whole-queue* actions:
+    // they close/open the queue gate AND pause/resume every download.  Pausing
+    // a single download is a different action with a different name, so the
+    // two can never be confused.  The backend returns the resulting gate state
+    // and that is what gets rendered — never an assumption about what the
+    // click must have done.
     Utils.$id("btnPauseAll").addEventListener("click", async () => {
-      await API.pauseAll();
+      const status = await API.pauseAll();
+      if (status) Events.applyQueueStatus(app, status);
       Components.toast(I18N.t("toast.all_paused", "All paused"), I18N.t("toast.all_paused_msg", "Every active download was paused"), "info");
     });
     Utils.$id("btnResumeAll").addEventListener("click", async () => {
-      await API.resumeAll();
+      const status = await API.resumeAll();
+      if (status) Events.applyQueueStatus(app, status);
       Components.toast(I18N.t("toast.all_resumed", "All resumed"), I18N.t("toast.all_resumed_msg", "Paused downloads are running again"), "info");
     });
     Utils.$id("btnClearFinished").addEventListener("click", async () => {
@@ -274,6 +315,10 @@ const DownloadsActions = {
     if (schedBtn) schedBtn.addEventListener("click", () => app._editScheduler());
     const shutBtn = Utils.$id("qsShutdownBtn");
     if (shutBtn) shutBtn.addEventListener("click", () => app._toggleShutdown());
+    const shutCancel = Utils.$id("qsShutdownCancel");
+    if (shutCancel) shutCancel.addEventListener("click", () => app._cancelShutdown());
+    const queueResume = Utils.$id("qsQueueResume");
+    if (queueResume) queueResume.addEventListener("click", () => app._resumeQueue());
     const retryBtn = Utils.$id("qsRetryFailed");
     if (retryBtn) {
       retryBtn.addEventListener("click", async () => {

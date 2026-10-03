@@ -53,6 +53,14 @@ const API = {
   async pauseAll() { return this._call("pause_all"); },
   async resumeAll() { return this._call("resume_all"); },
   async startTask(id) { return this._call("start_task", id); },
+
+  // ── Queue gate ────────────────────────────────────────────────────
+  // A *runtime* state, distinct from any task's Paused status: it stops new
+  // downloads starting without touching the ones in flight.  The UI renders
+  // `getQueueStatus()` rather than inferring anything from a button press.
+  async pauseQueue() { return this._call("pause_queue"); },
+  async resumeQueue() { return this._call("resume_queue"); },
+  async getQueueStatus() { return this._call("get_queue_status"); },
   async openFolder(id) { return this._call("open_folder", id); },
   async openFile(id) { return this._call("open_file", id); },
   async openFileFromHistory(entry) { return this._call("open_file_from_history", entry); },
@@ -106,6 +114,13 @@ const API = {
   async stopLiveServer() { return this._call("stop_live_server"); },
   async liveServerStatus() { return this._call("live_server_status"); },
   async schedulerStatus() { return this._call("scheduler_status"); },
+
+  // ── Auto shutdown ─────────────────────────────────────────────────
+  // Runtime state lives in the backend controller; the UI renders it instead
+  // of inferring anything from the `shutdown_when_done` preference.
+  async getAutoShutdownStatus() { return this._call("get_auto_shutdown_status"); },
+  async setAutoShutdown(enabled) { return this._call("set_auto_shutdown", !!enabled); },
+  async cancelAutoShutdown() { return this._call("cancel_auto_shutdown"); },
   async clipboardStatus() { return this._call("clipboard_status"); },
   // Native clipboard read — used when the WebView denies navigator.clipboard.
   async readClipboardUrl() { return this._call("read_clipboard_url"); },

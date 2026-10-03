@@ -41,7 +41,13 @@ class Api:
         await window.pywebview.api.methodName(args...)
     """
 
-    def __init__(self, config: AppConfig, session: SessionManager) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        session: SessionManager,
+        *,
+        auto_shutdown_power: Any = None,
+    ) -> None:
         self._config = config
         self._session = session
         self._event_queue: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -57,6 +63,9 @@ class Api:
         self._net_baseline_time: float = 0.0
         self._shutdown_done: bool = False
         self._tray = None
+        # Scheduler gate state, mirrored here so the auto-shutdown policy can
+        # explain "waiting for the scheduler window" instead of guessing.
+        self._scheduler_gate_on: bool = False
         # Normalized URL -> (probed_at, Analysis) — the task-scoped probe
         # hand-off source for add_download (never trusted blindly; the runner
         # re-validates URL match, freshness and SSRF before reuse).
@@ -79,11 +88,28 @@ class Api:
         self._manager.subscribe(self._on_task_event)
         log.info("[7] TaskManager ready")
 
+        # Auto shutdown: its own state machine, policy and power abstraction.
+        # The preference lives in the config; all runtime state lives in the
+        # controller (never written back to the config).  Created before the
+        # scheduler so the scheduler's first tick can already consult it.
+        from core.auto_shutdown import AutoShutdownController
+
+        self._auto_shutdown = AutoShutdownController(
+            self._manager,
+            config,
+            power=auto_shutdown_power,
+            logger=log,
+            persist=lambda: save_config(self._config),
+            scheduler=self._scheduler_snapshot,
+            state_file=data_dir() / "auto_shutdown.json",
+        )
+        self._auto_shutdown.subscribe(self._on_auto_shutdown_state)
+
         # Scheduler: queue window gating + night speed override.
         from core.scheduler import Scheduler
         self._scheduler = Scheduler(
             config,
-            on_gate=self._manager.set_scheduler_gate,
+            on_gate=self._apply_scheduler_gate,
             on_speed=self._apply_scheduled_speed,
             logger=log,
         )
@@ -108,10 +134,12 @@ class Api:
                 pass
 
         log.info("[8] Application READY")
-        # Cold-start handoff: process any URLs received via dldm:// while the
+        # Recovery first (a previous run may have died mid-countdown), then the
+        # cold-start handoff: process any URLs received via dldm:// while the
         # application was still initialising.  They go through the exact same
         # pipeline as a browser download (rules, categories, duplicate policy,
         # queue, autostart) -- nothing is bypassed and nothing is dropped.
+        self._auto_shutdown.start()
         self._drain_startup_urls()
 
     def _sync_clipboard_monitor(self) -> None:
@@ -289,7 +317,11 @@ class Api:
             "task": snapshot.to_dict(),
         })
         self._maybe_notify(event, snapshot)
-        self._maybe_auto_shutdown(event)
+        # Every event that can change eligibility feeds the auto-shutdown
+        # state machine (progress is filtered out inside the controller).
+        controller = getattr(self, "_auto_shutdown", None)
+        if controller is not None:
+            controller.notify(event, snapshot)
         self._tray_tick()
 
     def _on_update_state(self, state: Dict[str, Any]) -> None:
@@ -319,52 +351,58 @@ class Api:
             pass
 
     # ── Auto shutdown ───────────────────────────────────────────
+    # All logic lives in ``core.auto_shutdown``; this class only forwards
+    # queue/scheduler/config changes in and pushes runtime state out.
 
-    def _maybe_auto_shutdown(self, event: str) -> None:
-        """Shut the PC down once the queue fully drains (one-shot).
+    def _apply_scheduler_gate(self, on: bool) -> None:
+        """Scheduler gate → queue gate, and re-evaluate auto shutdown.
 
-        Fires only on a ``finished`` task event while ``shutdown_when_done``
-        is armed.  The shutdown happens exclusively when nothing is left
-        unfinished (no active, queued or paused task) *and* nothing failed —
-        a failed download disarms the option with a notice instead of
-        powering off.  The flag is always disarmed after firing so it can
-        never trigger twice, and the frontend is told to refresh its toggle.
+        A queued task blocked by the scheduler window is still unfinished work,
+        so the policy must see the gate to report "waiting for the scheduler
+        window" rather than a generic reason.
         """
-        if event != "finished":
-            return
-        cfg = self._config
-        if not getattr(cfg, "shutdown_when_done", False):
-            return
+        self._scheduler_gate_on = bool(on)
         try:
-            snaps = self._manager.snapshots()
-        except Exception:
-            return
-        terminal = (TaskState.COMPLETED, TaskState.FAILED,
-                    TaskState.CANCELLED, TaskState.REMOVED)
-        unfinished = [s for s in snaps if s.state not in terminal]
-        if unfinished:
-            return
-        failed = sum(1 for s in snaps if s.state == TaskState.FAILED)
-        # One-shot: disarm first so this can never fire twice.
-        try:
-            cfg.shutdown_when_done = False
-            save_config(cfg)
+            self._manager.set_scheduler_gate(on)
         except Exception:
             pass
-        if failed:
-            self._event_queue.put_nowait(
-                {"type": "auto_shutdown", "action": "skipped", "failed": failed})
-            return
-        self._event_queue.put_nowait(
-            {"type": "auto_shutdown", "action": "executing"})
-        try:
-            import subprocess
-            subprocess.Popen(
-                ["shutdown", "/s", "/t", "60", "/c",
-                 "N13: all downloads finished - shutting down (run 'shutdown /a' to cancel)"],
-            )
-        except Exception as exc:
-            log.warning("Auto shutdown failed: %s", exc)
+        self._push_queue_status()
+        controller = getattr(self, "_auto_shutdown", None)
+        if controller is not None:
+            controller.notify("scheduler_changed")
+
+    def _scheduler_snapshot(self):
+        """Current scheduler facts for the auto-shutdown policy."""
+        from core.auto_shutdown import SchedulerSnapshot
+
+        return SchedulerSnapshot(
+            enabled=bool(getattr(self._config, "scheduler_enabled", False)),
+            gated=bool(getattr(self, "_scheduler_gate_on", False)),
+        )
+
+    def _on_auto_shutdown_state(self, payload: Dict[str, Any]) -> None:
+        """Push the controller's runtime state to the frontend.
+
+        The UI renders ``state``/``reason`` directly — it must never infer the
+        runtime situation from the ``shutdown_when_done`` preference flag.
+        """
+        self._event_queue.put_nowait({"type": "auto_shutdown_state", "status": payload})
+
+    def get_auto_shutdown_status(self) -> Dict[str, Any]:
+        """Runtime auto-shutdown state (state machine, reason, countdown)."""
+        return self._auto_shutdown.status()
+
+    def set_auto_shutdown(self, enabled: bool) -> Dict[str, Any]:
+        """Arm/disarm auto shutdown; disarming cancels a pending countdown."""
+        return self._auto_shutdown.set_enabled(bool(enabled))
+
+    def cancel_auto_shutdown(self) -> Dict[str, Any]:
+        """User-initiated cancellation of a pending shutdown.
+
+        Cancels the Windows shutdown, disarms the preference (so it cannot
+        immediately re-arm and loop) and reports the resulting state.
+        """
+        return self._auto_shutdown.cancel()
 
     # ── Event polling ─────────────────────────────────────────────
 
@@ -634,14 +672,68 @@ class Api:
             log.exception("rename failed")
             return {"ok": False, "error": str(exc), "name": "", "path": ""}
 
-    def pause_all(self) -> None:
+    def pause_all(self) -> Dict[str, Any]:
+        """Pause everything: close the queue gate and stop every active task."""
         self._manager.pause_all()
+        return self._publish_queue_status()
 
-    def resume_all(self) -> None:
+    def resume_all(self) -> Dict[str, Any]:
+        """Resume everything: open the queue gate and resume every pause."""
         self._manager.resume_all()
+        return self._publish_queue_status()
 
-    def start_task(self, task_id: str) -> None:
+    # ---- queue gate -----------------------------------------------------
+    # The gate is a *runtime* state, separate from any task's PAUSED status:
+    # it stops new downloads starting without touching the ones in flight.
+    # The UI renders this rather than inferring it from the last button
+    # pressed.  See docs/QUEUE.md §1.
+
+    def pause_queue(self) -> Dict[str, Any]:
+        """Stop starting new downloads; leave running ones alone."""
+        self._manager.pause_queue()
+        return self._publish_queue_status()
+
+    def resume_queue(self) -> Dict[str, Any]:
+        """Allow new downloads to start again."""
+        self._manager.resume_queue()
+        return self._publish_queue_status()
+
+    def get_queue_status(self) -> Dict[str, Any]:
+        """Runtime queue state, so the UI never has to guess at it."""
+        return {
+            "paused": self._manager.queue_paused,
+            "scheduler_gate": self._scheduler_gate_on,
+            "max_concurrent": self._manager.max_concurrent,
+        }
+
+    def _push_queue_status(self) -> None:
+        """Push the queue gate to the frontend without blocking on a reply.
+
+        Runtime state is *pushed*, not polled: a paused queue that only became
+        visible on the next slow tick would read as a stalled application.
+        """
+        try:
+            self._event_queue.put_nowait(
+                {"type": "queue_gate", "status": self.get_queue_status()}
+            )
+        except Exception:
+            pass
+
+    def _publish_queue_status(self) -> Dict[str, Any]:
+        """Push the current gate state and also return it to the caller."""
+        status = self.get_queue_status()
+        self._push_queue_status()
+        return status
+
+    def start_task(self, task_id: str) -> Dict[str, Any]:
+        """Start one waiting task now.
+
+        This opens the queue gate as a documented side effect (see
+        ``TaskManager.start_task``), so the new gate state is pushed rather
+        than left for the UI to discover later.
+        """
         self._manager.start_task(task_id)
+        return self._publish_queue_status()
 
     def open_folder(self, task_id: str) -> None:
         snap = self._manager.get(task_id)
@@ -830,6 +922,16 @@ class Api:
                 self._tray.set_labels(self._tray_labels())
             except Exception:
                 pass
+        # Keep the auto-shutdown state machine in step with the new settings:
+        # the preference itself, plus the policy knobs and the scheduler.
+        controller = getattr(self, "_auto_shutdown", None)
+        if controller is not None:
+            if "shutdown_when_done" in settings:
+                controller.set_enabled(
+                    bool(getattr(self._config, "shutdown_when_done", False))
+                )
+            else:
+                controller.notify("config_changed")
         return True
 
     def select_directory(self) -> str:
@@ -1361,6 +1463,14 @@ class Api:
         if getattr(self, "_shutdown_done", False):
             return
         self._shutdown_done = True
+        # Cancel any pending auto shutdown first: once N13 has exited it can no
+        # longer re-validate eligibility, and the safe failure mode is always
+        # "the machine stays on".
+        try:
+            if getattr(self, "_auto_shutdown", None) is not None:
+                self._auto_shutdown.shutdown()
+        except Exception:
+            pass
         try:
             if getattr(self, "_scheduler", None) is not None:
                 self._scheduler.stop()

@@ -38,6 +38,7 @@ from core.control import TaskCancelled, TaskControl
 from core.store import TaskStore
 from core.task import (
     ACTIVE_STATES,
+    INTERRUPTED_STATES as _INTERRUPTED_STATES,
     TERMINAL_STATES,
     DownloadTask,
     TaskStatus,
@@ -242,6 +243,12 @@ class TaskSnapshot:
     # UI offer an honest "queue order" view and Move up/down controls instead
     # of reordering something the user cannot see.
     queue_index: int = -1
+    # The position this task will ACTUALLY start in (1 = next up), or ``-1``
+    # when it is not waiting.  This is ``queue_index`` re-scored by priority,
+    # i.e. the same ``(priority, manual position)`` rule the scheduler uses, so
+    # it is the only number the UI may label "queue position".  The two differ
+    # exactly when priority is doing something — see docs/QUEUE.md §2.
+    queue_position: int = -1
 
     @property
     def name(self) -> str:
@@ -283,6 +290,7 @@ class TaskSnapshot:
             "num_threads": self.num_threads,
             "speed_limit_bps": self.request.speed_limit_bps,
             "queue_index": self.queue_index,
+            "queue_position": self.queue_position,
         }
 
 
@@ -476,6 +484,77 @@ class TaskManager:
         except ValueError:
             return -1
 
+    @staticmethod
+    def _priority_of(rec: _TaskRecord) -> int:
+        """A task's priority as an int, defaulting to 5 when it is nonsense.
+
+        The single definition of "the priority used for selection" — the
+        scheduler, the plan and the position report all read it, so they can
+        never disagree about a malformed value.
+        """
+        try:
+            return int(rec.task.priority)
+        except (TypeError, ValueError):
+            return 5
+
+    def _queued_in_start_order_locked(self) -> List[tuple]:
+        """Waiting tasks as ``(priority, manual_index, record)``, in the order
+        they will actually start.
+
+        **The** definition of effective start order.  ``queue_plan`` and
+        ``queue_positions`` both read it, so a position shown in the UI can
+        never disagree with the plan shown next to it.  Callers must hold
+        ``self._lock``.
+        """
+        queued: List[tuple] = []
+        for index, tid in enumerate(self._order):
+            rec = self._tasks.get(tid)
+            if rec is None or rec.task.status != TaskStatus.QUEUED:
+                continue
+            queued.append((self._priority_of(rec), index, rec))
+        # Strictly by (priority, manual position) — the same key
+        # `_next_queued_locked` minimises, so the list head is what starts next
+        # and ties keep the earlier manual position.
+        queued.sort(key=lambda item: (item[0], item[1]))
+        return queued
+
+    def _queue_position_locked(self, rec: _TaskRecord) -> int:
+        """Effective 1-based start position of one task, or -1 if not waiting.
+
+        Counts the waiting tasks that outrank this one instead of sorting the
+        whole queue, so filling a single snapshot costs O(n) — the same as the
+        manual ``queue_index`` it sits beside, and cheap enough to call for
+        every event rather than only in bulk.
+        """
+        if rec.task.status != TaskStatus.QUEUED:
+            return -1
+        mine = (self._priority_of(rec), self._queue_index(rec.id))
+        ahead = 0
+        for index, tid in enumerate(self._order):
+            other = self._tasks.get(tid)
+            if other is None or other.id == rec.id:
+                continue
+            if other.task.status != TaskStatus.QUEUED:
+                continue
+            if (self._priority_of(other), index) < mine:
+                ahead += 1
+        return ahead + 1
+
+    def queue_positions(self) -> Dict[str, int]:
+        """Effective 1-based start position of every waiting task.
+
+        This is the order downloads will really start in, which is **not** the
+        manual order once priorities differ.  Tasks that are not waiting are
+        absent.
+        """
+        with self._lock:
+            return {
+                rec.id: offset + 1
+                for offset, (_pri, _index, rec) in enumerate(
+                    self._queued_in_start_order_locked()
+                )
+            }
+
     def _snap(self, rec: _TaskRecord) -> TaskSnapshot:
         t = rec.task
         return TaskSnapshot(
@@ -503,6 +582,7 @@ class TaskManager:
             connection_mode=t.connection_mode,
             num_threads=t.num_threads,
             queue_index=self._queue_index(t.id),
+            queue_position=self._queue_position_locked(rec),
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -696,10 +776,30 @@ class TaskManager:
         return ids
 
     def start_all(self) -> None:
+        """Fill every free concurrency slot from the waiting queue.
+
+        The legacy name overstates it: this starts *whatever fits right now*,
+        not every task.  It honours the queue gate and ``max_concurrent``
+        exactly like any other start, so it is also what a batch add calls
+        after queueing its requests.
+        """
         self._start_next()
 
     def start_task(self, task_id: str) -> None:
-        """Start a specific QUEUED task (no-op for other states)."""
+        """Start a specific QUEUED task now (no-op for other states).
+
+        "Start" is an explicit *run this now* request, so it also **opens the
+        queue gate**.  A Start button that silently does nothing because the
+        queue happens to be paused is exactly the hidden state this queue is
+        not allowed to have; the gate is rendered in the UI, so the side effect
+        is visible and one click from being undone.
+
+        The scheduler gate is different — a window the user configured is a
+        constraint, not a pause — so it is still respected, as is
+        ``max_concurrent``: with every slot busy the task simply moves to the
+        front of the queue and starts when one frees.
+        """
+        events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             rec = self._tasks.get(task_id)
             if not rec or rec.task.status != TaskStatus.QUEUED:
@@ -710,6 +810,39 @@ class TaskManager:
                 pass
             self._order.insert(0, task_id)
             self._save_order_locked()
+            if not (self._closed or self._scheduler_gate):
+                self._global_pause = False
+                if self._start_rec_locked(rec):
+                    events.append(("started", self._snap(rec)))
+        for ev, sn in events:
+            self._emit(ev, sn)
+        self._start_next()
+
+    @property
+    def queue_paused(self) -> bool:
+        """Whether the queue gate is closed, i.e. no NEW download will start.
+
+        Deliberately distinct from a task being PAUSED: the gate blocks the
+        queue, a paused task stops one download, and neither implies the other.
+        See docs/QUEUE.md §1.
+        """
+        with self._lock:
+            return self._global_pause
+
+    def pause_queue(self) -> None:
+        """Close the queue gate: start nothing new, leave running downloads be.
+
+        Unlike :meth:`pause_all` this does not touch any task, so the
+        downloads already in flight keep going — it only stops the queue from
+        feeding the next one in.
+        """
+        with self._lock:
+            self._global_pause = True
+
+    def resume_queue(self) -> None:
+        """Open the queue gate and start whatever now fits."""
+        with self._lock:
+            self._global_pause = False
         self._start_next()
 
     @property
@@ -924,18 +1057,9 @@ class TaskManager:
         is ``None`` rather than a fabricated number.
         """
         with self._lock:
-            queued: List[tuple] = []
-            for index, tid in enumerate(self._order):
-                rec = self._tasks.get(tid)
-                if rec is None or rec.task.status != TaskStatus.QUEUED:
-                    continue
-                t = rec.task
-                try:
-                    pri = int(t.priority)
-                except (TypeError, ValueError):
-                    pri = 5
-                queued.append((pri, index, rec))
-            queued.sort(key=lambda item: (item[0], item[1]))
+            # Same ordering helper the per-task `queue_position` uses, so the
+            # plan and the position shown in the list cannot drift apart.
+            queued = self._queued_in_start_order_locked()
 
             active: List[_TaskRecord] = [
                 rec for tid in self._order
@@ -1063,6 +1187,11 @@ class TaskManager:
             self._start_next()
 
     def pause_all(self) -> None:
+        """Pause **everything**: close the queue gate AND stop every active task.
+
+        This is the "stop the whole thing" button.  Use :meth:`pause_queue` to
+        stop new downloads starting while letting the current ones finish.
+        """
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             self._global_pause = True
@@ -1081,7 +1210,46 @@ class TaskManager:
         for ev, sn in events:
             self._emit(ev, sn)
 
+    @staticmethod
+    def _has_live_worker(rec: _TaskRecord) -> bool:
+        """Whether this record still owns a running worker thread."""
+        return rec.thread is not None and rec.thread.is_alive()
+
+    def _resume_paused_locked(self, rec: _TaskRecord) -> bool:
+        """Resume one PAUSED task.  Callers must hold ``self._lock``.
+
+        Two genuinely different situations hide behind "Paused", and they need
+        different handling:
+
+        * **Live pause** — the worker that paused is still parked at its pause
+          barrier, so releasing the barrier continues the transfer exactly where
+          it stopped.
+        * **Restored pause** — the process was restarted, so there is no worker
+          and no occupied slot.  Transitioning straight to DOWNLOADING would
+          leave the task claiming to download forever with nothing doing the
+          work, so it goes back to QUEUED and the scheduler starts it like any
+          other waiting download.
+
+        Returns True when the record changed.
+        """
+        rec.control.resume()
+        if self._has_live_worker(rec):
+            try:
+                rec.task.transition(TaskStatus.DOWNLOADING)
+            except TransitionError:
+                return False
+            self._save_task_locked(rec)
+            return True
+        try:
+            rec.task.transition(TaskStatus.QUEUED)
+        except TransitionError:
+            return False
+        rec.task.error = ""
+        self._save_task_locked(rec)
+        return True
+
     def resume_all(self) -> None:
+        """Resume **everything**: open the queue gate AND resume every pause."""
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
             self._global_pause = False
@@ -1089,30 +1257,30 @@ class TaskManager:
                 rec = self._tasks.get(tid)
                 if not rec or rec.task.status != TaskStatus.PAUSED:
                     continue
-                rec.control.resume()
-                try:
-                    rec.task.transition(TaskStatus.DOWNLOADING)
-                except TransitionError:
-                    pass
-                events.append(("updated", self._snap(rec)))
+                if self._resume_paused_locked(rec):
+                    events.append(("updated", self._snap(rec)))
         for ev, sn in events:
             self._emit(ev, sn)
         self._start_next()
 
     def resume_task(self, task_id: str) -> None:
+        """Resume one paused task.
+
+        **Never touches the queue gate.**  Resuming a single row must not
+        quietly start every other waiting download — that is the ambiguity this
+        method used to have, and it is why ``_global_pause`` is left exactly as
+        it was.  Use :meth:`resume_queue` or :meth:`resume_all` to open the
+        gate deliberately.
+        """
         event: Optional[tuple[str, TaskSnapshot]] = None
         with self._lock:
             rec = self._tasks.get(task_id)
-            if rec:
-                self._global_pause = False
-                rec.control.resume()
-                if rec.task.status == TaskStatus.PAUSED:
-                    try:
-                        rec.task.transition(TaskStatus.DOWNLOADING)
-                    except TransitionError:
-                        pass
-                    self._save_task_locked(rec)
-                    event = ("updated", self._snap(rec))
+            if (
+                rec
+                and rec.task.status == TaskStatus.PAUSED
+                and self._resume_paused_locked(rec)
+            ):
+                event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
         self._start_next()
@@ -1324,10 +1492,47 @@ class TaskManager:
                 best, best_key = rec, key
         return best
 
+    def _start_blocked(self) -> bool:
+        """Whether new downloads are currently forbidden from starting.
+
+        One predicate for all three gates, so a future addition cannot be
+        honoured in one branch and forgotten in another.  Callers must hold
+        ``self._lock``.
+        """
+        return self._closed or self._global_pause or self._scheduler_gate
+
+    def _start_rec_locked(self, rec: _TaskRecord) -> bool:
+        """Spawn the worker for one QUEUED task.  Callers must hold the lock.
+
+        The **only** place a download worker is created.  Returns False —
+        without raising — when every concurrency slot is busy or the task
+        cannot legally move to ANALYZING, so callers can simply move on.
+        """
+        if self._active >= self._max_concurrent:
+            return False
+        try:
+            rec.task.transition(TaskStatus.ANALYZING)
+        except TransitionError:
+            return False
+        rec.control = TaskControl()
+        rec.task.error = ""
+        rec.task.completed_at = None
+        self._active += 1
+        t = threading.Thread(
+            target=self._worker,
+            args=(rec.id,),
+            name=f"n13-task-{rec.id}",
+            daemon=True,
+        )
+        rec.thread = t
+        t.start()
+        self._save_task_locked(rec)
+        return True
+
     def _start_next(self) -> None:
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
-            if self._closed or self._global_pause or self._scheduler_gate:
+            if self._start_blocked():
                 return
             # Tasks that could not be transitioned are skipped for the rest of
             # this pass.  Without this the loop would re-select the same task
@@ -1337,24 +1542,9 @@ class TaskManager:
                 rec = self._next_queued_locked(skip=attempted)
                 if rec is None:
                     break
-                try:
-                    rec.task.transition(TaskStatus.ANALYZING)
-                except TransitionError:
+                if not self._start_rec_locked(rec):
                     attempted.add(rec.id)
                     continue
-                rec.control = TaskControl()
-                rec.task.error = ""
-                rec.task.completed_at = None
-                self._active += 1
-                t = threading.Thread(
-                    target=self._worker,
-                    args=(rec.id,),
-                    name=f"n13-task-{rec.id}",
-                    daemon=True,
-                )
-                rec.thread = t
-                t.start()
-                self._save_task_locked(rec)
                 events.append(("started", self._snap(rec)))
 
         for ev, sn in events:
@@ -1663,8 +1853,12 @@ class TaskManager:
                     continue
                 if task.status == TaskStatus.COMPLETED:
                     continue
-                # Interrupted mid-flight tasks go back to the queue.
-                if task.status in ACTIVE_STATES:
+                # A worker was mid-transfer when the process died, so it goes
+                # back to the queue: restoring the *status* would claim a worker
+                # that does not exist.  A PAUSED task is deliberately left
+                # PAUSED — the user asked for that, and the decision outlives
+                # the process.  See docs/QUEUE.md §5.
+                if task.status in _INTERRUPTED_STATES:
                     task.force_status(TaskStatus.QUEUED)
                     task.error = "Restored after restart"
                 self._tasks[task.id] = _TaskRecord(task=task)

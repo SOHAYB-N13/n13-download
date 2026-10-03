@@ -92,7 +92,10 @@ _settingsDef() {
         { key: "scheduler_enabled", label: "Enable scheduler", hint: "Gate the queue by time of day and apply a night speed cap", type: "toggle" },
         { key: "schedule_start_time", label: "Start at", hint: "Queue stays paused until this time (HH:MM)", type: "time" },
         { key: "schedule_stop_time", label: "Stop at (optional)", hint: "Queue pauses from this time (HH:MM). Empty means no end time.", type: "time" },
-        { key: "shutdown_when_done", label: "Shut down when done", hint: "Shut down the computer after all downloads finish (60s warning, cancelled if anything fails)", type: "toggle" },
+        { key: "shutdown_when_done", label: "Shut down when done", hint: "Shut down the computer once the whole download workload is finished. New downloads, resumes and retries cancel the pending shutdown.", type: "toggle" },
+        { key: "shutdown_countdown_seconds", label: "Shutdown warning", hint: "Seconds of warning before the machine powers off (5–3600). The shutdown is re-checked just before it fires.", type: "number", min: 5, max: 3600 },
+        { key: "shutdown_allow_failures", label: "Shut down after failures", hint: "Power off even though some downloads failed", type: "toggle" },
+        { key: "shutdown_allow_cancelled", label: "Shut down after cancellations", hint: "Power off even though some downloads were cancelled", type: "toggle" },
         { key: "schedule_days", label: "Active days", hint: "Days the window above applies to. None selected means every day.", type: "days", wide: true },
         { key: "_night_cap_enabled", label: "Night speed limit", hint: "Slow downloads during the night window", type: "toggle", of: "night_speed_limit_bps" },
         { key: "night_speed_limit_bps", label: "Night limit", hint: "Applied between night start and night end", type: "speed" },
@@ -488,9 +491,11 @@ _wireSettings(container, s) {
       const ok = await API.updateSettings(batch);
       if (ok) {
         Object.assign(this.state.settings, batch);
-        // Scheduler settings are surfaced in the Queue strip, which lives on
-        // another page; refresh it now instead of waiting for the idle poll.
-        if (ids.some((k) => k === "scheduler_enabled" || k.startsWith("schedule_") || k === "shutdown_when_done")) this._renderQueueStrip();
+        // Scheduler and auto-shutdown settings are surfaced in the Queue strip,
+        // which lives on another page; refresh it now instead of waiting for the
+        // idle poll.  The auto-shutdown policy knobs change the strip's reason
+        // text, so they belong in this list too.
+        if (ids.some((k) => k === "scheduler_enabled" || k.startsWith("schedule_") || k.startsWith("shutdown_"))) this._renderQueueStrip();
         ids.forEach((k) => markSaved(secId || (container.querySelector(`[data-key="${k}"]`) || {}).closest?.(".set-card")?.id?.replace("set-", "") || "general"));
       } else {
         Components.toast(I18N.t("toast.not_saved", "Not saved"), I18N.t("toast.not_saved_msg", "A setting could not be applied"), "error");

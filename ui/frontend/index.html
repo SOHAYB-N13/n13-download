@@ -304,10 +304,10 @@ try {
               </select>
             </label>
             <span class="tb-divider" aria-hidden="true"></span>
-            <button class="icon-btn" id="btnResumeAll" data-i18n-tip="toast.all_resumed" data-i18n-aria-label="toast.all_resumed">
+            <button class="icon-btn" id="btnResumeAll" data-i18n-tip="queue.resume_everything_tip" data-i18n-aria-label="queue.resume_everything_tip">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4.8v14.4c0 .8.9 1.3 1.6.9l11.2-7.2a1 1 0 0 0 0-1.7L9.1 4a1 1 0 0 0-1.6.8Z"/></svg>
             </button>
-            <button class="icon-btn" id="btnPauseAll" data-i18n-tip="toast.all_paused" data-i18n-aria-label="toast.all_paused">
+            <button class="icon-btn" id="btnPauseAll" data-i18n-tip="queue.pause_everything_tip" data-i18n-aria-label="queue.pause_everything_tip">
               <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="4.5" width="3.6" height="15" rx="1.2"/><rect x="13.9" y="4.5" width="3.6" height="15" rx="1.2"/></svg>
             </button>
             <button class="icon-btn" id="btnClearFinished" data-i18n-tip="toast.list_cleared" data-i18n-aria-label="toast.list_cleared">
@@ -353,6 +353,32 @@ try {
             <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 3.5v5h-5"/></svg>
             <span id="qsRetryLabel" data-i18n="queue.retry_failed">Retry failed</span>
           </button>
+        </div>
+
+        <!-- Queue gate — shown only while the queue is paused.  A paused queue
+             must never look like a hung app: the banner says why nothing is
+             starting and offers the one action that fixes it.  Rendered from
+             the backend's runtime state, never inferred from a button press. -->
+        <div class="shutdown-banner queue-banner" id="qsQueuePausedBanner" role="status" aria-live="polite" hidden>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="4.5" width="3.6" height="15" rx="1.2"/><rect x="13.9" y="4.5" width="3.6" height="15" rx="1.2"/></svg>
+          <div class="sb-text">
+            <strong data-i18n="queue.paused_title">Queue paused</strong>
+            <span data-i18n="queue.paused_msg">No new downloads will start until you resume the queue.</span>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="qsQueueResume" data-i18n="queue.resume_queue">Resume queue</button>
+        </div>
+
+        <!-- Auto shutdown countdown — shown only while a shutdown is pending.
+             Rendered from the backend's runtime state, never inferred from the
+             shutdown_when_done preference. -->
+        <div class="shutdown-banner" id="qsShutdownBanner" role="status" aria-live="polite" hidden>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v8"/><path d="M6.3 6.2a8 8 0 1 0 11.4 0"/></svg>
+          <div class="sb-text">
+            <strong data-i18n="queue.shutdown_scheduled">Shutdown scheduled</strong>
+            <span id="qsShutdownMsg">The computer shuts down in 60 seconds</span>
+          </div>
+          <span class="sb-count" id="qsShutdownCount">60s</span>
+          <button class="btn btn-ghost btn-sm" id="qsShutdownCancel" data-i18n="queue.shutdown_cancel">Cancel shutdown</button>
         </div>
 
         <!-- Category filter — rendered only when the list spans >1 category -->

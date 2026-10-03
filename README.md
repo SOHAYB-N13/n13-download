@@ -54,6 +54,23 @@ N13 gives you control when you need it, while keeping everyday downloads simple.
 
 ---
 
+## 🆕 What's new in v1.3.0
+
+- 🔌 **Shutdown after downloads, rebuilt as a real state machine** — the warning
+  window is now configurable (5–3600 s, 60 by default), you can choose whether a
+  failed or cancelled download still blocks the shutdown, and every cancellation
+  now tells you *why* it happened. See
+  [Shutdown After Downloads](#-shutdown-after-downloads).
+- ⏸️ **Pause now means exactly one thing** — "Pause everything", "Pause queue"
+  and pausing a single row are three distinct actions, and a held queue is
+  always visible as a banner. See
+  [Powerful Download Queue](#-powerful-download-queue).
+- ♻️ **Pauses and queue positions now tell the truth** — a download you paused
+  stays paused across a restart, and "Queue position" reports the order
+  downloads will actually start in.
+
+---
+
 ## 🎯 Built Around the Whole Download Workflow
 
 N13 is more than a program that starts a download and waits.
@@ -238,6 +255,33 @@ You can:
 - Navigate using the keyboard
 - Control what downloads next
 
+### Pausing means exactly one thing
+
+The queue and a single download are paused by two different actions with two
+different names, so "Pause" can never be ambiguous:
+
+- **Pause everything** stops the queue *and* every running transfer.
+- **Pause queue** stops only the queue — downloads already running keep going
+  until they finish, but nothing new starts.
+- **Pause** on a row stops that one download and nothing else.
+
+A held queue is always shown as a banner with a **Resume queue** button, so it
+can never be mistaken for a stalled application. Resuming a single download
+never un-pauses the whole queue.
+
+### Queue position tells the truth
+
+The **Queue order** sort and the "Queue position" field report the order
+downloads will *actually start* in — not the order the rows happen to sit in.
+When a priority moves a row out of its slot, the row is labelled with the
+position it will really take.
+
+### Pauses survive a restart
+
+A download you paused stays paused the next time N13 starts, instead of quietly
+re-queuing itself. Downloads that were *interrupted* by the shutdown — rather
+than paused by you — return to the queue and resume where they stopped.
+
 ---
 
 # 🗓️ Scheduler
@@ -273,9 +317,21 @@ N13 provides speed and bandwidth controls so you can leave enough network capaci
 
 Starting a large download before going to sleep?
 
-N13 can optionally shut down Windows after the download queue finishes successfully.
+N13 can optionally shut down Windows once the whole download workload is
+finished. It is a real state machine with an explicit eligibility policy, not a
+flag on a "finished" event:
 
-A cancellation window is provided so you can stop the shutdown if necessary.
+- A warning window before the shutdown — configurable from **5 to 3600 seconds**
+  (60 by default) — which you can cancel.
+- The decision is re-checked seconds before the deadline.
+- Adding a new download, resuming a paused one, a pending retry, or turning the
+  setting off cancels a pending shutdown, and tells you *why* it was cancelled.
+- By default a failed or user-cancelled download blocks the shutdown; you can
+  opt in to shutting down anyway from **Settings**.
+- If N13 cannot determine the state of the queue with certainty, it does not
+  power the machine off.
+
+See [`docs/AUTO_SHUTDOWN.md`](docs/AUTO_SHUTDOWN.md) for the full rules.
 
 ---
 
@@ -675,6 +731,22 @@ N13 در عین سادگی برای استفاده روزمره، ابزارها
 
 ---
 
+## 🆕 تازه‌های نسخه ۱.۳.۰
+
+- 🔌 **خاموش‌شدن پس از پایان دانلود، بازنویسی‌شده به‌صورت ماشین حالت واقعی** —
+  مدت هشدار اکنون قابل‌تنظیم است (۵ تا ۳۶۰۰ ثانیه، پیش‌فرض ۶۰)، می‌توانید انتخاب
+  کنید که دانلود ناموفق یا لغوشده هنوز مانع خاموشی شود یا نه، و هر لغو دلیل خود
+  را می‌گوید. بخش
+  [خاموش شدن خودکار ویندوز](#-خاموش-شدن-خودکار-ویندوز) را ببینید.
+- ⏸️ **«توقف» اکنون دقیقاً یک معنی دارد** — «توقف همه‌چیز»، «توقف صف» و توقف یک
+  ردیف سه عملیات جداگانه‌اند و صف متوقف‌شده همیشه به‌صورت بنر نمایان است. بخش
+  [صف دانلود قدرتمند](#-صف-دانلود-قدرتمند) را ببینید.
+- ♻️ **توقف‌ها و جایگاه صف اکنون واقعیت را نشان می‌دهند** — دانلودی که متوقف
+  کرده‌اید پس از راه‌اندازی مجدد متوقف می‌ماند و «جایگاه در صف» ترتیبی را نشان
+  می‌دهد که دانلودها واقعاً با آن شروع می‌شوند.
+
+---
+
 # 🎯 N13 فقط یک دانلودر ساده نیست
 
 N13 کل فرایند دانلود را مدیریت می‌کند.
@@ -859,6 +931,33 @@ Documents  → D:/Downloads/Documents
 - با صفحه‌کلید در صف حرکت کنید
 - ترتیب دانلودهای بعدی را کنترل کنید
 
+### «توقف» دقیقاً یک معنی دارد
+
+صف و یک دانلود با دو عملیات متفاوت و دو نام متفاوت متوقف می‌شوند، بنابراین
+«توقف» هرگز مبهم نیست:
+
+- **توقف همه‌چیز** هم صف و هم همهٔ انتقال‌های در حال اجرا را متوقف می‌کند.
+- **توقف صف** فقط صف را متوقف می‌کند — دانلودهای در حال اجرا تا پایان ادامه
+  می‌یابند، ولی چیز جدیدی شروع نمی‌شود.
+- **توقف** روی یک ردیف فقط همان دانلود را متوقف می‌کند.
+
+صف متوقف‌شده همیشه به‌صورت بنر همراه با دکمهٔ **از سرگیری صف** نمایش داده می‌شود،
+پس هرگز با برنامهٔ هنگ‌کرده اشتباه گرفته نمی‌شود. ادامه‌دادن یک دانلود، صف را از
+سر نمی‌گیرد.
+
+### جایگاه در صف واقعیت را نشان می‌دهد
+
+مرتب‌سازی **ترتیب صف** و فیلد «جایگاه در صف» ترتیبی را نشان می‌دهند که دانلودها
+**واقعاً** با آن شروع می‌شوند — نه ترتیبی که ردیف‌ها در فهرست دارند. هرگاه اولویت،
+ردیفی را از جایگاهش بیرون بیاورد، روی ردیف جایگاهی که واقعاً خواهد گرفت نمایش داده
+می‌شود.
+
+### توقف‌ها پس از راه‌اندازی مجدد باقی می‌مانند
+
+دانلودی که متوقف کرده‌اید، در اجرای بعدی N13 متوقف می‌ماند و بی‌صدا به صف
+بازنمی‌گردد. دانلودهایی که به‌دلیل خاموش‌شدن برنامه **قطع** شده‌اند — نه با توقف
+دستی شما — به صف بازمی‌گردند و از همان نقطه ادامه می‌یابند.
+
 ---
 
 # 🗓️ زمان‌بندی دانلود
@@ -894,9 +993,15 @@ N13 امکان کنترل سرعت و پهنای باند را فراهم می�
 
 # 🔌 خاموش شدن خودکار ویندوز
 
-اگر یک دانلود حجیم را قبل از خواب شروع می‌کنید، می‌توانید N13 را طوری تنظیم کنید که پس از پایان موفق صف دانلود، ویندوز را خاموش کند.
+اگر یک دانلود حجیم را قبل از خواب شروع می‌کنید، می‌توانید N13 را طوری تنظیم کنید که پس از پایان کل کار دانلود، ویندوز را خاموش کند. این یک ماشین حالت واقعی با سیاست صریح است، نه یک پرچم روی رویداد «پایان»:
 
-برای جلوگیری از خاموش شدن ناخواسته، امکان لغو خاموش شدن نیز وجود دارد.
+- پنجره هشدار پیش از خاموشی — قابل‌تنظیم از **۵ تا ۳۶۰۰ ثانیه** (پیش‌فرض ۶۰) — که می‌توانید آن را لغو کنید.
+- تصمیم، چند ثانیه پیش از مهلت دوباره بررسی می‌شود.
+- اضافه‌شدن دانلود جدید، ادامه‌یافتن یک دانلود متوقف‌شده، وجود تلاش مجدد در انتظار، یا خاموش‌کردن این گزینه، خاموشی در انتظار را لغو می‌کند و دلیل لغو را به شما می‌گوید.
+- به‌صورت پیش‌فرض، دانلود ناموفق یا لغوشده مانع خاموشی می‌شود؛ می‌توانید از بخش **تنظیمات** خاموشی در این حالت را هم فعال کنید.
+- اگر N13 نتواند وضعیت صف را با اطمینان تشخیص دهد، کامپیوتر را خاموش نمی‌کند.
+
+قواعد کامل در [`docs/AUTO_SHUTDOWN.md`](docs/AUTO_SHUTDOWN.md).
 
 ---
 

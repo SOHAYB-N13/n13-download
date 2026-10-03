@@ -214,11 +214,12 @@ const Queue = {
     const waitingEl = Utils.$id("queueWaiting");
     this.state.scroller = waitingEl ? waitingEl.scrollTop : this.state.scroller;
 
-    view.replaceChildren(
-      this._overviewEl(),
-      this._bodyEl(),
-      this._recoEl(),
-    );
+    // The gate banner is only built while it has something to say, so the DOM
+    // never carries an empty placeholder node.
+    const gate = this._gateBannerEl();
+    const children = [this._overviewEl(), this._bodyEl(), this._recoEl()];
+    if (gate) children.unshift(gate);
+    view.replaceChildren(...children);
 
     const scroller = Utils.$id("queueWaiting");
     if (scroller) scroller.scrollTop = this.state.scroller;
@@ -226,6 +227,30 @@ const Queue = {
     // Keep the sidebar count honest from the moment the page paints rather
     // than waiting for the next tick.
     this._updateBadge();
+  },
+
+  /**
+   * Banner shown while the queue gate is closed.
+   *
+   * Without it a paused queue looks exactly like a stalled one: nothing starts
+   * and nothing explains why.  The state is read from the backend's runtime
+   * report — never inferred from the fact that the user pressed Pause once.
+   * See docs/QUEUE.md §1.
+   *
+   * Returns ``null`` when the gate is open, so no empty node is ever created.
+   */
+  _gateBannerEl() {
+    if (!App.state.queuePaused) return null;
+    const box = document.createElement("div");
+    box.className = "qk-gate";
+    box.innerHTML = `
+      <span class="qk-gate-ico" aria-hidden="true">${Utils.icon("pause", 16)}</span>
+      <div class="qk-gate-text">
+        <strong>${Utils.escapeHtml(I18N.t("queue.paused_title", "Queue paused"))}</strong>
+        <span>${Utils.escapeHtml(I18N.t("queue.paused_msg", "No new downloads will start until you resume the queue."))}</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-qk="resume-queue">${Utils.escapeHtml(I18N.t("queue.resume_queue", "Resume queue"))}</button>`;
+    return box;
   },
 
   /** Top strip: live counters + queue drain estimate. */
@@ -250,16 +275,27 @@ const Queue = {
         I18N.fmt("queue.of_slots", { n: active.length, m: slots }, "{n} of {m} slots"),
         active.length ? "tint-green" : ""),
       card(I18N.t("queue.waiting", "Waiting"), String(waiting.length),
-        waiting.length ? I18N.t("queue.queued_behind", "queued behind them") : I18N.t("queue.nothing_waiting", "nothing waiting")),
+        waiting.length
+          // With the gate closed the waiting work is not "queued behind" the
+          // running one — it is held.  Saying the wrong one would be the same
+          // class of lie as showing a start time for work that cannot start.
+          ? (App.state.queuePaused
+            ? I18N.t("queue.held_by_pause", "held — the queue is paused")
+            : I18N.t("queue.queued_behind", "queued behind them"))
+          : I18N.t("queue.nothing_waiting", "nothing waiting")),
       card(I18N.t("queue.bandwidth", "Bandwidth"), Utils.formatSpeed(totalSpeed),
         I18N.t("queue.measured", "measured right now")),
       card(I18N.t("queue.drain", "Queue finishes in"),
         !drain ? "—" : (drain.exact ? Utils.formatETA(drain.seconds) : "≥ " + Utils.formatETA(drain.seconds)),
-        !drain
-          ? I18N.t("queue.unknown_eta", "not enough data yet")
-          : drain.exact
-            ? I18N.t("queue.estimate", "estimate")
-            : I18N.t("queue.at_least", "at least — some sizes are unknown")),
+        App.state.queuePaused
+          // The plan assumes the queue runs; while it is paused the estimate is
+          // an "if you resume now" figure, so it must say so.
+          ? I18N.t("queue.estimate_held", "estimate — the queue is paused")
+          : !drain
+            ? I18N.t("queue.unknown_eta", "not enough data yet")
+            : drain.exact
+              ? I18N.t("queue.estimate", "estimate")
+              : I18N.t("queue.at_least", "at least — some sizes are unknown")),
     ].join("");
     return wrap;
   },
@@ -441,6 +477,22 @@ const Queue = {
     return I18N.t("queue.pri_normal", "Normal priority");
   },
 
+  /**
+   * The manual list position, rendered only when it differs from where the
+   * task will actually start.
+   *
+   * With uniform priorities the two numbers are identical, so showing both
+   * would be pure noise.  When they *do* differ, hiding the manual one would
+   * make a drag & drop look like it did nothing — the exact confusion the two
+   * clearly-labelled order views exist to prevent.  See docs/QUEUE.md §2.
+   */
+  _manualPosRow(t) {
+    if (!(t.queue_position > 0) || !(t.queue_index >= 0)) return "";
+    if (t.queue_position === t.queue_index + 1) return "";
+    return `<div class="qk-kv"><dt>${Utils.escapeHtml(I18N.t("queue.kv_list_pos", "Position in list"))}</dt>`
+      + `<dd>${t.queue_index + 1}</dd></div>`;
+  },
+
   _emptyRow(title, sub) {
     const el = document.createElement("div");
     el.className = "qk-empty";
@@ -510,7 +562,9 @@ const Queue = {
         ${row(I18N.t("queue.kv_threads", "Threads"), t.num_threads > 0 ? String(t.num_threads) : dash)}
         ${row(I18N.t("queue.kv_range", "Resumable"), t.supports_range ? yes : no)}
         ${row(I18N.t("queue.kv_checksum", "Checksum"), t.checksum || dash)}
-        ${row(I18N.t("queue.kv_queue_pos", "Queue position"), t.queue_index >= 0 ? String(t.queue_index + 1) : dash)}
+        ${row(I18N.t("queue.kv_queue_pos", "Queue position"),
+          t.queue_position > 0 ? `#${t.queue_position}` : dash)}
+        ${this._manualPosRow(t)}
       </dl>`;
     }
 
@@ -653,7 +707,12 @@ const Queue = {
       }
 
       const bulk = e.target.closest("[data-qk]");
-      if (bulk) { this._bulkMove(bulk.dataset.qk); return; }
+      if (bulk) {
+        // The gate banner's button is an action, not a list move.
+        if (bulk.dataset.qk === "resume-queue") { App._resumeQueue(); return; }
+        this._bulkMove(bulk.dataset.qk);
+        return;
+      }
 
       // A plain click anywhere on a waiting row selects it.
       if (e.target.closest(".qk-row-wait")) this._onRowClick(e);

@@ -7,6 +7,27 @@
 
 .queue-view { display: flex; flex-direction: column; gap: 14px; }
 
+/* ── Queue-gate banner ──────────────────────────────────────────────────────
+   Shown only while the queue gate is closed.  It exists so a paused queue can
+   never be mistaken for a stalled one: the banner names the state and offers
+   the single action that clears it.  `margin-inline-start` keeps the button at
+   the far end in both LTR and RTL. */
+
+.qk-gate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 15px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+}
+.qk-gate-ico { display: flex; color: var(--text-2); flex: none; }
+.qk-gate-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.qk-gate-text strong { font-size: 13px; color: var(--text-1); }
+.qk-gate-text span { font-size: 12px; color: var(--text-2); }
+.qk-gate .btn { margin-inline-start: auto; flex: none; white-space: nowrap; }
+
 /* ── Overview cards ─────────────────────────────────────────────────────── */
 
 .qk-overview {

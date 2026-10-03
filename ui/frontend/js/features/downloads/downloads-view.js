@@ -56,18 +56,38 @@ const DownloadsView = {
       progress: (t) => (t.total > 0 ? t.completed / t.total : 0),
       speed: (t) => t.speed_bps || 0,
       status: (t) => t.state,
-      // Backend queue position.  Tasks the manager no longer tracks (-1) sort
-      // to the bottom rather than jumping to the top.
-      queue: (t) => (t.queue_index >= 0 ? t.queue_index : Number.MAX_SAFE_INTEGER),
+      // Effective start order first — what the scheduler will really do — with
+      // the manual position as a tiebreak for everything that is not waiting.
+      // Sorting by `queue_index` alone was the lie: once priorities differ it
+      // is not the order anything starts in.  See docs/QUEUE.md §2.
+      queue: (t) => [
+        t.queue_position > 0 ? t.queue_position : Number.MAX_SAFE_INTEGER,
+        t.queue_index >= 0 ? t.queue_index : Number.MAX_SAFE_INTEGER,
+      ],
     }[sortKey] || ((t) => t.created_at || 0);
 
-    list = [...list].sort((a, b) => {
-      const ka = key(a), kb = key(b);
-      if (ka < kb) return -sortDir;
-      if (ka > kb) return sortDir;
-      return 0;
-    });
+    list = [...list].sort((a, b) => this.compareKeys(key(a), key(b)) * sortDir);
     return list;
+  },
+
+  /**
+   * Compare two sort keys, which may be scalars or tuples.
+   *
+   * Tuple keys compare element by element so a secondary key can break a tie
+   * without collapsing into a string comparison (`[10, 0] < [9, 0]` would be
+   * true as strings and wrong as numbers).
+   */
+  compareKeys(a, b) {
+    const aa = Array.isArray(a) ? a : [a];
+    const bb = Array.isArray(b) ? b : [b];
+    const n = Math.max(aa.length, bb.length);
+    for (let i = 0; i < n; i++) {
+      const x = aa[i];
+      const y = bb[i];
+      if (x < y) return -1;
+      if (x > y) return 1;
+    }
+    return 0;
   },
 
   renderDownloads(app, structureChanged = false) {
@@ -485,10 +505,30 @@ const DownloadsView = {
 
     const shutBtn = Utils.$id("qsShutdownBtn");
     if (shutBtn) {
-      const on = !!sched.shutdown_when_done;
-      shutBtn.textContent = on ? I18N.t("queue.on", "On") : I18N.t("queue.off", "Off");
-      shutBtn.classList.toggle("warn", on);
+      // Render the *runtime* state, never the preference alone: "the toggle is
+      // On" and "a shutdown is counting down" are different facts.
+      const as = app.state.autoShutdown;
+      const enabled = as ? !!as.enabled : !!sched.shutdown_when_done;
+      const state = as ? as.state : (enabled ? "Armed" : "Disabled");
+      shutBtn.textContent = Events.autoShutdownStateLabel(state);
+      shutBtn.classList.toggle("warn", state === "Countdown" || state === "Blocked");
+      shutBtn.classList.toggle("good", state === "Armed" || state === "Waiting");
+      const reason = as ? (as.cancel_reason || as.reason) : "";
+      const reasonTxt = Events.autoShutdownReasonLabel(reason);
+      shutBtn.setAttribute("data-tip", reasonTxt
+        ? `${I18N.t("queue.auto_shutdown", "Auto shutdown")} · ${reasonTxt}`
+        : I18N.t("queue.auto_shutdown_tip", "Shut down the computer when all downloads finish"));
     }
+    // The countdown banner is driven entirely by the runtime state.
+    Events.syncShutdownCountdown(app);
+
+    // The queue-gate banner is driven entirely by the runtime state too.  A
+    // paused queue must never be invisible: nothing starting with no
+    // explanation reads as a hung app.
+    const strip = Utils.$id("queueStrip");
+    if (strip) strip.classList.toggle("paused", !!app.state.queuePaused);
+    const pausedBanner = Utils.$id("qsQueuePausedBanner");
+    if (pausedBanner) pausedBanner.hidden = !app.state.queuePaused;
 
     const retryBtn = Utils.$id("qsRetryFailed");
     if (retryBtn) {
@@ -560,14 +600,19 @@ const DownloadsView = {
     }
   },
 
-  /** Auto-shutdown toggle driven from the queue strip (persisted). */
+  /**
+   * Auto-shutdown toggle driven from the queue strip (persisted).
+   *
+   * Turning it off while a countdown is live cancels the pending Windows
+   * shutdown — the backend owns that logic, this only asks for it.
+   */
   async toggleShutdown(app) {
-    const s = app.state.settings || {};
-    const on = !s.shutdown_when_done;
+    const as = app.state.autoShutdown;
+    const on = as ? !as.enabled : !(app.state.settings || {}).shutdown_when_done;
     try {
-      await API.updateSettings({ shutdown_when_done: on });
-      app.state.settings = { ...s, shutdown_when_done: on };
-      app._renderQueueStrip();
+      const status = await API.setAutoShutdown(on);
+      if (status) Events.applyAutoShutdown(app, status);
+      else app._renderQueueStrip();
       Components.toast(
         I18N.t("queue.auto_shutdown", "Auto shutdown"),
         on ? I18N.t("toast.shutdown_on", "The computer will shut down when all downloads finish")
@@ -575,6 +620,25 @@ const DownloadsView = {
         on ? "warning" : "info", 3000);
     } catch (e) {
       API.logJs("auto shutdown: " + String(e));
+    }
+  },
+
+  /**
+   * Cancel a pending shutdown.  The backend aborts the Windows shutdown,
+   * disarms the preference (so it cannot immediately re-arm) and reports the
+   * resulting state.
+   */
+  async cancelShutdown(app) {
+    try {
+      const status = await API.cancelAutoShutdown();
+      if (status) Events.applyAutoShutdown(app, status);
+      else app._renderQueueStrip();
+      Components.toast(
+        I18N.t("toast.shutdown_cancelled", "Auto shutdown cancelled"),
+        I18N.t("auto_shutdown.reason.user_cancelled", "Cancelled by you"),
+        "info", 4000);
+    } catch (e) {
+      API.logJs("cancel shutdown: " + String(e));
     }
   },
 };

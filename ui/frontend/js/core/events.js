@@ -46,7 +46,9 @@ const Events = {
         app._elapsedFor(t); // keep the active-time tracker honest on every event
         if (!had) {
           app._addRow(t);
-        } else if (app.state.sortKey === "queue" && prev && prev.queue_index !== t.queue_index) {
+        } else if (app.state.sortKey === "queue" && prev
+                   && (prev.queue_index !== t.queue_index
+                       || prev.queue_position !== t.queue_position)) {
           // A queue reorder moved this row.  _updateRow only rewrites cells in
           // place, so rebuild the list to actually reorder it.
           app.state.listSig = "";
@@ -110,22 +112,10 @@ const Events = {
       }
     } else if (evt.type === "window") {
       app._setMaxState(!!evt.maximized);
-    } else if (evt.type === "auto_shutdown") {
-      // One-shot flag was disarmed backend-side — mirror it so the strip
-      // toggle flips back to Off without a settings round-trip.
-      app.state.settings = { ...(app.state.settings || {}), shutdown_when_done: false };
-      app._renderQueueStrip();
-      if (evt.action === "executing") {
-        Components.toast(
-          I18N.t("toast.shutdown_firing", "Shutting down"),
-          I18N.t("toast.shutdown_firing_msg", "All downloads finished — the computer shuts down in 60 seconds (run 'shutdown /a' to cancel)"),
-          "warning", 12000);
-      } else {
-        Components.toast(
-          I18N.t("toast.shutdown_skipped", "Auto shutdown skipped"),
-          I18N.fmt("toast.shutdown_skipped_msg", { n: evt.failed || 0 }, `${evt.failed || 0} download(s) failed — the computer stays on`),
-          "error", 8000);
-      }
+    } else if (evt.type === "auto_shutdown_state") {
+      Events.applyAutoShutdown(app, evt.status);
+    } else if (evt.type === "queue_gate") {
+      Events.applyQueueStatus(app, evt.status);
     } else if (evt.type === "update_state") {
       app._applyUpdateState(evt.state);
       const st = evt.state;
@@ -152,6 +142,125 @@ const Events = {
    * modal, so copying a link never interrupts what the user is doing and the
    * most common response is a single click.
    */
+  /**
+   * Human label for a runtime auto-shutdown state ("Off", "Waiting", …).
+   * Shared by the queue strip and the toasts so both say the same thing.
+   */
+  autoShutdownStateLabel(state) {
+    return I18N.t(`auto_shutdown.state.${state}`, state || "");
+  },
+
+  /** Human label for a structured auto-shutdown reason ("" when none). */
+  autoShutdownReasonLabel(reason) {
+    if (!reason) return "";
+    return I18N.t(`auto_shutdown.reason.${reason}`, reason);
+  },
+
+  /**
+   * Auto-shutdown runtime state from the backend controller.
+   *
+   * The backend owns the state machine; the UI renders what it is told and
+   * never infers the runtime situation from `shutdown_when_done`.  The
+   * preference is only mirrored so the Settings toggle stays in sync.
+   *
+   * Toasts fire on *transitions* only, so a repeated evaluation of the same
+   * state cannot spam the user.
+   */
+  applyAutoShutdown(app, status) {
+    if (!status) return;
+    const prev = app.state.autoShutdown;
+    const was = prev ? prev.state : null;
+    const now = status.state;
+
+    app.state.autoShutdown = status;
+    app.state.settings = { ...(app.state.settings || {}), shutdown_when_done: !!status.enabled };
+    app._renderQueueStrip();
+    Events.syncShutdownCountdown(app);
+
+    if (now === was) return;
+
+    const reason = Events.autoShutdownReasonLabel(status.cancel_reason || status.reason);
+    if (now === "Countdown") {
+      Components.toast(
+        I18N.t("toast.shutdown_firing", "Shutting down"),
+        I18N.fmt("toast.shutdown_firing_msg", { n: status.countdown_seconds || 0 },
+          "All downloads finished — the computer shuts down in 60 seconds"),
+        "warning", 12000);
+    } else if (was === "Countdown") {
+      // The countdown was aborted (a new download, a resume, the user, …).
+      Components.toast(
+        I18N.t("toast.shutdown_cancelled", "Auto shutdown cancelled"),
+        reason || I18N.t("auto_shutdown.reason.policy_not_eligible", "Downloads are still unfinished"),
+        "info", 6000);
+    } else if (now === "Blocked") {
+      Components.toast(
+        I18N.t("toast.shutdown_blocked", "Auto shutdown blocked"),
+        reason || I18N.t("auto_shutdown.reason.policy_not_eligible", "Downloads are still unfinished"),
+        "error", 8000);
+    } else if (now === "Error") {
+      Components.toast(
+        I18N.t("toast.shutdown_error", "Auto shutdown error"),
+        reason || status.last_error || "",
+        "error", 10000);
+    } else if (now === "Executed") {
+      Components.toast(
+        I18N.t("toast.shutdown_executed", "Shutting down now"),
+        reason || "",
+        "warning", 8000);
+    }
+  },
+
+  /**
+   * Apply the backend's queue-gate state.
+   *
+   * The gate is *runtime* state, so the UI renders what the backend reports and
+   * never infers it from the last button the user pressed.  It is pushed on
+   * every change (and seeded at boot), which is what keeps a paused queue from
+   * looking like a stalled application.  See docs/QUEUE.md §1.
+   */
+  applyQueueStatus(app, status) {
+    if (!status) return;
+    app.state.queuePaused = !!status.paused;
+    app.state.schedulerGate = !!status.scheduler_gate;
+    app._renderQueueStrip();
+    // The Queue page renders the same gate, so let it repaint if it is open.
+    if (typeof Queue !== "undefined" && Queue) Queue.render();
+  },
+
+  /**
+   * Drive the countdown banner.  The deadline comes from the backend (epoch
+   * seconds) and is ticked locally, so the readout stays accurate without
+   * polling the backend once per second.
+   */
+  syncShutdownCountdown(app) {
+    const banner = Utils.$id("qsShutdownBanner");
+    const s = app.state.autoShutdown;
+    const active = !!s && s.state === "Countdown";
+    if (banner) banner.hidden = !active;
+    if (!active) {
+      if (app._shutdownTicker) {
+        clearInterval(app._shutdownTicker);
+        app._shutdownTicker = null;
+      }
+      return;
+    }
+    Events.tickShutdownCountdown(app);
+    if (!app._shutdownTicker) {
+      app._shutdownTicker = setInterval(() => Events.tickShutdownCountdown(app), 1000);
+    }
+  },
+
+  tickShutdownCountdown(app) {
+    const s = app.state.autoShutdown;
+    if (!s || s.state !== "Countdown" || !s.deadline) return;
+    const left = Math.max(0, Math.ceil(s.deadline - Date.now() / 1000));
+    const count = Utils.$id("qsShutdownCount");
+    const msg = Utils.$id("qsShutdownMsg");
+    if (count) count.textContent = I18N.fmt("queue.shutdown_remaining", { n: left }, `${left}s`);
+    if (msg) msg.textContent = I18N.fmt("queue.shutdown_soon", { n: left },
+      `The computer shuts down in ${left} seconds`);
+  },
+
   async onClipboardLink(app, url) {
     try {
       let host = url;

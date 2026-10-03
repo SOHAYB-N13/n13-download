@@ -417,20 +417,28 @@ def _parse_speed(raw: str) -> int | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def shutdown_computer(delay_seconds: int = 60) -> bool:
-    from rich.prompt import Confirm
+    from core.auto_shutdown import PowerError, WindowsPowerController
+
     if not Confirm.ask("\n  [yellow]Are you sure you want to shut down?[/yellow]", default=False):
         _info("Canceled.")
         return False
     os_name = platform.system()
     try:
         if os_name == "Windows":
-            subprocess.run(["shutdown", "/s", "/t", str(delay_seconds)], check=True)
+            # Route through the same abstraction the GUI uses rather than
+            # shelling out here.  That buys the validated delay, argv +
+            # ``shell=False``, the ``N13_NO_REAL_SHUTDOWN`` kill switch and
+            # sanitised error reporting — and keeps exactly one place in the
+            # codebase that can touch the OS power state.
+            WindowsPowerController().schedule_shutdown(int(delay_seconds))
         elif os_name in ("Linux", "Darwin"):
-            subprocess.run(["shutdown", "-h", f"+{max(1, delay_seconds // 60)}"], check=True)
+            subprocess.run(["shutdown", "-h", f"+{max(1, int(delay_seconds) // 60)}"], check=True)
         else:
             _err(f"Unsupported OS: {os_name}"); return False
         _warn(f"Shutdown in {delay_seconds}s.")
         return True
+    except PowerError as exc:
+        _err(f"Shutdown failed: {exc}"); return False
     except subprocess.CalledProcessError as exc:
         _err(f"Shutdown failed: {exc}"); return False
 

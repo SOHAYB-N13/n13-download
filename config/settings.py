@@ -142,9 +142,19 @@ class AppConfig:
     scheduler_enabled: bool = False
     schedule_start_time: Optional[str] = None      # "HH:MM" — pause until
     schedule_stop_time: Optional[str] = None       # "HH:MM" — pause from; empty = no end
-    # Shut the computer down once every queued/active download has finished.
-    # One-shot: the backend disarms it after firing (or when failures remain).
+    # ── Auto shutdown ───────────────────────────────────────────────────
+    # ``shutdown_when_done`` is the *user preference* only.  The live runtime
+    # state (Armed / Waiting / Countdown / Blocked / ...) is owned by
+    # ``core.auto_shutdown.AutoShutdownController`` and is never stored here:
+    # "the preference is off" and "a countdown is pending" are different facts.
+    # One-shot: firing consumes the preference.
     shutdown_when_done: bool = False
+    # How long the abort window is once the queue drains (seconds).
+    shutdown_countdown_seconds: int = 60
+    # Policy: may the machine still power off when some downloads failed?
+    shutdown_allow_failures: bool = False
+    # Policy: may it power off when some downloads were cancelled by the user?
+    shutdown_allow_cancelled: bool = False
     # Weekdays the start/stop window applies to, e.g. ["mon", "tue"].
     # Empty means every day (the historical behaviour).
     schedule_days: List[str] = field(default_factory=list)
@@ -291,6 +301,20 @@ class AppConfig:
             instance.duplicate_policy = "ask"
         instance.rules_enabled = bool(getattr(instance, "rules_enabled", True))
         instance.shutdown_when_done = bool(getattr(instance, "shutdown_when_done", False))
+        # 5s is the smallest abort window the UI offers; the controller clamps
+        # again to its own absolute range so a hand-edited file cannot produce
+        # an instant shutdown.
+        try:
+            _countdown = int(getattr(instance, "shutdown_countdown_seconds", 60) or 60)
+        except (TypeError, ValueError):
+            _countdown = 60
+        instance.shutdown_countdown_seconds = max(5, min(3600, _countdown))
+        instance.shutdown_allow_failures = bool(
+            getattr(instance, "shutdown_allow_failures", False)
+        )
+        instance.shutdown_allow_cancelled = bool(
+            getattr(instance, "shutdown_allow_cancelled", False)
+        )
         instance.minimize_to_tray = bool(getattr(instance, "minimize_to_tray", True))
         instance.close_to_tray = bool(getattr(instance, "close_to_tray", False))
         instance.notifications_enabled = bool(getattr(instance, "notifications_enabled", True))

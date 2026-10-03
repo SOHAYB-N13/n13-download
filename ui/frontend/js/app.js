@@ -26,6 +26,17 @@ const App = {
     extConnected: false,
     version: "",
     settings: null,
+    // Runtime auto-shutdown state from the backend controller (null until the
+    // first status arrives).  Deliberately separate from `settings` — the
+    // `shutdown_when_done` preference says nothing about whether a countdown
+    // is currently live.
+    autoShutdown: null,
+    // Queue gate: runtime state pushed by the backend (`queue_gate` events,
+    // plus a boot-time seed).  Deliberately separate from any task's Paused
+    // status — the gate blocks the whole queue, a paused task stops one
+    // download, and neither implies the other.  See docs/QUEUE.md §1.
+    queuePaused: false,
+    schedulerGate: false,
     maximized: false,
     highlightId: null,
     listSig: "",
@@ -111,6 +122,20 @@ const App = {
 
     try {
       this.state.settings = await API.getSettings();
+    } catch {}
+
+    // Seed the auto-shutdown runtime state so the queue strip is honest from
+    // the first paint (the event stream only reports *changes*).
+    try {
+      const as = await API.getAutoShutdownStatus();
+      if (as) this.state.autoShutdown = as;
+    } catch {}
+
+    // Same for the queue gate: without this seed a queue paused before the
+    // app was restarted would look open until the next change event.
+    try {
+      const qs = await API.getQueueStatus();
+      if (qs) Events.applyQueueStatus(this, qs);
     } catch {}
 
     try {
@@ -383,6 +408,15 @@ const App = {
   _scheduleLabel(s) { return DownloadsView.scheduleLabel(this, s); },
   async _editScheduler() { return DownloadsView.editScheduler(this); },
   async _toggleShutdown() { return DownloadsView.toggleShutdown(this); },
+  async _cancelShutdown() { return DownloadsView.cancelShutdown(this); },
+
+  // Queue gate — the "stop the queue" / "resume the queue" pair, distinct from
+  // pausing individual downloads.
+  async _pauseQueue() { return DownloadsActions.pauseQueue(this); },
+  async _resumeQueue() { return DownloadsActions.resumeQueue(this); },
+  async _loadQueueStatus() {
+    try { Events.applyQueueStatus(this, await API.getQueueStatus()); } catch {}
+  },
 
   //  New Download dialog
   // ══════════════════════════════════════════════════════════════════════
