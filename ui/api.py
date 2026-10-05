@@ -26,6 +26,7 @@ from ui.common import (
     human_size,
 )
 from ui.legacy import LegacyDownloadRunner
+from ui.projects_api import ProjectsApiMixin
 
 log = logging.getLogger("n13")
 
@@ -34,11 +35,15 @@ log = logging.getLogger("n13")
 _PROBE_CACHE_TTL = 60.0
 
 
-class Api:
+class Api(ProjectsApiMixin):
     """Python API exposed to JavaScript via pywebview bridge.
 
     Every public method (except _-prefixed) is callable from JS as:
         await window.pywebview.api.methodName(args...)
+
+    The project surface lives in :class:`ui.projects_api.ProjectsApiMixin` so this
+    file stays a bridge instead of becoming a second service layer; pywebview
+    sees one flat method set either way.
     """
 
     def __init__(
@@ -78,15 +83,23 @@ class Api:
         project_root = Path(__file__).resolve().parent.parent
         migrate_legacy_saved_links(project_root)
 
+        # Project layer first: it owns the shared SQLite connection and produces
+        # the initial per-project gate snapshot, which TaskManager needs *before*
+        # its constructor restores and starts downloads.  Reversing these two
+        # would let a project the user had paused start work on the next launch.
+        project_gates = self._create_projects(data_dir() / "downloads.db")
+
         runner = LegacyDownloadRunner(config, session, log=self._log)
         self._manager = TaskManager(
             runner,
             data_dir(),
             max_concurrent=getattr(config, "max_concurrent", 3),
             config=config,
+            store=self._store,
+            project_gates=project_gates,
         )
         self._manager.subscribe(self._on_task_event)
-        log.info("[7] TaskManager ready")
+        log.info("[7] TaskManager ready (%d project gates)", len(project_gates))
 
         # Auto shutdown: its own state machine, policy and power abstraction.
         # The preference lives in the config; all runtime state lives in the
@@ -111,6 +124,7 @@ class Api:
             config,
             on_gate=self._apply_scheduler_gate,
             on_speed=self._apply_scheduled_speed,
+            on_tick=self.refresh_project_gates,
             logger=log,
         )
         self._scheduler.start()
@@ -317,6 +331,9 @@ class Api:
             "task": snapshot.to_dict(),
         })
         self._maybe_notify(event, snapshot)
+        # A project's completion action is evaluated in this same pipeline, so it
+        # sees every task outcome exactly once and cannot race a separate watcher.
+        self.maybe_run_completion_action(event, snapshot)
         # Every event that can change eligibility feeds the auto-shutdown
         # state machine (progress is filtered out inside the controller).
         controller = getattr(self, "_auto_shutdown", None)
@@ -472,9 +489,15 @@ class Api:
                      checksum: str = "", autostart: bool = True,
                      category: str = "", allow_duplicate: bool = False,
                      resolve_conflict: str = "", size: int = 0,
-                     content_type: str = "") -> str:
+                     content_type: str = "", project_id: str = "") -> str:
         hint = label or url
         rule = self._rule_overrides(url, hint, size, content_type)
+        # A project's destination is a *default*, not an override: an explicit
+        # directory, or one a download rule supplied, still wins.  "Add to
+        # project" must never silently redirect a download the user pointed at a
+        # specific folder.
+        if not directory and project_id:
+            directory = self.project_directory(project_id)
         if rule:
             # Rules fill in only what the user has NOT explicitly chosen.
             if not category and rule["category"]:
@@ -498,7 +521,7 @@ class Api:
         request = DownloadRequest(
             url=url, directory=resolved, checksum=checksum, label=label, category=cat,
             priority=priority, connection_mode=conn, num_threads=nthreads,
-            probe_analysis=probe_analysis,
+            probe_analysis=probe_analysis, project_id=project_id or "",
         )
         return self._manager.add(request, autostart=autostart, allow_duplicate=allow_duplicate)
 
@@ -528,9 +551,13 @@ class Api:
         resolve = "replace" if policy == "replace" else ""
         return allow, resolve
 
-    def add_batch(self, urls: List[str], directory: str) -> int:
+    def add_batch(self, urls: List[str], directory: str, project_id: str = "") -> int:
         from ui.common import name_from_url
         policy = getattr(self._config, "duplicate_policy", "ask")
+        # A project's destination is a default for the whole batch, exactly as in
+        # add_download: an explicit directory still wins.
+        if not directory and project_id:
+            directory = self.project_directory(project_id)
         # "ask" in a batch context means auto-rename (never overwrite silently);
         # "replace" deletes existing destinations; "allow" permits duplicates.
         allow_duplicate = policy == "allow"
@@ -552,6 +579,7 @@ class Api:
                 priority=int(rule["priority"]) if rule else 5,
                 connection_mode=rule["connection_mode"] if rule else "",
                 num_threads=int(rule["num_threads"]) if rule else 0,
+                project_id=project_id or "",
             ))
         if not requests:
             return 0

@@ -43,6 +43,12 @@ const App = {
     // Explorer-style multi-selection for the Downloads list.
     selectedIds: new Set(),   // Set of selected task ids
     selAnchor: null,          // anchor task id for Shift+Click range selection
+    // Download groups.  `projects` holds the flat payloads the backend sends
+    // (one shape only — see ui/projects_api.py) and `activeProject` is the id
+    // of the group the Downloads workspace is currently scoped to.  The
+    // sentinel `"all"` means "no group filter"; see GroupsModel.ALL_ID.
+    projects: [],
+    activeProject: "all",
   },
 
   pages: {
@@ -79,6 +85,9 @@ const App = {
     this._bindBrowserPage();
     this._bindHistoryPage();
     this._bindLogsPage();
+    // Bind the group strip containers before any render, so a
+    // `projects_changed` event that arrives during boot has somewhere to paint.
+    if (typeof Groups !== "undefined") Groups.init(this);
     Utils.$qa("[data-nav]").forEach((el) =>
       el.addEventListener("click", () => this.navigate(el.dataset.nav)));
     this._renderPageChrome();
@@ -146,6 +155,10 @@ const App = {
 
     try { await this._loadDownloads(); } catch {}
     try { await this._refreshHistory(); } catch {}
+    // Seed the group strip so the tab row and the active group's header are
+    // honest on the first paint (the event stream only reports changes).
+    try { await Groups.load(); } catch {}
+    this._syncProjectSelects();
     try { await this._refreshServerStatus(); } catch {}
     this._renderDashboardLists();
     this._maybeCheckUpdates();
@@ -194,6 +207,9 @@ const App = {
     if (this.state.page === "history") this._renderHistory();
     if (this.state.page === "settings") this._buildSettings();
     if (this.state.page === "browser" && this._lastServerStatus) this._renderBrowser(this._lastServerStatus);
+    // The group strip is part of the Downloads workspace, so it is repainted
+    // whenever the page is — its labels are translated text too.
+    if (typeof Groups !== "undefined") Groups.paint();
   },
 
   // ══════════════════════════════════════════════════════════════════════
@@ -572,6 +588,10 @@ const App = {
       if (++tick % 5 === 0) {
         this._renderExtPill();
         this._renderQueueStrip();
+        // A group's derived state (a window opening, a slot freeing) changes
+        // with no project mutation behind it, so it is re-read on the same
+        // cadence rather than waiting for an event that will never arrive.
+        if (typeof Groups !== "undefined") Groups.refresh();
       }
       setTimeout(poll, 2000);
     };
@@ -871,6 +891,39 @@ const App = {
   //  Batch
   // ══════════════════════════════════════════════════════════════════════
 
+  /**
+   * Fill every `select[data-project-select]` from the current group list.
+   *
+   * Rebuilds only when the list or the open group actually changed, so
+   * re-entering a page never steals focus from a select the user is already
+   * using.  A download always belongs to a group, so the whole row stays hidden
+   * until the list has loaded rather than offering an empty dropdown.
+   *
+   * The default follows the open group, because that is what the user is
+   * looking at — unless they have picked something else on this control, which
+   * `data-touched` records.
+   */
+  _syncProjectSelects() {
+    const projects = this.state.projects || [];
+    const active = this.state.activeProject;
+    const sig = projects.map((p) => p.id + ":" + p.name).join("|") + "::" + (active || "");
+    Utils.$qa("select[data-project-select]").forEach((sel) => {
+      const row = sel.closest("[id$='ProjectRow']");
+      if (row) row.hidden = !projects.length;
+      if (sel.dataset.sig === sig) return;
+      sel.dataset.sig = sig;
+      sel.innerHTML = projects
+        .map((p) => `<option value="${Utils.escapeHtml(p.id)}">${Utils.escapeHtml(p.name)}</option>`)
+        .join("");
+      const wanted = sel.dataset.touched === "1" ? sel.value : active;
+      if (wanted && projects.some((p) => p.id === wanted)) sel.value = wanted;
+      if (!sel.dataset.bound) {
+        sel.dataset.bound = "1";
+        sel.addEventListener("change", () => { sel.dataset.touched = "1"; });
+      }
+    });
+  },
+
   _bindBatchPage() {
     Utils.$qa("#page-batch .tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -915,7 +968,8 @@ const App = {
       }
       // Empty folder => backend applies per-file category routing.
       const dir = Utils.$id("batchDir").value.trim();
-      const count = await API.addBatch(urls, dir);
+      const projectId = (Utils.$id("batchProject") || {}).value || "";
+      const count = await API.addBatch(urls, dir, projectId);
       Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
       area.value = "";
       updateCount();
@@ -949,7 +1003,7 @@ const App = {
             <div class="pattern-note ok">${Utils.icon("check", 14)} ${res.urls.length} ${I18N.t("batch.files_found", "files found — queued for download")}</div>
             <div class="pattern-list">${res.urls.slice(0, 40).map((u) => `<div class="pattern-item">${Utils.escapeHtml(u)}</div>`).join("")}
             ${res.urls.length > 40 ? `<div class="pattern-item dim">… ${res.urls.length - 40} ${I18N.t("batch.more", "more")}</div>` : ""}</div>`;
-          const count = await API.addBatch(res.urls, dir);
+          const count = await API.addBatch(res.urls, dir, (Utils.$id("batchProject") || {}).value || "");
           Components.toast(I18N.t("toast.scan_complete", "Scan complete"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
         } else {
           results.innerHTML = `<div class="pattern-note">${Utils.icon("info", 14)} ${I18N.t("batch.nothing_matched", "No reachable files matched this pattern")}</div>`;
@@ -960,6 +1014,10 @@ const App = {
       btn.disabled = false;
       btn.classList.remove("busy");
     });
+
+    // The project list may not have arrived yet at bind time; this also runs on
+    // every `projects_changed` and on navigation, so the selector fills in.
+    this._syncProjectSelects();
   },
 
   // ══════════════════════════════════════════════════════════════════════

@@ -41,6 +41,7 @@ N13 gives you control when you need it, while keeping everyday downloads simple.
 - 🧠 Smart connection optimization
 - 🗂️ Automatic categories and download rules
 - 📥 Powerful download queue
+- 📁 Download groups — organise downloads into their own tabs, folders and limits
 - 🔐 MD5 and SHA-256 checksum verification
 - 🍪 Cookie support
 - 🔬 URL analyzer
@@ -54,20 +55,19 @@ N13 gives you control when you need it, while keeping everyday downloads simple.
 
 ---
 
-## 🆕 What's new in v1.3.0
+## 🆕 What's new in v1.4.0
 
-- 🔌 **Shutdown after downloads, rebuilt as a real state machine** — the warning
-  window is now configurable (5–3600 s, 60 by default), you can choose whether a
-  failed or cancelled download still blocks the shutdown, and every cancellation
-  now tells you *why* it happened. See
-  [Shutdown After Downloads](#-shutdown-after-downloads).
-- ⏸️ **Pause now means exactly one thing** — "Pause everything", "Pause queue"
-  and pausing a single row are three distinct actions, and a held queue is
-  always visible as a banner. See
-  [Powerful Download Queue](#-powerful-download-queue).
-- ♻️ **Pauses and queue positions now tell the truth** — a download you paused
-  stays paused across a restart, and "Queue position" reports the order
-  downloads will actually start in.
+- 📁 **Download groups** — the Downloads page now has a tab strip. Group downloads
+  that belong together (a series, a game, a project) into their own tab, each with
+  its own destination folder, concurrency limit, time window and completion action.
+  See [Download Groups](#-download-groups).
+- 🔀 **Switching a group is a filter, not a different screen** — there is still one
+  download queue, one history and one set of workers. A group only changes *which*
+  downloads you are looking at, so nothing is duplicated or downloaded twice.
+- ⏸️ **Groups can be paused on their own** — pausing a group stops it from starting
+  anything new without disturbing any other group.
+- 🗄️ **A real database layer** — the SQLite schema is now versioned and migrated
+  automatically, so upgrades no longer risk touching your existing downloads.
 
 ---
 
@@ -127,6 +127,7 @@ The interface provides:
 
 - 📊 Dashboard
 - 📥 Download queue
+- 📁 Download groups
 - 🔎 Download details
 - 🗂️ Categories
 - 🗓️ Scheduler
@@ -281,6 +282,62 @@ position it will really take.
 A download you paused stays paused the next time N13 starts, instead of quietly
 re-queuing itself. Downloads that were *interrupted* by the shutdown — rather
 than paused by you — return to the queue and resume where they stopped.
+
+---
+
+# 📁 Download Groups
+
+Downloading a season, a game, or a set of files that belong together?
+
+The Downloads page has a tab strip along the top:
+
+```text
+[ + ]  [ All ]  [ Default ]  [ Breaking Bad ]  [ GTA V ]  [ Movies ]
+```
+
+Press **+** to create a group, give it a name and a destination folder, and it
+opens straight away. Every download you add while a group is open is saved into
+that group's folder.
+
+Each group keeps its own settings:
+
+- **Destination folder** — where that group's files go.
+- **Concurrency limit** — how many of *its* downloads may run at once. `0` uses
+  the global limit; a group can never exceed it either way.
+- **Time window** — only start this group's downloads between, say, 23:00 and
+  07:00, optionally on chosen days.
+- **Completion action** — shut down Windows once this group has finished.
+
+Groups are independent: changing one never affects another.
+
+### Switching a group does not duplicate anything
+
+There is still exactly one download queue, one history, and one set of download
+workers. Selecting a group tab simply narrows the list to that group's downloads.
+Your other downloads keep running in the background exactly as before.
+
+### Pausing a group
+
+Pausing a group stops it from *starting* anything new. Downloads from that group
+that are already running are left alone, and no other group is affected — the
+same rule the queue already uses, for the same reason: stopping a transfer is a
+different decision from not starting one.
+
+### The Default group
+
+Downloads that existed before groups were introduced live in **Default**, so
+nothing is lost. *All* shows every download in every group.
+
+### Deleting a group
+
+You choose what happens to its downloads:
+
+- **Keep the downloads** — they move to *Default* and nothing is deleted.
+- **Remove the records only** — the files on disk stay where they are.
+- **Delete the files as well** — this one needs a second, separate confirmation.
+
+Deleting the files only ever touches paths inside that group's own folder, and
+never a file another group still refers to.
 
 ---
 
@@ -587,6 +644,8 @@ n13-download/
 ├── core/
 ├── extension/
 ├── installer/
+├── projects/
+├── tests/
 ├── ui/
 ├── d.py
 ├── requirements.txt
@@ -614,6 +673,19 @@ Development focuses on:
 - Security
 - User experience
 - Internationalization
+
+### Running the tests
+
+The test suite covers the download engine, the queue, the scheduler, groups,
+the updater and the browser integration:
+
+```bash
+pip install pytest
+python -m pytest tests/ -q
+```
+
+Some tests exercise the GUI layer and skip automatically when a display or a
+running instance is not available.
 
 Bug reports, feature requests, documentation improvements, and code contributions are welcome.
 
@@ -718,6 +790,7 @@ N13 در عین سادگی برای استفاده روزمره، ابزارها
 - 🧠 بهینه‌سازی هوشمند تعداد اتصال‌ها
 - 🗂️ دسته‌بندی و قوانین خودکار دانلود
 - 📥 صف دانلود قدرتمند
+- 📁 گروه‌های دانلود — سازمان‌دهی دانلودها در تب‌ها، پوشه‌ها و محدودیت‌های جداگانه
 - 🔐 بررسی MD5 و SHA-256
 - 🍪 پشتیبانی از Cookie
 - 🔬 تحلیل لینک قبل از دانلود
@@ -731,19 +804,20 @@ N13 در عین سادگی برای استفاده روزمره، ابزارها
 
 ---
 
-## 🆕 تازه‌های نسخه ۱.۳.۰
+## 🆕 تازه‌های نسخه ۱.۴.۰
 
-- 🔌 **خاموش‌شدن پس از پایان دانلود، بازنویسی‌شده به‌صورت ماشین حالت واقعی** —
-  مدت هشدار اکنون قابل‌تنظیم است (۵ تا ۳۶۰۰ ثانیه، پیش‌فرض ۶۰)، می‌توانید انتخاب
-  کنید که دانلود ناموفق یا لغوشده هنوز مانع خاموشی شود یا نه، و هر لغو دلیل خود
-  را می‌گوید. بخش
-  [خاموش شدن خودکار ویندوز](#-خاموش-شدن-خودکار-ویندوز) را ببینید.
-- ⏸️ **«توقف» اکنون دقیقاً یک معنی دارد** — «توقف همه‌چیز»، «توقف صف» و توقف یک
-  ردیف سه عملیات جداگانه‌اند و صف متوقف‌شده همیشه به‌صورت بنر نمایان است. بخش
-  [صف دانلود قدرتمند](#-صف-دانلود-قدرتمند) را ببینید.
-- ♻️ **توقف‌ها و جایگاه صف اکنون واقعیت را نشان می‌دهند** — دانلودی که متوقف
-  کرده‌اید پس از راه‌اندازی مجدد متوقف می‌ماند و «جایگاه در صف» ترتیبی را نشان
-  می‌دهد که دانلودها واقعاً با آن شروع می‌شوند.
+- 📁 **گروه‌های دانلود** — صفحه دانلودها اکنون نوار تب دارد. دانلودهایی که به هم
+  تعلق دارند (یک سریال، یک بازی، یک پروژه) را در تب خودشان سازمان‌دهی کنید؛ هر گروه
+  پوشه مقصد، محدودیت هم‌زمانی، بازه زمانی و عملیات پایان خودش را دارد. بخش
+  [گروه‌های دانلود](#-گروه‌های-دانلود) را ببینید.
+- 🔀 **تغییر گروه یک فیلتر است، نه یک صفحه دیگر** — هنوز فقط یک صف دانلود، یک
+  تاریخچه و یک مجموعه از Worker وجود دارد. گروه فقط تغییر می‌دهد که *کدام*
+  دانلودها را می‌بینید، بنابراین هیچ‌چیز تکراری نمی‌شود و دوباره دانلود نمی‌گردد.
+- ⏸️ **هر گروه را می‌توان جداگانه متوقف کرد** — توقف یک گروه جلوی شروع کارهای
+  جدید آن را می‌گیرد، بدون اینکه به گروه‌های دیگر کاری داشته باشد.
+- 🗄️ **یک لایه پایگاه‌داده واقعی** — ساختار SQLite اکنون نسخه‌بندی و به‌صورت
+  خودکار مهاجرت داده می‌شود، بنابراین بروزرسانی دیگر دانلودهای موجود شما را به
+  خطر نمی‌اندازد.
 
 ---
 
@@ -803,6 +877,7 @@ N13 یک رابط گرافیکی مدرن برای مدیریت دانلودها
 
 - 📊 داشبورد
 - 📥 صف دانلود
+- 📁 گروه‌های دانلود
 - 🔎 جزئیات دانلود
 - 🗂️ دسته‌بندی‌ها
 - 🗓️ زمان‌بندی
@@ -957,6 +1032,61 @@ Documents  → D:/Downloads/Documents
 دانلودی که متوقف کرده‌اید، در اجرای بعدی N13 متوقف می‌ماند و بی‌صدا به صف
 بازنمی‌گردد. دانلودهایی که به‌دلیل خاموش‌شدن برنامه **قطع** شده‌اند — نه با توقف
 دستی شما — به صف بازمی‌گردند و از همان نقطه ادامه می‌یابند.
+
+---
+
+# 📁 گروه‌های دانلود
+
+در حال دانلود یک سریال، یک بازی، یا مجموعه‌ای از فایل‌های مرتبط هستید؟
+
+صفحه دانلودها یک نوار تب در بالای خود دارد:
+
+```text
+[ + ]  [ همه ]  [ پیش‌فرض ]  [ Breaking Bad ]  [ GTA V ]  [ Movies ]
+```
+
+روی **+** بزنید تا یک گروه بسازید؛ یک نام و پوشه مقصد بدهید و گروه بلافاصله باز
+می‌شود. هر دانلودی که در زمان باز بودن یک گروه اضافه کنید، در پوشه همان گروه ذخیره
+می‌شود.
+
+هر گروه تنظیمات خودش را نگه می‌دارد:
+
+- **پوشه مقصد** — فایل‌های آن گروه کجا ذخیره شوند.
+- **محدودیت هم‌زمانی** — چند دانلود از *همان گروه* می‌توانند هم‌زمان اجرا شوند. مقدار
+  `0` یعنی از محدودیت کلی استفاده کن؛ در هر حالت گروه هرگز از آن فراتر نمی‌رود.
+- **بازه زمانی** — دانلودهای این گروه فقط بین مثلاً ۲۳:۰۰ تا ۰۷:۰۰ شروع شوند،
+  به‌صورت اختیاری در روزهای مشخص.
+- **عملیات پایان** — پس از پایان این گروه، ویندوز خاموش شود.
+
+گروه‌ها مستقل‌اند: تغییر یکی هرگز روی دیگری اثر نمی‌گذارد.
+
+### تغییر گروه چیزی را تکراری نمی‌کند
+
+هنوز دقیقاً یک صف دانلود، یک تاریخچه و یک مجموعه Worker دانلود وجود دارد. انتخاب یک
+تب فقط فهرست را به دانلودهای همان گروه محدود می‌کند. بقیه دانلودهای شما در پس‌زمینه
+دقیقاً مثل قبل ادامه می‌یابند.
+
+### توقف یک گروه
+
+توقف یک گروه جلوی *شروع* کارهای جدید آن را می‌گیرد. دانلودهای در حال اجرای همان گروه
+دست‌نخورده می‌مانند و هیچ گروه دیگری تحت تأثیر قرار نمی‌گیرد — همان قاعده‌ای که صف
+استفاده می‌کند، با همان دلیل: متوقف کردن یک انتقال با شروع نکردن آن دو تصمیم متفاوت‌اند.
+
+### گروه پیش‌فرض
+
+دانلودهایی که پیش از معرفی گروه‌ها وجود داشتند در گروه **پیش‌فرض** قرار دارند، پس
+هیچ‌چیز از دست نمی‌رود. تب *همه* تمام دانلودهای همه گروه‌ها را نشان می‌دهد.
+
+### حذف یک گروه
+
+شما انتخاب می‌کنید که دانلودهای آن چه شوند:
+
+- **نگه‌داشتن دانلودها** — به گروه *پیش‌فرض* منتقل می‌شوند و چیزی حذف نمی‌شود.
+- **حذف فقط رکوردها** — فایل‌های روی دیسک سر جای خود می‌مانند.
+- **حذف فایل‌ها هم** — این مورد به یک تأیید دوم و جداگانه نیاز دارد.
+
+حذف فایل‌ها فقط مسیرهای داخل پوشه همان گروه را هدف می‌گیرد و هرگز فایلی را که گروه
+دیگری به آن ارجاع دارد حذف نمی‌کند.
 
 ---
 
@@ -1257,6 +1387,8 @@ n13-download/
 ├── core/
 ├── extension/
 ├── installer/
+├── projects/
+├── tests/
 ├── ui/
 ├── d.py
 ├── requirements.txt
@@ -1284,6 +1416,17 @@ N13 یک پروژه متن‌باز است که توسعه آن ادامه دا�
 - امنیت
 - تجربه کاربری
 - چندزبانه بودن
+
+### اجرای تست‌ها
+
+مجموعه تست‌ها موتور دانلود، صف، زمان‌بندی، گروه‌ها، بروزرسان و اتصال به مرورگر را پوشش می‌دهد:
+
+```bash
+pip install pytest
+python -m pytest tests/ -q
+```
+
+برخی تست‌ها به رابط گرافیکی نیاز دارند و در صورت نبودن نمایشگر یا در حال اجرا بودن یک نسخه از برنامه، به‌صورت خودکار رد می‌شوند.
 
 گزارش باگ، پیشنهاد قابلیت جدید، بهبود مستندات و Pull Request همگی مورد استقبال هستند.
 

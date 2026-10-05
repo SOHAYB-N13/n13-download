@@ -38,13 +38,13 @@ const API = {
 
   // ── Download actions ──────────────────────────────────────────────
 
-  async addDownload(url, directory, label, checksum, autostart, category, allowDuplicate, resolveConflict) {
-    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "", !!allowDuplicate, resolveConflict || "");
+  async addDownload(url, directory, label, checksum, autostart, category, allowDuplicate, resolveConflict, size, contentType, projectId) {
+    return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "", !!allowDuplicate, resolveConflict || "", Math.max(0, Math.round(size || 0)), contentType || "", projectId || "");
   },
   async checkDuplicate(url, directory, filename) {
     return this._call("check_duplicate", url, directory || "", filename || "");
   },
-  async addBatch(urls, directory) { return this._call("add_batch", urls, directory); },
+  async addBatch(urls, directory, projectId) { return this._call("add_batch", urls, directory, projectId || ""); },
   async pauseDownload(id) { return this._call("pause_download", id); },
   async resumeDownload(id) { return this._call("resume_download", id); },
   async cancelDownload(id) { return this._call("cancel_download", id); },
@@ -82,6 +82,32 @@ const API = {
   async retryFailed() { return this._call("retry_failed"); },
   async clearFailed() { return this._call("clear_failed"); },
   async clearCompleted() { return this._call("clear_completed"); },
+
+  // ── Projects ──────────────────────────────────────────────────────
+  // Unlike the older bridge calls, every one of these returns an envelope:
+  //   { ok: true, ... }  or  { ok: false, error, message, field }
+  // so the UI has exactly one project response shape to render. `error` is a
+  // machine-readable code the frontend translates; `message` is an English
+  // fallback for the log.
+  async getProjects() { return this._call("get_projects"); },
+  async getProject(id) { return this._call("get_project", id); },
+  async getProjectGates() { return this._call("get_project_gates"); },
+  async getProjectAdmission(taskId) { return this._call("get_project_admission", taskId); },
+  async createProject(name, description, directory, maxConcurrent, schedule, completionAction) {
+    return this._call("create_project", String(name || ""), description || "", directory || "",
+      Math.max(0, Math.round(maxConcurrent || 0)), schedule || null, completionAction || "none");
+  },
+  async updateProject(id, fields) { return this._call("update_project", id, fields || {}); },
+  async renameProject(id, name) { return this._call("rename_project", id, String(name || "")); },
+  async pauseProject(id) { return this._call("pause_project", id); },
+  async resumeProject(id) { return this._call("resume_project", id); },
+  async deleteProject(id, mode, confirmFiles) {
+    return this._call("delete_project", id, mode || "keep_tasks", !!confirmFiles);
+  },
+  async stopProjectTasks(id) { return this._call("stop_project_tasks", id); },
+  async assignTasksToProject(taskIds, projectId) {
+    return this._call("assign_tasks_to_project", taskIds || [], projectId);
+  },
 
   // ── URL validation & probing ──────────────────────────────────────
 

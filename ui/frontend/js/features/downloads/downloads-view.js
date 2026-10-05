@@ -20,9 +20,32 @@ const DownloadsView = {
 
   taskArray(app) { return Object.values(app.state.downloads); },
 
+  /**
+   * The tasks in the open group, before any filter or search is applied.
+   *
+   * This is the base list for everything that *describes* what the user is
+   * looking at — the filter chips, the category strip and the list itself — so
+   * those counts always agree with the rows.  The queue strip deliberately does
+   * not use it: the queue is one app-wide thing, not a per-group one.
+   *
+   * `GroupsModel` is guarded because this module also loads in unit tests that
+   * do not pull the group feature in.
+   */
+  groupTasks(app) {
+    const all = this.taskArray(app);
+    const group = app.state.activeProject;
+    if (typeof GroupsModel !== "undefined" && !GroupsModel.isAll(group)) {
+      return GroupsModel.tasksFor(all, group);
+    }
+    return all;
+  },
+
   filteredTasks(app) {
     const { filter, search, sortKey, sortDir } = app.state;
-    let list = this.taskArray(app);
+    // Group scope comes first, so every filter below — the chips, the category
+    // strip, the search and the counts — describes the group the user is
+    // looking at rather than the whole workspace.
+    let list = this.groupTasks(app);
 
     if (filter !== "all") {
       const map = {
@@ -96,7 +119,13 @@ const DownloadsView = {
     const headEl = Utils.$id("downloadHead");
     const emptyEl = Utils.$id("downloadsEmpty");
     const tasks = this.filteredTasks(app);
-    const sig = tasks.map((t) => t.id).join("|") + "::" + app.state.filter + app.state.sortKey + app.state.sortDir + app.state.search + "::" + app.state.catFilter;
+    // `activeProject` is part of the signature: two different groups can hold
+    // the same set of ids only if a task moved, and switching groups must
+    // always rebuild the rows rather than diff against the previous group's.
+    const sig = tasks.map((t) => t.id).join("|")
+      + "::" + app.state.filter + app.state.sortKey + app.state.sortDir
+      + app.state.search + "::" + app.state.catFilter
+      + "::" + (app.state.activeProject || "");
 
     if (sig === app.state.listSig && !structureChanged) {
       tasks.forEach((t) => app._updateRow(t));
@@ -106,34 +135,44 @@ const DownloadsView = {
     }
     app.state.listSig = sig;
     this.renderCatStrip(app);
+    // The tab row shows a live count per group and a state dot, so it is
+    // repainted with the list rather than only when a group itself changes.
+    if (typeof Groups !== "undefined") Groups.paint();
+    // The chips are group-scoped, so switching groups has to renumber them.
+    // (Task *state* changes go through the event path, which calls this too.)
+    this.updateCounts(app);
 
     if (!this.taskArray(app).length) {
       headEl.hidden = true;
       listEl.innerHTML = "";
       app._clearSelection();
-      emptyEl.replaceChildren(Components.emptyState({
-        icon: "download",
-        title: I18N.t("empty.no_downloads", "No downloads yet"),
-        desc: I18N.t("empty.no_downloads_desc", "Paste a link or drop it anywhere to start your first download."),
-        actions: [
-          {
-            label: I18N.t("cmd.paste_url", "Paste URL"),
-            icon: "paste",
-            primary: true,
-            onClick: () => app.pasteFromClipboard(),
-          },
-          {
-            label: I18N.t("empty.install_extension", "Install Browser Extension"),
-            icon: "browser",
-            onClick: () => app._setupExtension(),
-          },
-          {
-            label: I18N.t("empty.import", "Import Downloads"),
-            icon: "batch",
-            onClick: () => app.navigate("batch"),
-          },
-        ],
-      }));
+      // Nothing anywhere yet: offer the things a first-run user wants, and the
+      // group affordance alongside them so groups are discoverable before the
+      // first download rather than after it.
+      //
+      // `(key, vars, fallback)` is the same translator shape `I18N.fmt` has;
+      // the group view layer is guarded because this module also loads in unit
+      // tests that do not pull the group feature in.
+      const t = (key, vars, fallback) => I18N.fmt(key, vars, fallback);
+      const opts = (typeof GroupsView !== "undefined")
+        ? GroupsView.emptyAllOptions(t, {
+            add: () => app.openNewDownload(null, { paste: true }),
+            newGroup: () => Groups.create(),
+            setupExtension: () => app._setupExtension(),
+            importBatch: () => app.navigate("batch"),
+          })
+        : {
+            icon: "download",
+            title: I18N.t("empty.no_downloads", "No downloads yet"),
+            desc: I18N.t("empty.no_downloads_desc", "Paste a link or drop it anywhere to start your first download."),
+            actions: [{
+              label: I18N.t("cmd.paste_url", "Paste URL"),
+              icon: "paste",
+              primary: true,
+              onClick: () => app.pasteFromClipboard(),
+            }],
+          };
+      emptyEl.replaceChildren(Components.emptyState(opts));
       emptyEl.hidden = false;
       return;
     }
@@ -143,21 +182,37 @@ const DownloadsView = {
       listEl.innerHTML = "";
       app._clearSelection();
       const cat = app.state.catFilter;
-      emptyEl.replaceChildren(Components.emptyState({
-        icon: "search",
-        title: I18N.t("empty.nothing_matches", "Nothing matches"),
-        desc: cat !== "all"
-          ? I18N.t("empty.nothing_in_category", "No downloads in this category yet.")
-          : I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
-        actions: cat !== "all"
-          ? [{
-            label: I18N.t("cat.show_all", "Show all categories"),
-            icon: "list",
-            primary: true,
-            onClick: () => app._setCatFilter("all"),
-          }]
-          : undefined,
-      }));
+      const project = (typeof Groups !== "undefined") ? Groups.current() : null;
+      // A group being *open* is not the same as the group being *empty*: with
+      // a search or a filter active, a group full of downloads can produce an
+      // empty row list.  Only the second case may claim "nothing in this
+      // group yet"; the first is an ordinary "nothing matches".
+      const groupEmpty = !!project && this.groupTasks(app).length === 0;
+
+      if (groupEmpty) {
+        // The open group simply has nothing in it yet — a different situation
+        // from "your filters hid everything", and it gets a different answer.
+        emptyEl.replaceChildren(Components.emptyState(GroupsView.emptyGroupOptions(
+          (key, vars, fallback) => I18N.fmt(key, vars, fallback),
+          () => app.openNewDownload(),
+        )));
+      } else {
+        emptyEl.replaceChildren(Components.emptyState({
+          icon: "search",
+          title: I18N.t("empty.nothing_matches", "Nothing matches"),
+          desc: cat !== "all"
+            ? I18N.t("empty.nothing_in_category", "No downloads in this category yet.")
+            : I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
+          actions: cat !== "all"
+            ? [{
+              label: I18N.t("cat.show_all", "Show all categories"),
+              icon: "list",
+              primary: true,
+              onClick: () => app._setCatFilter("all"),
+            }]
+            : undefined,
+        }));
+      }
       emptyEl.hidden = false;
       return;
     }
@@ -189,7 +244,7 @@ const DownloadsView = {
     const strip = Utils.$id("catStrip");
     if (!strip) return;
 
-    const all = this.taskArray(app);
+    const all = this.groupTasks(app);
     const counts = new Map();
     all.forEach((t) => {
       const c = t.category || "General";
@@ -309,7 +364,8 @@ const DownloadsView = {
   },
 
   updateCounts(app) {
-    const all = this.taskArray(app);
+    // Group-scoped, so the chip numbers always match the rows on screen.
+    const all = this.groupTasks(app);
     const count = (states) => all.filter((t) => states.includes(t.state)).length;
     const set = (f, v) => { const el = Utils.$q(`#filterChips [data-filter="${f}"] .chip-n`); if (el) el.textContent = v; };
     set("all", all.length);

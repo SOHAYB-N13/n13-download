@@ -20,6 +20,17 @@ const AddDownload = {
       const baseDir = settings.download_dir || "";
       const categories = ["General", "Compressed", "Videos", "Music", "Documents", "Programs", "Images"];
 
+      // Projects are optional: an empty list just means the selector is hidden
+      // and the backend files the download under the Default project.  Never
+      // block adding a download because the project list failed to load.
+      let projects = Array.isArray(app.state.projects) ? app.state.projects.slice() : [];
+      if (!projects.length) {
+        try {
+          const res = await API.getProjects();
+          if (res && res.ok && Array.isArray(res.projects)) projects = res.projects;
+        } catch { /* fall through to no selector */ }
+      }
+
       const dlg = Components.showModal(`
       <div class="nd">
         <div class="nd-url-wrap">
@@ -55,6 +66,13 @@ const AddDownload = {
               ${categories.map((c, i) => `<button class="cat-chip${i === 0 ? " active" : ""}" data-cat="${c}">${L("category." + c, c)}</button>`).join("")}
             </div>
           </div>
+          ${projects.length ? `
+          <div class="field">
+            <label class="field-label" for="ndProject">${L("dlg.project", "Project")}</label>
+            <select id="ndProject" class="input">
+              ${projects.map((p) => `<option value="${Utils.escapeHtml(p.id)}">${Utils.escapeHtml(p.name)}</option>`).join("")}
+            </select>
+          </div>` : ""}
           <div class="field">
             <label class="field-label" for="ndDir">${L("dlg.save_to", "Save to")}</label>
             <div class="input-join">
@@ -90,12 +108,30 @@ const AddDownload = {
         err: dlg.qs("#ndError"), detect: dlg.qs("#ndDetect"), probing: dlg.qs("#ndProbing"),
         detectName: dlg.qs("#ndDetectName"), detectMeta: dlg.qs("#ndDetectMeta"),
         detectIco: dlg.qs("#ndDetectIco"), resume: dlg.qs("#ndResume"),
-        go: dlg.qs("#ndGo"), cats: dlg.qs("#ndCats"),
+        go: dlg.qs("#ndGo"), cats: dlg.qs("#ndCats"), project: dlg.qs("#ndProject"),
       };
+
+      // The open group is the natural default: a user who is looking at
+      // "TV Series" and presses Add means TV Series, not the Default group.
+      // Match on the `is_default` flag rather than position, so the backend's
+      // ordering rule can change safely.
+      const activeId = app.state.activeProject;
+      const initialProject =
+        (activeId && activeId !== "all" && projects.find((p) => p.id === activeId))
+        || projects.find((p) => p.is_default)
+        || projects[0]
+        || null;
 
       const model = {
         valid: false, normalized: "", nameTouched: false, dirTouched: false,
         category: "General", baseDir, probing: 0,
+        projectId: initialProject ? initialProject.id : "",
+      };
+
+      /** The folder a project routes to, falling back to the global setting. */
+      const rootFor = (projectId) => {
+        const p = projects.find((x) => x.id === projectId);
+        return (p && p.directory) ? p.directory : baseDir;
       };
 
       const setValid = (ok, msg = "") => {
@@ -160,6 +196,20 @@ const AddDownload = {
         if (chip) applyCategory(chip.dataset.cat);
       });
 
+      // A project may route to its own folder.  Choosing one only changes the
+      // *default* destination — a folder the user typed or browsed to is never
+      // overwritten, and the backend applies the same rule.
+      if (el.project) {
+        el.project.value = model.projectId;
+        model.baseDir = rootFor(model.projectId);
+        if (!model.dirTouched) applyCategory(model.category);
+        el.project.addEventListener("change", () => {
+          model.projectId = el.project.value;
+          model.baseDir = rootFor(model.projectId);
+          if (!model.dirTouched) applyCategory(model.category);
+        });
+      }
+
       dlg.qs("#ndPaste").addEventListener("click", async () => {
         try {
           const text = (await navigator.clipboard.readText() || "").trim();
@@ -194,7 +244,8 @@ const AddDownload = {
         el.go.classList.add("busy");
         try {
           const id = await this.resolveConflict(
-            app, url, dir, name, el.checksum.value.trim(), el.autostart.checked, model.category);
+            app, url, dir, name, el.checksum.value.trim(), el.autostart.checked,
+            model.category, model.projectId);
           if (id) {
             app.state.highlightId = id;
             dlg.close();
@@ -229,17 +280,20 @@ const AddDownload = {
     }
   },
 
-  async resolveConflict(app, url, directory, name, checksum, autostart, category) {
+  async resolveConflict(app, url, directory, name, checksum, autostart, category, projectId) {
     const policy = (app.state.settings && app.state.settings.duplicate_policy) || "ask";
+    // One place that knows the positional shape of `add_download`, so adding a
+    // parameter to the bridge never means editing seven call sites again.
+    const add = (allowDuplicate = false, conflict = "") =>
+      API.addDownload(url, directory, name, checksum, autostart, category,
+        allowDuplicate, conflict, 0, "", projectId || "");
     let conflict = null;
     try { conflict = await API.checkDuplicate(url, directory, name); } catch (e) {}
     const hasConflict = conflict && (conflict.reason || conflict.has_active);
-    if (!hasConflict) {
-      return API.addDownload(url, directory, name, checksum, autostart, category);
-    }
-    if (policy === "allow") return API.addDownload(url, directory, name, checksum, autostart, category, true);
-    if (policy === "replace") return API.addDownload(url, directory, name, checksum, autostart, category, false, "replace");
-    if (policy === "rename") return API.addDownload(url, directory, name, checksum, autostart, category);
+    if (!hasConflict) return add();
+    if (policy === "allow") return add(true);
+    if (policy === "replace") return add(false, "replace");
+    if (policy === "rename") return add();
     // "ask" — show the conflict dialog.
     const choice = await Components.conflictPrompt({
       reason: conflict.reason || (conflict.has_active ? "same_url" : ""),
@@ -257,8 +311,8 @@ const AddDownload = {
       API.openFileAt(conflict.file_path);
       return "";
     }
-    if (choice === "replace") return API.addDownload(url, directory, name, checksum, autostart, category, false, "replace");
-    if (choice === "again") return API.addDownload(url, directory, name, checksum, autostart, category, true);
-    return API.addDownload(url, directory, name, checksum, autostart, category);
+    if (choice === "replace") return add(false, "replace");
+    if (choice === "again") return add(true);
+    return add();
   },
 };

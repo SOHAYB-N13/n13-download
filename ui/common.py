@@ -34,7 +34,9 @@ from urllib.parse import unquote, urlparse
 
 from rich.console import Console
 
+from core import artifacts
 from core.control import TaskCancelled, TaskControl
+from core.db import DEFAULT_PROJECT_ID
 from core.store import TaskStore
 from core.task import (
     ACTIVE_STATES,
@@ -46,6 +48,11 @@ from core.task import (
     is_terminal,
     normalize_status,
 )
+# Policy only — never the service.  The queue must be able to decide whether a
+# project lets a task start without importing SQLite, and without a cycle back
+# into this module.  See docs/PROJECTS.md §2.
+from projects.admission import ProjectGate
+from ui.queue_projects import ProjectAdmissionMixin
 
 # Re-export for callers that reference the legacy name (ui.api etc.).
 TaskState = TaskStatus
@@ -85,16 +92,11 @@ def _info(msg: str) -> None:
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def human_size(value: float) -> str:
-    try:
-        size = max(0.0, float(value))
-    except Exception:
-        return "—"
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if size < 1024.0 or unit == "PB":
-            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024.0
-    return f"{size:.1f} PB"
+# Re-exported so existing callers (`from ui.common import human_size`) keep
+# working.  The implementation lives in the core layer next to the other
+# formatters, which is also where `core/store.py` now gets it from — it used to
+# carry its own private duplicate.
+from core.utils import human_size  # noqa: E402  (kept at its historical home)
 
 
 def format_eta(seconds: Optional[float]) -> str:
@@ -201,6 +203,10 @@ class DownloadRequest:
     speed_limit_bps: int = 0
     connection_mode: str = ""      # "" | "smart" | "manual" (rule override)
     num_threads: int = 0           # used when connection_mode == "manual"
+    # The project this download belongs to.  Defaults to the Default project so
+    # an add call from a caller that predates the project layer still lands
+    # somewhere visible instead of becoming an orphan row.
+    project_id: str = DEFAULT_PROJECT_ID
     # Task-scoped probe hand-off: an already-computed Analysis for THIS url
     # (produced by the UI's probe step).  Never trusted blindly — the runner
     # re-validates URL match, freshness and SSRF before using it, and falls
@@ -249,6 +255,9 @@ class TaskSnapshot:
     # it is the only number the UI may label "queue position".  The two differ
     # exactly when priority is doing something — see docs/QUEUE.md §2.
     queue_position: int = -1
+    # The owning project.  Resolved (never empty) so a renderer can group by it
+    # without having to know about the Default fallback.
+    project_id: str = DEFAULT_PROJECT_ID
 
     @property
     def name(self) -> str:
@@ -263,6 +272,7 @@ class TaskSnapshot:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
+            "project_id": self.project_id,
             "url": self.request.url,
             "directory": self.request.directory,
             "checksum": self.request.checksum,
@@ -386,7 +396,7 @@ def _simulate_slot_starts(
 # TaskManager
 # ---------------------------------------------------------------------------
 
-class TaskManager:
+class TaskManager(ProjectAdmissionMixin):
     """Thread-safe download queue and state coordinator.
 
     Observer API
@@ -406,12 +416,18 @@ class TaskManager:
         max_concurrent: int = 1,
         logger: Optional[logging.Logger] = None,
         config=None,
+        store: Optional[TaskStore] = None,
+        project_gates: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._runner = runner
         self._config = config
         self._storage_dir = Path(storage_dir)
         self._storage_dir.mkdir(parents=True, exist_ok=True)
-        self._store = TaskStore(self._storage_dir / "downloads.db")
+        # The store may be injected so the application can build the project
+        # layer on the *same* connection first and hand over its gate snapshot
+        # below.  Without that ordering a project the user paused would still get
+        # its restored downloads started here, before the gates arrived.
+        self._store = store if store is not None else TaskStore(self._storage_dir / "downloads.db")
         # Legacy JSON files, used only as a one-time migration source.
         self._queue_file = self._storage_dir / "gui_queue.json"
         self._history_file = self._storage_dir / "gui_history.json"
@@ -424,6 +440,18 @@ class TaskManager:
         self._order: List[str] = []
         self._listeners: Set[TaskListener] = set()
         self._active = 0
+        # Live worker threads per project.  Maintained in exactly the same three
+        # places as ``_active`` (see ``_acquire_slot`` / ``_release_slot``) so the
+        # project limit can never disagree with the global one about what
+        # "currently running" means.
+        self._active_by_project: Dict[str, int] = {}
+        # Per-project admission snapshot, pushed by the API layer.  Absent
+        # project => open and unlimited, so a project row that has not loaded yet
+        # can never block the whole queue.
+        self._project_gates: Dict[str, ProjectGate] = {
+            str(pid): ProjectGate.coerce(gate)
+            for pid, gate in (project_gates or {}).items()
+        }
         self._closed = False
         self._global_pause = False
         self._scheduler_gate = False
@@ -439,6 +467,15 @@ class TaskManager:
     # ------------------------------------------------------------------
     # Observer
     # ------------------------------------------------------------------
+
+    @property
+    def store(self) -> TaskStore:
+        """The task/history repository this manager persists through.
+
+        Exposed so the application can build the project layer on the same
+        connection instead of opening a second one to the same file.
+        """
+        return self._store
 
     def subscribe(self, listener: TaskListener) -> Callable[[], None]:
         self._listeners.add(listener)
@@ -471,6 +508,7 @@ class TaskManager:
             speed_limit_bps=task.speed_limit_bps,
             connection_mode=task.connection_mode,
             num_threads=task.num_threads,
+            project_id=task.project_id or DEFAULT_PROJECT_ID,
         )
 
     def _queue_index(self, task_id: str) -> int:
@@ -583,6 +621,7 @@ class TaskManager:
             num_threads=t.num_threads,
             queue_index=self._queue_index(t.id),
             queue_position=self._queue_position_locked(rec),
+            project_id=t.project_id or DEFAULT_PROJECT_ID,
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -656,6 +695,7 @@ class TaskManager:
                 autostart=autostart,
                 connection_mode=request.connection_mode,
                 num_threads=request.num_threads,
+                project_id=request.project_id or DEFAULT_PROJECT_ID,
             )
             task_id = task.id
             rec = _TaskRecord(task=task, probe_analysis=request.probe_analysis)
@@ -798,6 +838,11 @@ class TaskManager:
         constraint, not a pause — so it is still respected, as is
         ``max_concurrent``: with every slot busy the task simply moves to the
         front of the queue and starts when one frees.
+
+        The same reasoning applies to a *project* pause or schedule window.  They
+        are the user's own rules about that project, so an explicit Start does not
+        override them; the task moves to the front and starts as soon as the
+        project allows it.  Resume the project to lift the block.
         """
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
@@ -811,9 +856,10 @@ class TaskManager:
             self._order.insert(0, task_id)
             self._save_order_locked()
             if not (self._closed or self._scheduler_gate):
-                self._global_pause = False
-                if self._start_rec_locked(rec):
-                    events.append(("started", self._snap(rec)))
+                if not self._project_blocks_locked(rec):
+                    self._global_pause = False
+                    if self._start_rec_locked(rec):
+                        events.append(("started", self._snap(rec)))
         for ev, sn in events:
             self._emit(ev, sn)
         self._start_next()
@@ -1461,6 +1507,11 @@ class TaskManager:
     # ------------------------------------------------------------------
     # Worker management
     # ------------------------------------------------------------------
+    #
+    # The project-aware half of worker management — slot accounting, the
+    # admission check and the gate snapshot — lives in
+    # ``ui/queue_projects.py::ProjectAdmissionMixin``, so this file keeps
+    # owning the queue and that file owns the project integration.
 
     def _next_queued_locked(self, skip: Optional[set] = None) -> Optional[_TaskRecord]:
         """The QUEUED task that should start next, or ``None``.
@@ -1517,7 +1568,7 @@ class TaskManager:
         rec.control = TaskControl()
         rec.task.error = ""
         rec.task.completed_at = None
-        self._active += 1
+        self._acquire_slot(rec.task.project_id)
         t = threading.Thread(
             target=self._worker,
             args=(rec.id,),
@@ -1534,14 +1585,22 @@ class TaskManager:
         with self._lock:
             if self._start_blocked():
                 return
-            # Tasks that could not be transitioned are skipped for the rest of
-            # this pass.  Without this the loop would re-select the same task
-            # forever while holding the lock, hanging every other thread.
+            # Tasks that could not be started are skipped for the rest of this
+            # pass.  Without this the loop would re-select the same task forever
+            # while holding the lock, hanging every other thread.
+            #
+            # Skipping (rather than stopping at) a blocked task is also what stops
+            # a project from starving the ones behind it: a project whose window
+            # is closed sits at the head of the queue and every other project
+            # still gets its turn.
             attempted: set = set()
             while self._active < self._max_concurrent:
                 rec = self._next_queued_locked(skip=attempted)
                 if rec is None:
                     break
+                if not self._admission_locked(rec).allowed:
+                    attempted.add(rec.id)
+                    continue
                 if not self._start_rec_locked(rec):
                     attempted.add(rec.id)
                     continue
@@ -1557,6 +1616,10 @@ class TaskManager:
             control = rec.control if rec else None
             request = self._request_for(task) if task else None
             probe_handoff = rec.probe_analysis if rec else None
+            # Captured now because ``rec`` may be gone by the time the slot is
+            # released, and the project counter must be decremented for the same
+            # project it was incremented for.
+            slot_project = (task.project_id if task else "") or DEFAULT_PROJECT_ID
 
         # Attach the task-scoped probe hand-off so the runner can reuse the
         # UI's probe result instead of probing the same URL a second time.
@@ -1567,7 +1630,7 @@ class TaskManager:
 
         if rec is None or task is None or control is None or request is None:
             with self._lock:
-                self._active = max(0, self._active - 1)
+                self._release_slot(slot_project)
             self._start_next()
             return
 
@@ -1615,7 +1678,7 @@ class TaskManager:
         # ---- Finalize ------------------------------------------------
         events: List[tuple[str, TaskSnapshot]] = []
         with self._lock:
-            self._active = max(0, self._active - 1)
+            self._release_slot(slot_project)
             rec = self._tasks.get(task_id)
             # Guard against a retry race: if this task was re-queued and a new
             # worker was spawned while we were finishing, ``rec.control`` is no
@@ -1680,10 +1743,6 @@ class TaskManager:
     # Temporary-file cleanup
     # ------------------------------------------------------------------
 
-    _TEMP_ARTIFACT_RE = re.compile(
-        r"\.(part\d+|repart-[0-9a-f]+-\d+|tmp|merging|dlstate)$", re.IGNORECASE
-    )
-
     def _cleanup_task_files(self, task: DownloadTask) -> List[str]:
         """Delete temporary artifacts owned by an incomplete task.
 
@@ -1691,25 +1750,22 @@ class TaskManager:
         matching against the task's resolved destination path, so it cannot
         remove files belonging to another task.
 
+        The suffix list lives in :mod:`core.artifacts` because
+        ``projects/service.py`` needs the same definition when a user deletes a
+        project together with its downloads; two copies would drift and one of
+        them would start leaving orphans behind.
+
         Returns the list of paths that could not be removed (already logged).
         """
         if task.status == TaskStatus.COMPLETED:
             return []
-        base = None
-        if task.resolved_path:
-            base = Path(task.resolved_path)
-        elif task.filename or task.label:
-            base = Path(task.directory) / (task.filename or task.label)
+        base = artifacts.task_base_path(
+            task.resolved_path, task.directory, task.filename, task.label
+        )
         if base is None or not base.parent.is_dir():
             return []
-        try:
-            match_re = re.compile(r"^" + re.escape(base.name) + r"\.(part\d+|repart-[0-9a-f]+-\d+|tmp|merging|dlstate)$", re.IGNORECASE)
-        except re.error:
-            return []
         failures: List[str] = []
-        for entry in base.parent.iterdir():
-            if not entry.is_file() or not match_re.match(entry.name):
-                continue
+        for entry in artifacts.iter_artifacts(base):
             try:
                 entry.unlink()
             except OSError as exc:

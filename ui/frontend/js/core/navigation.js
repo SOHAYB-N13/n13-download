@@ -11,7 +11,7 @@
    Extracted verbatim from app.js (Phase 2).  `App.navigate` delegates here.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* global Utils, I18N, Queue */
+/* global Utils, I18N, Queue, Groups */
 
 const Nav = {
   /** Bind sidebar nav items + the collapse toggle. */
@@ -58,7 +58,12 @@ const Nav = {
     if (page === "browser") app._refreshServerStatus();
     if (page === "logs") app._renderLogs();
     if (page === "dashboard") app._renderDashboardLists();
-    if (page === "downloads") app._renderDownloads(true);
+    if (page === "downloads") {
+      // The group strip lives inside this page, so it repaints with it — the
+      // workspace never shows a stale tab row.
+      if (typeof Groups !== "undefined") Groups.paint();
+      app._renderDownloads(true);
+    }
     // The Queue page owns its own rendering (js/queue.js).
     if (page === "queue" && typeof Queue !== "undefined") Queue.render();
   },

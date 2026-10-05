@@ -178,6 +178,27 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def human_size(value: float) -> str:
+    """Byte count as a short display string for the graphical UI.
+
+    The GUI's formatter, alongside :func:`format_size` (the console's).  Both live
+    here so a third copy never appears: ``core/store.py`` used to carry its own
+    private duplicate, which put display formatting inside a persistence module.
+
+    Returns an em dash rather than a fabricated "0 B" when the value is not a
+    number — an unknown size and a zero-byte file are different things.
+    """
+    try:
+        size = max(0.0, float(value))
+    except Exception:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if size < 1024.0 or unit == "PB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} PB"
+
+
 def format_speed(speed_bps: float) -> str:
     if speed_bps >= 1024**3:
         return f"{speed_bps / (1024**3):.2f} GB/s"

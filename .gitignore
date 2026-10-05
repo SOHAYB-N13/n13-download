@@ -12,9 +12,12 @@ gui_queue.json
 *.token.json
 token.json
 docs/
-tests/
 .DS_Store
 Thumbs.db
+
+# The test suite is part of the repository.  Its generated files are already
+# covered by the `__pycache__/` and `*.pyc` rules above, so no `tests/` rule is
+# needed here — adding one would silently drop new test files.
 
 # Tool-generated project marker
 .freebuff/

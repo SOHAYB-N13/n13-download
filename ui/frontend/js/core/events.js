@@ -116,6 +116,16 @@ const Events = {
       Events.applyAutoShutdown(app, evt.status);
     } else if (evt.type === "queue_gate") {
       Events.applyQueueStatus(app, evt.status);
+    } else if (evt.type === "projects_changed") {
+      // The backend pushes this whenever a group is created, edited, paused,
+      // resumed or deleted, and whenever a task moves between groups.  The
+      // strip reloads its own data, so the event carries no payload — there is
+      // exactly one response shape and one place that reads it.
+      if (typeof Groups !== "undefined") {
+        Promise.resolve(Groups.load())
+          .then(() => app._syncProjectSelects())
+          .catch(() => {});
+      }
     } else if (evt.type === "update_state") {
       app._applyUpdateState(evt.state);
       const st = evt.state;

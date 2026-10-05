@@ -279,6 +279,24 @@ try {
 
       <!-- ── Downloads ─────────────────────────────────────────────── -->
       <section class="page active" id="page-downloads" aria-label="Downloads">
+        <!-- Download groups: the tab strip that scopes this whole workspace.
+             `[ + ] [ All ] [ TV Series ] [ GTA V ] …` — switching a tab only
+             re-filters the list below; there is no separate page for a group.
+             The strip stays hidden until a group exists, so a first-run user
+             sees the empty state (with its own "New group" action) instead of a
+             lone "+".  Rendered by js/features/groups/groups.js. -->
+        <div class="grp-strip" id="grpStrip" hidden>
+          <button class="grp-add" id="grpNew" type="button"
+                  data-i18n-tip="groups.new" data-i18n-aria-label="groups.new">
+            <svg class="ico" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </button>
+          <div class="grp-tabs" id="grpTabs" role="tablist" aria-label="Download groups"></div>
+        </div>
+
+        <!-- The open group's name, state, progress and settings.  Hidden on the
+             "All" tab, where there is no single group to describe. -->
+        <div class="grp-head" id="grpHead" hidden></div>
+
         <div class="dl-toolbar">
           <div class="chips" id="filterChips" role="tablist" aria-label="Filter downloads">
             <button class="chip active" data-filter="all"><span data-i18n="filter.all">All</span> <span class="chip-n">0</span></button>
@@ -443,6 +461,9 @@ try {
             <p class="dim-note"><span data-i18n="batch.note">Paste one link per line.</span> <span class="batch-count" id="batchCount"></span></p>
             <textarea class="input textarea mono" id="batchUrls" rows="8" spellcheck="false"
               placeholder="https://example.com/file1.zip&#10;https://example.com/file2.zip&#10;https://example.com/file3.zip" data-i18n-aria-label="batch.url_list"></textarea>
+            <div class="input-join" id="batchProjectRow" hidden>
+              <select class="input" id="batchProject" data-project-select data-i18n-aria-label="dlg.project"></select>
+            </div>
             <div class="input-join">
               <input class="input mono" id="batchDir" type="text" data-i18n-ph="batch.save_to" data-i18n-aria-label="batch.save_to">
               <button class="btn btn-ghost" id="btnBatchBrowse">
@@ -629,7 +650,7 @@ try {
      1. platform layer: utils → i18n → api
      2. component modules → Components facade
      3. core layer: prefs, navigation, events, shortcuts
-     4. feature modules: downloads, add-download, settings (SettingsUI)
+     4. feature modules: downloads, add-download, settings (SettingsUI), groups
      5. app (bootstrap/orchestration) → queue (self-bootstrapping feature)
      All files are plain globals — no ES modules yet. -->
 <script src="js/utils.js"></script>
@@ -651,6 +672,10 @@ try {
 <script src="js/features/downloads/downloads-actions.js"></script>
 <script src="js/features/add-download/add-download.js"></script>
 <script src="js/features/settings/settings.js"></script>
+<script src="js/features/groups/groups-model.js"></script>
+<script src="js/features/groups/groups-view.js"></script>
+<script src="js/features/groups/group-dialogs.js"></script>
+<script src="js/features/groups/groups.js"></script>
 <script src="js/app.js"></script>
 <script src="js/queue.js"></script>
 </body>

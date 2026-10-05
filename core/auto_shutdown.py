@@ -821,6 +821,13 @@ class AutoShutdownController:
         self._closed = False
         self._schedule_failed_at: Optional[float] = None
         self._last_final_check_failed = False
+        # A one-shot arm raised by a *project's* completion action.  Kept apart
+        # from ``shutdown_when_done`` on purpose: the preference is a standing
+        # rule the user set, this is a statement about the current run only, and
+        # conflating them would persist "shut down tonight" into every future
+        # launch.  See ``arm_for_project_completion``.
+        self._session_arm = False
+        self._session_arm_project = ""
 
     # ------------------------------------------------------------------
     # Observation API
@@ -885,6 +892,8 @@ class AutoShutdownController:
                 self._persist_locked()
             if not enabled:
                 self._log.info("AutoShutdown: disabled by user")
+                self._session_arm = False
+                self._session_arm_project = ""
                 ok = self._disarm_locked(
                     ShutdownReason.USER_DISABLED, cancel_pending=True
                 )
@@ -900,6 +909,41 @@ class AutoShutdownController:
                 self._session.armed_at = self._clock()
                 self._log.info("AutoShutdown: armed")
                 self._evaluate_locked()
+            payload = self._status_locked()
+        self._emit(payload)
+        return payload
+
+    def arm_for_project_completion(self, project_id: str) -> Dict[str, Any]:
+        """Arm a one-shot shutdown because a project's completion action fired.
+
+        Two deliberate choices:
+
+        * **Session-scoped, never persisted.**  "Shut down when this project is
+          done" is a statement about *this* run.  Writing it into
+          ``shutdown_when_done`` would power the machine off on some later,
+          unrelated evening.
+        * **It arms; it does not fire.**  The ordinary policy still decides, so
+          the machine only goes down once the *whole* queue is idle.  That is
+          exactly what stops one finished project from powering the box off while
+          another project is still downloading — and it means there is still only
+          one shutdown path, one timer, and one countdown to cancel.
+
+        The resulting countdown is the normal one: cancellable from the UI,
+        visible, and cleaned up across a restart by the usual state file.
+        """
+        with self._lock:
+            self._session_arm = True
+            self._session_arm_project = str(project_id or "")
+            self._session.cancel_reason = None
+            self._session.blocked_reason = None
+            self._session.last_error = ""
+            self._schedule_failed_at = None
+            self._session.armed_at = self._clock()
+            self._log.info(
+                "AutoShutdown: armed by project completion (%s)",
+                self._session_arm_project or "unknown",
+            )
+            self._evaluate_locked()
             payload = self._status_locked()
         self._emit(payload)
         return payload
@@ -922,6 +966,10 @@ class AutoShutdownController:
                         setattr(self._config, "shutdown_when_done", False)
                     except Exception:
                         pass
+                # A user cancel consumes the project-completion arm too, otherwise
+                # the very next evaluation would raise it again.
+                self._session_arm = False
+                self._session_arm_project = ""
                 self._persist_locked()
                 self._session.state = ShutdownState.DISABLED
                 self._log.info("AutoShutdown: cancelled by user — disarmed")
@@ -1044,6 +1092,11 @@ class AutoShutdownController:
             "state": session.state.value,
             "supported": self._supported(),
             "pending": bool(self._pending),
+            # A project-completion arm is a *session* fact, never the persisted
+            # preference — the UI renders it separately so a user can tell
+            # "always" from "just for this project".
+            "session_arm": bool(self._session_arm),
+            "armed_by_project": self._session_arm_project,
             "countdown_seconds": session.countdown_seconds,
             "seconds_remaining": remaining,
             "deadline": session.countdown_deadline,
@@ -1157,7 +1210,7 @@ class AutoShutdownController:
             # waiting/armed state.
             return
 
-        if not self._preference():
+        if not (self._preference() or self._session_arm):
             if self._pending:
                 self._disarm_locked(ShutdownReason.USER_DISABLED, cancel_pending=True)
             self._session.state = ShutdownState.DISABLED
@@ -1391,6 +1444,8 @@ class AutoShutdownController:
 
     def _disarm_preference_locked(self) -> None:
         """One-shot completion: the user preference is consumed by firing."""
+        self._session_arm = False
+        self._session_arm_project = ""
         if hasattr(self._config, "shutdown_when_done"):
             try:
                 setattr(self._config, "shutdown_when_done", False)

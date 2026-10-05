@@ -160,6 +160,12 @@ class DownloadTask:
     filename: str = ""
     directory: str = ""
     label: str = ""
+    # The project that owns this task.  An opaque id, never derived from a
+    # project name — which is exactly what makes renaming a project safe.
+    # Empty means "not yet assigned" and is normalised to the Default project
+    # when the row is written, so a task can never be invisible to a
+    # project-scoped view.
+    project_id: str = ""
 
     total_size: int = 0
     downloaded_size: int = 0

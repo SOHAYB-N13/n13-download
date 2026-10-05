@@ -78,11 +78,19 @@ class Scheduler:
         config,
         on_gate: Optional[Callable[[bool], None]] = None,
         on_speed: Optional[Callable[[int], None]] = None,
+        on_tick: Optional[Callable[[], None]] = None,
         logger: Optional[object] = None,
     ) -> None:
         self._config = config
         self._on_gate = on_gate or (lambda on: None)
         self._on_speed = on_speed or (lambda bps: None)
+        # A second clock for callers that need periodic work but must not start
+        # their own thread.  The project layer uses it to re-evaluate each
+        # project's time window: a window opens on the wall clock, so the queue
+        # has to be told even when nothing else happens.  Deliberately a hook
+        # rather than "the project layer piggybacks on on_gate", so disabling the
+        # scheduler cannot silently stop project schedules from being applied.
+        self._on_tick = on_tick or (lambda: None)
         self._logger = logger
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -123,6 +131,15 @@ class Scheduler:
                         pass
 
     def _tick(self) -> None:
+        try:
+            self._on_tick()
+        except Exception as exc:
+            if self._logger is not None:
+                try:
+                    self._logger.warning("Scheduler tick hook failed: %s", exc)
+                except Exception:
+                    pass
+
         cfg = self._config
         enabled = bool(getattr(cfg, "scheduler_enabled", False))
         if not enabled:
