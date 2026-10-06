@@ -29,10 +29,23 @@ const ContextMenuUI = {
     }).join("");
 
     menu.classList.add("open");
-    // Position after render so dimensions are known.
-    const rect = { w: 224, h: items.length * 34 + 12 };
-    const px = Math.min(x, window.innerWidth - rect.w - 8);
-    const py = Math.min(y, window.innerHeight - rect.h - 8);
+    // Measure the menu we just rendered rather than guessing its size.
+    //
+    // The previous estimate (`items.length * 34 + 12`) treated every separator
+    // as a full 34px row — a separator is 1px with 5px margins — so a long menu
+    // was thought to be up to ~60px taller than it is and got pinned that much
+    // higher whenever the user right-clicked near the bottom edge.  It also
+    // assumed a fixed 224px width, which a long (or translated) label can
+    // exceed.
+    //
+    // `offsetWidth`/`offsetHeight`, not `getBoundingClientRect()`: the menu is
+    // still running its open transition, and `getBoundingClientRect()` would
+    // report the *scaled* box (`transform: scale(0.96)`) instead of the layout
+    // size we want to fit on screen.
+    const w = menu.offsetWidth || 224;
+    const h = menu.offsetHeight || items.length * 34 + 12;
+    const px = Math.min(x, window.innerWidth - w - 8);
+    const py = Math.min(y, window.innerHeight - h - 8);
     menu.style.left = Math.max(8, px) + "px";
     menu.style.top = Math.max(8, py) + "px";
     menu.style.transformOrigin = (x > window.innerWidth / 2 ? "right " : "left ") +

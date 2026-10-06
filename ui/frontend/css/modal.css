@@ -193,6 +193,17 @@
   text-align: left;
   transition: background var(--dur-1);
 }
+/* `.ctx-item` is a fixed 33px tall with `overflow: hidden`, so a label too
+   long for the menu used to be cut mid-glyph with no ellipsis — the reader
+   could not tell text was missing.  Let the label shrink and ellipsise
+   instead; the full text is still reachable because the item is a button and
+   the label is its accessible name. */
+.ctx-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ctx-item .ico { width: 15px; height: 15px; color: var(--text-2); }
 .ctx-item:hover { background: var(--bg-hover); }
 .ctx-item:hover .ico { color: var(--text-1); }

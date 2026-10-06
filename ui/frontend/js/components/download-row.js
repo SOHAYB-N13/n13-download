@@ -41,11 +41,17 @@ const DownloadRowUI = {
     return `<span class="badge badge-${cls}"><i class="badge-dot"></i>${lbl}</span>`;
   },
 
+  /**
+   * Remaining-time readout.
+   *
+   * Only a transfer in flight has an estimate.  A finished or stopped task does
+   * not have "00:00 remaining" — it has no estimate at all, and printing a
+   * duration there reads as a real number the user could plan around.
+   */
   _etaText(task) {
-    if (task.state === "Complete") return "00:00";
-    if (task.state !== "Downloading") return "--:--";
+    if (task.state !== "Downloading") return "—";
     const eta = task.eta_seconds;
-    if (eta == null || !isFinite(eta) || eta < 0) return "--:--";
+    if (eta == null || !isFinite(eta) || eta < 0) return "—";
     return Utils.formatDuration(eta);
   },
 
@@ -66,11 +72,23 @@ const DownloadRowUI = {
     return `<div class="dl-conn${isLive && txt !== "—" ? " live" : ""}" title="${I18N.t("col.connections", "Connections")}">${icon}<span>${txt}</span></div>`;
   },
 
+  /**
+   * Speed cell.
+   *
+   * The live speed is wrapped in its own span so it can never be truncated by
+   * the cap badge sitting next to it — the two are separate flex items and the
+   * badge wraps to a second line instead of eating into the number.
+   */
+  _speedHtml(task) {
+    const txt = task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—";
+    return `<span class="dl-speed-v">${txt}</span>${this._capHtml(task)}`;
+  },
+
   /** Small badge shown when a per-download bandwidth cap is configured. */
   _capHtml(task) {
     const bps = task.speed_limit_bps || 0;
     if (bps <= 0) return "";
-    return `<span class="dl-cap" title="${I18N.t("dlg.speed_limit", "Per-download speed limit")}">${Utils.formatSpeed(bps)}</span>`;
+    return `<span class="dl-cap" title="${I18N.t("dlg.speed_limit", "Per-download speed limit")}">${Utils.icon("gauge", 10)}${Utils.formatSpeed(bps)}</span>`;
   },
 
   renderRow(task, cb, elapsedMs = 0) {
@@ -81,7 +99,11 @@ const DownloadRowUI = {
     row.className = "dl-row row-enter";
     row.dataset.id = task.id;
     row.dataset.state = task.state;
-    row.setAttribute("role", "listitem");
+    // A multi-selectable list whose rows each carry their own controls: the
+    // listbox/option pairing is what makes `aria-selected` meaningful.
+    // `aria-selected` on `role="listitem"` is invalid and is ignored by assistive
+    // tech, which left a screen-reader user unable to tell what was selected.
+    row.setAttribute("role", "option");
     row.tabIndex = 0;
 
     const done = Utils.formatSize(task.completed);
@@ -97,16 +119,18 @@ const DownloadRowUI = {
       </div>
       <div class="dl-progress">
         <span class="dl-time dl-elapsed">${Utils.formatDuration(elapsedMs / 1000)}</span>
-        <div class="progress" role="progressbar" aria-valuenow="${pct.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+             aria-valuenow="${pct.toFixed(0)}" aria-valuetext="${Utils.escapeHtml(pctText)}"
+             aria-label="${Utils.escapeHtml(I18N.fmt("col.progress_for", { name }, "Progress for {name}"))}">
           <div class="progress-fill p-${stCls}" style="width:${pct}%"></div>
           <span class="dl-pct">${pctText}</span>
         </div>
         <span class="dl-time dl-eta">${this._etaText(task)}</span>
       </div>
-      <div class="dl-cell dl-size" title="${done} of ${total} · ${remaining} left">
+      <div class="dl-cell dl-size" title="${Utils.escapeHtml(I18N.fmt("dlg.size_detail", { done, total, left: remaining }, `${done} of ${total} · ${remaining} left`))}">
         <span class="dl-cell-main">${done}<span class="dl-cell-dim"> / ${total}</span></span>
       </div>
-      <div class="dl-cell dl-speed">${task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—"}${this._capHtml(task)}</div>
+      <div class="dl-cell dl-speed">${this._speedHtml(task)}</div>
       ${this._connHtml(task)}
       <div class="dl-status">${this._badge(task)}${task.error ? `<span class="dl-err" title="${Utils.escapeHtml(task.error)}">${Utils.icon("info", 13)}</span>` : ""}</div>
       <div class="dl-actions">${this._rowActions(task)}</div>`;
@@ -164,7 +188,12 @@ const DownloadRowUI = {
       if (stateChanged) fill.className = `progress-fill p-${stCls}`;
     }
     const bar = row.querySelector(".progress");
-    if (bar) bar.setAttribute("aria-valuenow", pct.toFixed(0));
+    if (bar) {
+      bar.setAttribute("aria-valuenow", pct.toFixed(0));
+      // The visible label is a bare "43%" / "—", which says nothing on its own;
+      // the spoken value has to carry the same "unknown" case.
+      bar.setAttribute("aria-valuetext", task.total > 0 ? pct.toFixed(0) + "%" : "—");
+    }
 
     const pctEl = row.querySelector(".dl-pct");
     if (pctEl) pctEl.textContent = task.total > 0 ? pct.toFixed(0) + "%" : "—";
@@ -180,9 +209,7 @@ const DownloadRowUI = {
       sizeEl.innerHTML = `${Utils.formatSize(task.completed)}<span class="dl-cell-dim"> / ${total}</span>`;
     }
     const speedEl = row.querySelector(".dl-speed");
-    if (speedEl) {
-      speedEl.innerHTML = (task.state === "Downloading" ? Utils.formatSpeed(task.speed_bps) : "—") + this._capHtml(task);
-    }
+    if (speedEl) speedEl.innerHTML = this._speedHtml(task);
 
     const connEl = row.querySelector(".dl-conn");
     if (connEl) {

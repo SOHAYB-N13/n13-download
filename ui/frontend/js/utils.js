@@ -74,6 +74,15 @@ const Utils = {
     catch { return ""; }
   },
 
+  /**
+   * The name shown for a task, with a last-resort label.
+   *
+   * Order: the user's own label, then the last path segment of the URL, then
+   * the URL itself.  A URL with no path (`https://example.com/`) has nothing to
+   * name the row after, and a task with no URL at all has nothing either —
+   * `escapeHtml(null)` renders as the empty string, so the row appeared with a
+   * blank name and no way to tell which download it was.  Name it explicitly.
+   */
   fileName(task) {
     if (task.label) return task.label;
     try {
@@ -81,7 +90,11 @@ const Utils = {
       const n = decodeURIComponent(p.split("/").filter(Boolean).pop() || "");
       if (n) return n;
     } catch {}
-    return task.url;
+    const url = String(task.url || "").trim();
+    if (url && url !== "undefined" && url !== "null") return url;
+    return (typeof I18N !== "undefined")
+      ? I18N.t("dl.untitled", "Untitled download")
+      : "Untitled download";
   },
 
   // ── Status ────────────────────────────────────────────────────────
@@ -131,6 +144,22 @@ const Utils = {
     return (typeof I18N !== "undefined" && key) ? I18N.t(key, fallback || state) : (fallback || state);
   },
 
+  /**
+   * Mark one button in a group of filter chips as the chosen one.
+   *
+   * Updates the class *and* `aria-pressed` together.  Setting only the class is
+   * what left a screen-reader user unable to tell which filter was applied: the
+   * chips are plain buttons, so nothing about them is announced as "selected"
+   * unless it is stated explicitly.
+   */
+  syncChipGroup(selector, chosen) {
+    this.$qa(selector).forEach((c) => {
+      const on = c === chosen;
+      c.classList.toggle("active", on);
+      c.setAttribute("aria-pressed", String(on));
+    });
+  },
+
   // ── File type detection ───────────────────────────────────────────
 
   fileType(name) {
@@ -149,13 +178,48 @@ const Utils = {
     return map[ext] || "file";
   },
 
+  // ── Download categories ───────────────────────────────────────────
+  //
+  // The single frontend source of truth for the category vocabulary, mirroring
+  // `core/analyzer.py::DEFAULT_CATEGORY_EXTENSIONS`.  It is deliberately NOT
+  // derived from `fileType()`: that map exists to pick an *icon* and folds
+  // several real categories together (`iso`/`img` share a "disc" glyph), so
+  // routing the category through it made the app disagree with itself — an
+  // `.iso` was offered as "Programs" in the New-download dialog and then
+  // recorded as "Archives" in History.  `tests/frontend/category-parity.test.mjs`
+  // pins this table against the Python one, so the two cannot drift apart.
+
+  CATEGORY_ORDER: ["General", "Archives", "Videos", "Music", "Documents", "Programs", "Images", "Other"],
+
+  CATEGORY_EXTENSIONS: {
+    Videos: ["mp4", "mkv", "avi", "mov", "webm", "flv", "m4v", "ts",
+             "mpeg", "mpg", "3gp", "wmv", "m2ts"],
+    Music: ["mp3", "flac", "wav", "ogg", "m4a", "aac", "opus", "wma", "mid"],
+    Images: ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico",
+             "tiff", "heic", "avif", "jfif"],
+    Documents: ["pdf", "doc", "docx", "txt", "rtf", "odt", "xls", "xlsx",
+                "ppt", "pptx", "csv", "md", "epub", "odp", "ods"],
+    Archives: ["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso",
+               "tgz", "tbz2", "cab", "zst"],
+    Programs: ["exe", "msi", "apk", "dmg", "deb", "rpm", "jar", "pkg",
+               "appimage", "bat", "sh"],
+    Other: ["bin", "dat", "db", "dll", "so", "dylib", "img", "part", "torrent"],
+  },
+
+  /**
+   * The category a filename belongs to, using the backend's own rules.
+   *
+   * Returns "General" for anything unrecognised — which is also the fallback
+   * `detect_category()` uses when neither the extension nor the content type
+   * identifies a file.
+   */
   categoryFor(name) {
-    const t = this.fileType(name);
-    return {
-      archive: "Archives", video: "Videos", audio: "Music",
-      image: "Images", document: "Documents", app: "Programs",
-      disc: "Programs", file: "General",
-    }[t] || "General";
+    const ext = String(name || "").split(".").pop()?.toLowerCase() || "";
+    if (!name || !ext || ext === String(name).toLowerCase()) return "General";
+    for (const [cat, exts] of Object.entries(this.CATEGORY_EXTENSIONS)) {
+      if (exts.includes(ext)) return cat;
+    }
+    return "General";
   },
 
   // ── Icon system (24×24 stroke icons) ──────────────────────────────

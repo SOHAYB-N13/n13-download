@@ -268,8 +268,7 @@ const DownloadsActions = {
   bindPage(app) {
     Utils.$qa("#filterChips .chip").forEach((chip) => {
       chip.addEventListener("click", () => {
-        Utils.$qa("#filterChips .chip").forEach((c) => c.classList.remove("active"));
-        chip.classList.add("active");
+        Utils.syncChipGroup("#filterChips .chip", chip);
         app.state.filter = chip.dataset.filter;
         app._renderDownloads(true);
       });

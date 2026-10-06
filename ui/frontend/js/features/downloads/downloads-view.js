@@ -15,8 +15,19 @@
 /* global Utils, API, I18N, Components */
 
 const DownloadsView = {
-  /** Canonical category order — matches the backend's routing defaults. */
-  CAT_ORDER: ["General", "Compressed", "Videos", "Music", "Documents", "Programs", "Images"],
+  /**
+   * Canonical category order — the backend's own vocabulary.
+   *
+   * These are exactly the values `core/analyzer.detect_category` can return, so
+   * every category a task can actually carry has a place in this order.  A name
+   * that is not listed here still renders (it is appended, sorted) — that is how
+   * a legacy task stored under an older name keeps working.
+   */
+  // Display order for the category strip.  Kept as a literal (rather than
+  // read from `Utils.CATEGORY_ORDER`) so this module still loads on its own in
+  // tests; `tests/frontend/category-parity.test.mjs` asserts the two lists —
+  // and the backend's extension table — all agree, so the copy cannot drift.
+  CAT_ORDER: ["General", "Archives", "Videos", "Music", "Documents", "Programs", "Images", "Other"],
 
   taskArray(app) { return Object.values(app.state.downloads); },
 
@@ -181,34 +192,41 @@ const DownloadsView = {
       headEl.hidden = true;
       listEl.innerHTML = "";
       app._clearSelection();
-      const cat = app.state.catFilter;
       const project = (typeof Groups !== "undefined") ? Groups.current() : null;
       // A group being *open* is not the same as the group being *empty*: with
       // a search or a filter active, a group full of downloads can produce an
       // empty row list.  Only the second case may claim "nothing in this
       // group yet"; the first is an ordinary "nothing matches".
       const groupEmpty = !!project && this.groupTasks(app).length === 0;
+      const reason = this.emptyReason(app.state);
+      const t = (key, vars, fallback) => I18N.fmt(key, vars, fallback);
 
       if (groupEmpty) {
         // The open group simply has nothing in it yet — a different situation
         // from "your filters hid everything", and it gets a different answer.
         emptyEl.replaceChildren(Components.emptyState(GroupsView.emptyGroupOptions(
-          (key, vars, fallback) => I18N.fmt(key, vars, fallback),
+          t,
           () => app.openNewDownload(),
         )));
       } else {
+        // "Nothing matches" must always come with the way out.  Whatever is
+        // hiding the rows — the status chip, the category chip or the search
+        // box — the one action offered is the one that undoes *all* of them,
+        // so a user can never be left staring at an empty list with no exit.
         emptyEl.replaceChildren(Components.emptyState({
           icon: "search",
           title: I18N.t("empty.nothing_matches", "Nothing matches"),
-          desc: cat !== "all"
+          desc: reason.categoryOnly
             ? I18N.t("empty.nothing_in_category", "No downloads in this category yet.")
             : I18N.t("empty.nothing_matches_desc", "Try a different filter or search term."),
-          actions: cat !== "all"
+          actions: reason.resettable
             ? [{
-              label: I18N.t("cat.show_all", "Show all categories"),
+              label: reason.categoryOnly
+                ? I18N.t("cat.show_all", "Show all categories")
+                : I18N.t("empty.show_all", "Show all downloads"),
               icon: "list",
               primary: true,
-              onClick: () => app._setCatFilter("all"),
+              onClick: () => this.resetListFilters(app),
             }]
             : undefined,
         }));
@@ -269,7 +287,9 @@ const DownloadsView = {
 
     const chip = (key, label, n) => {
       const active = app.state.catFilter === key;
-      return `<button class="cat-chip${active ? " active" : ""}" data-cat="${Utils.escapeHtml(key)}" role="tab" aria-selected="${active}">`
+      // A toggle button, not a tab: the strip re-filters one list rather than
+      // switching between panels, so `aria-pressed` states the truth.
+      return `<button class="cat-chip${active ? " active" : ""}" data-cat="${Utils.escapeHtml(key)}" aria-pressed="${active}">`
         + `<span class="cat-t">${Utils.escapeHtml(label)}</span><span class="cat-n">${n}</span></button>`;
     };
 
@@ -285,6 +305,54 @@ const DownloadsView = {
 
   setCatFilter(app, cat) {
     app.state.catFilter = cat || "all";
+    app.state.listSig = "";
+    app._renderDownloads(true);
+  },
+
+  /**
+   * Why the visible list is empty, and whether a filter is responsible.
+   *
+   * Pure, so the "is the user stuck?" question is testable without a DOM.  The
+   * view uses it for two decisions: which wording to show, and — the part that
+   * matters — whether the empty state must offer a way back.  An empty list
+   * with no exit is the failure this exists to prevent.
+   */
+  emptyReason(state) {
+    const s = state || {};
+    const filter = s.filter || "all";
+    const catFilter = s.catFilter || "all";
+    const search = String(s.search || "").trim();
+    const byFilter = filter !== "all";
+    const byCategory = catFilter !== "all";
+    const bySearch = search.length > 0;
+    return {
+      filter,
+      catFilter,
+      search,
+      byFilter,
+      byCategory,
+      bySearch,
+      // Only the category chip is hiding things — the app already had precise
+      // wording for that case, so keep it.
+      categoryOnly: byCategory && !byFilter && !bySearch,
+      resettable: byFilter || byCategory || bySearch,
+    };
+  },
+
+  /**
+   * Undo every filter that can hide a row, and put the controls back in sync.
+   *
+   * Clearing the state alone would leave the status chip and the search box
+   * still looking active, so the widgets are reset too — otherwise the toolbar
+   * and the list would disagree about what is being shown.
+   */
+  resetListFilters(app) {
+    app.state.filter = "all";
+    app.state.catFilter = "all";
+    app.state.search = "";
+    Utils.syncChipGroup("#filterChips .chip", Utils.$q('#filterChips [data-filter="all"]'));
+    const search = Utils.$id("globalSearch");
+    if (search) search.value = "";
     app.state.listSig = "";
     app._renderDownloads(true);
   },
@@ -487,7 +555,12 @@ const DownloadsView = {
     host.innerHTML = actions.map((a) => {
       if (a.separator) return '<span class="sb-divider" aria-hidden="true"></span>';
       const cls = a.kind === "primary" ? " primary" : (a.kind === "danger" ? " danger" : "");
-      return `<button class="sb-btn${cls}" data-sb="${a.id}" data-i18n-tip="${a.label}">${Utils.icon(a.icon, 15)}<span>${Utils.escapeHtml(a.label)}</span></button>`;
+      // `data-tip` directly, never `data-i18n-tip`: that attribute is resolved
+      // as a *dictionary key* on every language change, so handing it an
+      // already-translated label made the lookup miss and blanked the tooltip.
+      // The label is also the button's visible text, so repeating it in a
+      // tooltip adds nothing — the tooltip is dropped on purpose.
+      return `<button class="sb-btn${cls}" data-sb="${a.id}">${Utils.icon(a.icon, 15)}<span>${Utils.escapeHtml(a.label)}</span></button>`;
     }).join("");
 
     // Wire fresh handlers each render (the list is short and changes with state).

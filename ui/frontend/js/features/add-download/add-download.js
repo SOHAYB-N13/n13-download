@@ -18,7 +18,14 @@ const AddDownload = {
       const L = (k, f) => I18N.t(k, f);
       const settings = app.state.settings || (await API.getSettings()) || {};
       const baseDir = settings.download_dir || "";
-      const categories = ["General", "Compressed", "Videos", "Music", "Documents", "Programs", "Images"];
+      // Exactly the categories `core/analyzer.detect_category` can return, in
+      // the order the Downloads strip shows them.  `Utils.categoryFor` maps a
+      // filename to one of these, so every auto-detected value must have a chip
+      // here — otherwise the Category row shows nothing selected while the
+      // destination folder silently changes to match the hidden value.
+      // The list is read from `Utils` rather than repeated here so this dialog
+      // and the Downloads strip can never disagree about the vocabulary.
+      const categories = Utils.CATEGORY_ORDER;
 
       // Projects are optional: an empty list just means the selector is hidden
       // and the backend files the download under the Default project.  Never
@@ -100,7 +107,7 @@ const AddDownload = {
 
       dlg.setFooter(`
       <button class="btn btn-ghost" id="ndCancel">${L("dlg.cancel_btn", "Cancel")}</button>
-      <button class="btn btn-primary btn-lg" id="ndGo" disabled>${Utils.icon("download", 16)} ${L("dlg.download_btn", "Download")}</button>`);
+      <button class="btn btn-primary btn-lg" id="ndGo" disabled>${Utils.icon("download", 16)} <span id="ndGoLabel">${L("dlg.download_btn", "Download")}</span></button>`);
 
       const el = {
         url: dlg.qs("#ndUrl"), name: dlg.qs("#ndName"), dir: dlg.qs("#ndDir"),
@@ -108,7 +115,8 @@ const AddDownload = {
         err: dlg.qs("#ndError"), detect: dlg.qs("#ndDetect"), probing: dlg.qs("#ndProbing"),
         detectName: dlg.qs("#ndDetectName"), detectMeta: dlg.qs("#ndDetectMeta"),
         detectIco: dlg.qs("#ndDetectIco"), resume: dlg.qs("#ndResume"),
-        go: dlg.qs("#ndGo"), cats: dlg.qs("#ndCats"), project: dlg.qs("#ndProject"),
+        go: dlg.qs("#ndGo"), goLabel: dlg.qs("#ndGoLabel"),
+        cats: dlg.qs("#ndCats"), project: dlg.qs("#ndProject"),
       };
 
       // The open group is the natural default: a user who is looking at
@@ -234,6 +242,21 @@ const AddDownload = {
         dlg.qs("#ndAdvToggle").setAttribute("aria-expanded", String(!panel.hidden));
         dlg.qs("#ndAdvToggle").classList.toggle("open", !panel.hidden);
       });
+
+      // The primary button names the action it will actually take.  The
+      // "Start immediately" switch is what decides between downloading now and
+      // only queueing, so the label follows that switch instead of saying an
+      // ambiguous "Download" for both.  The switch stays where it is; only its
+      // consequence becomes visible on the button.
+      const syncGoLabel = () => {
+        const now = el.autostart.checked;
+        const text = L(now ? "dlg.download_now" : "dlg.add_to_queue",
+          now ? "Download now" : "Add to queue");
+        el.goLabel.textContent = text;
+        el.go.setAttribute("data-tip", text);
+      };
+      el.autostart.addEventListener("change", syncGoLabel);
+      syncGoLabel();
 
       dlg.qs("#ndCancel").addEventListener("click", () => dlg.close());
       el.go.addEventListener("click", async () => {

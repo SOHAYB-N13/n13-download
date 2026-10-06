@@ -6,6 +6,10 @@
   background: color-mix(in srgb, var(--bg-card) 86%, transparent);
   backdrop-filter: blur(10px);
   overflow: hidden;
+  /* The table's column widths are chosen from the *card's* width, not the
+     viewport's, so collapsing the sidebar keeps the Location column instead of
+     leaving it hidden on a wide screen. */
+  container-type: inline-size;
 }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table th {
@@ -42,3 +46,38 @@
 }
 .h-open { vertical-align: middle; margin-left: 6px; }
 #historyEmpty .empty { padding: 64px 24px; }
+
+/* ── 19a. History table: fit the card at every window size ───────────────
+   Seven columns of content-sized cells made the table a fixed ~1183px wide no
+   matter how narrow the window was.  `.table-card` clips with
+   `overflow: hidden`, so at the app's own minimum window (1120px → 860px of
+   content) the Status, Location and Actions columns were cut off with no
+   scrollbar and no way to reach them.
+
+   `table-layout: fixed` makes the table honour the card instead: the columns
+   below hold their width, the File column takes whatever is left, and the two
+   free-text columns truncate with an ellipsis (the full value stays in the
+   `title` attribute, and the whole path is one click away via "Copy path").  */
+#historyTable { table-layout: fixed; }
+#historyTable .h-date { width: 112px; }
+#historyTable .h-size { width: 140px; }
+#historyTable .h-cat { width: 100px; }
+#historyTable .h-status { width: 108px; }
+#historyTable .h-dir { width: 176px; max-width: none; }
+#historyTable .h-actions { width: 172px; }
+
+#historyTable .h-name { min-width: 0; }
+#historyTable .h-name-t {
+  display: inline-block;
+  max-width: calc(100% - 30px); /* the file-type icon sits before the name */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* Under ~1080px of card width the Location column is the least useful one, so
+   it yields its space to the file name rather than squeezing all seven. */
+@container (max-width: 1080px) {
+  #historyTable .h-dir { display: none; }
+}

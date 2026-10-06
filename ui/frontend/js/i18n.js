@@ -52,6 +52,26 @@ const I18N = {
       "sidebar.total_speed": "Total speed",
       "sidebar.speed_tooltip": "Current combined download speed",
 
+      // Landmark / region names.  These are read by screen readers as the name
+      // of the region, so an untranslated one is heard as English inside an
+      // otherwise Persian page.  Where a landmark's name is already a nav or
+      // page label, that key is reused instead of duplicated here.
+      "landmark.primary": "Primary",
+      "landmark.main_nav": "Main navigation",
+      "landmark.primary_actions": "Primary actions",
+      "landmark.overview": "Overview",
+      "landmark.throughput": "Speed and network",
+      "landmark.storage": "Storage",
+      "landmark.download_groups": "Download groups",
+      "landmark.filter_downloads": "Filter downloads",
+      "landmark.queue_status": "Queue status",
+      "landmark.filter_category": "Filter by category",
+      "landmark.download_list": "Download list",
+      "landmark.filter_history": "Filter history",
+      "landmark.batch_mode": "Batch mode",
+      "landmark.browser": "Browser integration",
+      "landmark.download_actions": "Download actions",
+
       // Downloads toolbar
       "filter.all": "All",
       "filter.active": "Active",
@@ -126,6 +146,11 @@ const I18N = {
       "dlg.start_immediately": "Start immediately",
       "dlg.start_off": "Off — add to the queue without starting",
       "dlg.download_btn": "Download",
+      // The primary button names the action it will actually take: the
+      // "Start immediately" switch below it is what decides between the two,
+      // so the label follows that switch instead of saying a vague "Download".
+      "dlg.download_now": "Download now",
+      "dlg.add_to_queue": "Add to queue",
       "dlg.cancel_btn": "Cancel",
       "dlg.detected": "Detected",
       "dlg.resumable": "Resumable",
@@ -146,6 +171,7 @@ const I18N = {
       "batch.url_list": "URL list",
       "batch.pattern_scan": "Pattern scan",
       "batch.note": "Paste one link per line.",
+      "batch.pattern_note": "Use * where the number goes — N13 probes the sequence and queues every file that exists.",
       "batch.valid_urls": "{n} valid URL{s}",
       "batch.save_to": "Save to folder (default: download folder)",
       "batch.browse": "Browse",
@@ -264,6 +290,10 @@ const I18N = {
 
       // Dashboard
       "dash.active_downloads": "Active downloads",
+      // The panel lists everything not yet finished — active *and* paused *and*
+      // waiting — so it must not borrow the "Active downloads" label the stat
+      // tile above it uses for a different number.
+      "dash.current_downloads": "Current downloads",
       "dash.recent_activity": "Recent activity",
       "dash.view_all": "View all",
       "dash.history": "History",
@@ -287,6 +317,7 @@ const I18N = {
       // Download list / history columns
       "col.name": "Name",
       "col.progress": "Progress",
+      "col.progress_for": "Progress for {name}",
       "col.size": "Size",
       "col.speed": "Speed",
       "col.eta": "ETA",
@@ -301,8 +332,15 @@ const I18N = {
       "empty.no_downloads_desc": "Paste a link or drop it anywhere to start your first download.",
       "empty.nothing_matches": "Nothing matches",
       "empty.nothing_matches_desc": "Try a different filter or search term.",
+      // The one action that undoes a filter / search that hid every row.
+      "empty.show_all": "Show all downloads",
       "empty.no_history": "No history yet",
       "empty.no_history_desc": "Completed and failed downloads are listed here.",
+
+      // Row labels
+      // Shown when a task has no label, no filename in its URL, and no URL to
+      // fall back on — so the row is at least identifiable as a download.
+      "dl.untitled": "Untitled download",
 
       // Toasts
       "toast.download_complete": "Download complete",
@@ -469,9 +507,12 @@ const I18N = {
       "rules.value": "value",
       "rules.remove_condition": "Remove condition",
 
-      // Categories
+      // Categories — exactly the names `core/analyzer.detect_category` can
+      // return, plus the `General` fallback.  Nothing else is reachable, so a
+      // key here that the analyzer cannot emit (there used to be a
+      // `category.Compressed`) is a trap: it reads like a real category and
+      // invites callers to filter on a name the backend never produces.
       "category.General": "General",
-      "category.Compressed": "Compressed",
       "category.Videos": "Videos",
       "category.Music": "Music",
       "category.Documents": "Documents",
@@ -630,6 +671,7 @@ const I18N = {
 
       // Misc
       "app.settings_unavailable": "Settings are unavailable right now.",
+      "app.section_unavailable": "These settings could not be displayed.",
       "app.loading": "Loading…",
 
       // ── Command bar (always-visible primary actions) ──────────────
@@ -828,6 +870,7 @@ const I18N = {
       "dlg.rename_hint": "The extension is kept so the file still opens correctly.",
       "dlg.rename_btn": "Rename",
       "dlg.speed_limit": "Speed limit",
+      "dlg.size_detail": "{done} of {total} · {left} left",
       "dlg.speed_limit_hint": "0 means unlimited. Applies on top of the global limit.",
       "dlg.unlimited": "Unlimited",
       "confirm.apply": "Apply",
@@ -1124,6 +1167,24 @@ const I18N = {
 
       // Sidebar
       "sidebar.total_speed": "سرعت کل",
+
+      // نام ناحیه‌ها (landmark) — صفحه‌خوان‌ها این‌ها را به‌عنوان نام ناحیه
+      // می‌خوانند؛ ترجمه‌نشده بودنشان یعنی شنیدن متن انگلیسی در صفحهٔ فارسی.
+      "landmark.primary": "اصلی",
+      "landmark.main_nav": "ناوبری اصلی",
+      "landmark.primary_actions": "کنش‌های اصلی",
+      "landmark.overview": "نمای کلی",
+      "landmark.throughput": "سرعت و شبکه",
+      "landmark.storage": "حافظه",
+      "landmark.download_groups": "گروه‌های دانلود",
+      "landmark.filter_downloads": "پالایش دانلودها",
+      "landmark.queue_status": "وضعیت صف",
+      "landmark.filter_category": "پالایش بر پایهٔ دسته",
+      "landmark.download_list": "فهرست دانلودها",
+      "landmark.filter_history": "پالایش تاریخچه",
+      "landmark.batch_mode": "حالت دسته‌ای",
+      "landmark.browser": "یکپارچگی با مرورگر",
+      "landmark.download_actions": "کنش‌های دانلود",
       "sidebar.speed_tooltip": "سرعت ترکیبی فعلی",
 
       // Downloads toolbar
@@ -1200,6 +1261,8 @@ const I18N = {
       "dlg.start_immediately": "شروع فوری",
       "dlg.start_off": "خاموش — بدون شروع به صف اضافه شود",
       "dlg.download_btn": "دانلود",
+      "dlg.download_now": "اکنون دانلود کن",
+      "dlg.add_to_queue": "افزودن به صف",
       "dlg.cancel_btn": "انصراف",
       "dlg.detected": "تشخیص داده شد",
       "dlg.resumable": "قابل ادامه",
@@ -1220,6 +1283,7 @@ const I18N = {
       "batch.url_list": "فهرست لینک‌ها",
       "batch.pattern_scan": "پویش الگو",
       "batch.note": "در هر خط یک لینک قرار دهید.",
+      "batch.pattern_note": "به‌جای شماره، * بگذارید — N13 دنباله را بررسی می‌کند و هر فایلی که وجود داشته باشد را به صف می‌افزاید.",
       "batch.valid_urls": "{n} لینک معتبر",
       "batch.save_to": "پوشهٔ ذخیره (پیش‌فرض: پوشهٔ دانلود)",
       "batch.browse": "مرور",
@@ -1338,6 +1402,7 @@ const I18N = {
 
       // Dashboard
       "dash.active_downloads": "دانلودهای فعال",
+      "dash.current_downloads": "دانلودهای جاری",
       "dash.recent_activity": "فعالیت اخیر",
       "dash.view_all": "مشاهده همه",
       "dash.history": "تاریخچه",
@@ -1361,6 +1426,7 @@ const I18N = {
       // Download list / history columns
       "col.name": "نام",
       "col.progress": "پیشرفت",
+      "col.progress_for": "پیشرفت {name}",
       "col.size": "حجم",
       "col.speed": "سرعت",
       "col.eta": "زمان باقی‌مانده",
@@ -1375,8 +1441,12 @@ const I18N = {
       "empty.no_downloads_desc": "یک لینک جای‌گذاری کنید یا آن را روی پنجره بیندازید تا اولین دانلود شما شروع شود.",
       "empty.nothing_matches": "هیچ موردی مطابقت ندارد",
       "empty.nothing_matches_desc": "فیلتر یا عبارت جستجوی دیگری را امتحان کنید.",
+      "empty.show_all": "نمایش همهٔ دانلودها",
       "empty.no_history": "هنوز تاریخچه‌ای نیست",
       "empty.no_history_desc": "دانلودهای تکمیل‌شده و ناموفق در اینجا فهرست می‌شوند.",
+
+      // برچسب‌های ردیف
+      "dl.untitled": "دانلود بی‌نام",
 
       // Toasts
       "toast.download_complete": "دانلود کامل شد",
@@ -1543,9 +1613,8 @@ const I18N = {
       "rules.value": "مقدار",
       "rules.remove_condition": "حذف شرط",
 
-      // Categories
+      // Categories — see the English block for why nothing else belongs here.
       "category.General": "عمومی",
-      "category.Compressed": "فشرده",
       "category.Videos": "ویدیوها",
       "category.Music": "موسیقی",
       "category.Documents": "مستندات",
@@ -1704,6 +1773,7 @@ const I18N = {
 
       // Misc
       "app.settings_unavailable": "تنظیمات در حال حاضر در دسترس نیست.",
+      "app.section_unavailable": "نمایش این بخش از تنظیمات ممکن نشد.",
       "app.loading": "در حال بارگذاری…",
 
       // Queue ordering / priority
@@ -1929,6 +1999,7 @@ const I18N = {
       "dlg.rename_hint": "پسوند حفظ می‌شود تا فایل همچنان درست باز شود.",
       "dlg.rename_btn": "تغییر نام",
       "dlg.speed_limit": "محدودیت سرعت",
+      "dlg.size_detail": "{done} از {total} · {left} باقی‌مانده",
       "dlg.speed_limit_hint": "صفر یعنی نامحدود. روی محدودیت کلی اعمال می‌شود.",
       "dlg.unlimited": "نامحدود",
       "confirm.apply": "اعمال",

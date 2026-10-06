@@ -218,26 +218,37 @@ const App = {
 
   _bindTitlebar() {
     const search = Utils.$id("globalSearch");
-    search.addEventListener("input", Utils.debounce(() => {
-      this.state.search = search.value.trim().toLowerCase();
-      if (this.state.search && this.state.page !== "downloads" && this.state.page !== "history") {
-        this.navigate("downloads");
-      }
-      if (this.state.page === "downloads") this._renderDownloads(true);
-      if (this.state.page === "history") this._renderHistory();
-    }, 160));
-    search.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { search.value = ""; this.state.search = ""; this._renderDownloads(true); search.blur(); }
-      if (e.key === "Enter" && this.state.page !== "downloads") this.navigate("downloads");
-    });
+    if (search) {
+      search.addEventListener("input", Utils.debounce(() => {
+        this.state.search = search.value.trim().toLowerCase();
+        if (this.state.search && this.state.page !== "downloads" && this.state.page !== "history") {
+          this.navigate("downloads");
+        }
+        if (this.state.page === "downloads") this._renderDownloads(true);
+        if (this.state.page === "history") this._renderHistory();
+      }, 160));
+      search.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { search.value = ""; this.state.search = ""; this._renderDownloads(true); search.blur(); }
+        if (e.key === "Enter" && this.state.page !== "downloads") this.navigate("downloads");
+      });
+    }
 
-    Utils.$id("btnNewDownload").addEventListener("click", () => { this.openNewDownload().catch((e) => API.logJs("btnNewDownload: " + String(e))); });
-    Utils.$id("btnPasteQuick").addEventListener("click", () => { this.openNewDownload(null, { paste: true }).catch((e) => API.logJs("btnPasteQuick: " + String(e))); });
-    Utils.$id("btnTheme").addEventListener("click", () => this.toggleTheme());
-    Utils.$id("btnTopSettings").addEventListener("click", () => this.navigate("settings"));
+    // The titlebar keeps only the shell-level shortcuts.  "New download" and
+    // "Paste URL" live in the command bar directly below, which is the one
+    // documented primary-action surface — repeating them here put two identical
+    // primary buttons on screen at once and split the hierarchy between them.
+    // (The two paste entries also behaved differently: the one here silently did
+    // nothing when the clipboard held no link.)
+    const on = (id, fn, tag) => {
+      const el = Utils.$id(id);
+      if (el) el.addEventListener("click", () => fn().catch((e) => API.logJs(tag + ": " + String(e))));
+    };
+    on("btnTheme", async () => this.toggleTheme(), "btnTheme");
+    on("btnTopSettings", async () => this.navigate("settings"), "btnTopSettings");
 
     // Prevent pywebview drag-region from swallowing interactive presses.
     const bar = Utils.$id("titlebar");
+    if (!bar) return;
     Utils.$qa("button, input, a, select, .tb-nodrag", bar).forEach((el) => {
       el.addEventListener("mousedown", (e) => e.stopPropagation());
     });
@@ -269,8 +280,15 @@ const App = {
     this.state.maximized = max;
     document.body.classList.toggle("maximized", max);
     const btn = Utils.$id("winMax");
+    if (!btn) return;
     btn.innerHTML = Utils.icon(max ? "restore" : "max", 14);
-    btn.setAttribute("aria-label", max ? "Restore window" : "Maximize window");
+    // Translated, not a literal: writing an English string here overwrote the
+    // `data-i18n-aria-label` the language switch had already applied, so after
+    // one maximise/restore the button announced itself in English for the rest
+    // of the session even in Persian.
+    const key = max ? "title.restore" : "title.maximize";
+    btn.setAttribute("aria-label", I18N.t(key));
+    btn.setAttribute("data-i18n-aria-label", key);
   },
 
   _bindResizeHandles() {
@@ -727,8 +745,7 @@ const App = {
   _bindHistoryPage() {
     Utils.$qa("#historyFilterChips .chip").forEach((chip) => {
       chip.addEventListener("click", () => {
-        Utils.$qa("#historyFilterChips .chip").forEach((c) => c.classList.remove("active"));
-        chip.classList.add("active");
+        Utils.syncChipGroup("#historyFilterChips .chip", chip);
         this.state.hFilter = chip.dataset.hfilter;
         this._renderHistory();
       });
@@ -925,14 +942,40 @@ const App = {
   },
 
   _bindBatchPage() {
-    Utils.$qa("#page-batch .tab-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        Utils.$qa("#page-batch .tab-btn").forEach((b) => b.classList.remove("active"));
-        Utils.$qa("#page-batch .tab-panel").forEach((p) => p.classList.remove("active"));
-        btn.classList.add("active");
-        Utils.$id("tab-" + btn.dataset.tab).classList.add("active");
+    // A real tab widget: two mutually exclusive panels behind two tabs.  The
+    // class swap alone left `aria-selected="true"` frozen on the first tab, so
+    // a screen reader announced "URL list, selected" even while Pattern scan
+    // was the panel on screen.  Select through one function so the visual and
+    // the announced state cannot drift apart, and make the strip navigable
+    // from the keyboard the way a tablist is expected to be.
+    const tabs = Utils.$qa("#page-batch .tab-btn");
+    const select = (btn, focus = false) => {
+      if (!btn) return;
+      tabs.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", String(on));
+        b.tabIndex = on ? 0 : -1;
+      });
+      Utils.$qa("#page-batch .tab-panel").forEach((p) => p.classList.remove("active"));
+      const panel = Utils.$id("tab-" + btn.dataset.tab);
+      if (panel) panel.classList.add("active");
+      if (focus) btn.focus();
+    };
+    tabs.forEach((btn, i) => {
+      btn.addEventListener("click", () => select(btn));
+      btn.addEventListener("keydown", (e) => {
+        const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (step) {
+          e.preventDefault();
+          select(tabs[(i + step + tabs.length) % tabs.length], true);
+        } else if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          select(e.key === "Home" ? tabs[0] : tabs[tabs.length - 1], true);
+        }
       });
     });
+    select(tabs.find((b) => b.classList.contains("active")) || tabs[0]);
 
     const area = Utils.$id("batchUrls");
     const counter = Utils.$id("batchCount");

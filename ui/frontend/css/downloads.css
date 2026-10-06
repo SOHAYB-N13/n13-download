@@ -222,7 +222,20 @@
 }
 .dl-cell-main { font-weight: 550; color: var(--text-1); }
 .dl-cell-dim { color: var(--text-3); font-weight: 450; }
-.dl-speed { color: var(--accent); font-weight: 580; }
+/* Speed cell.  A flex row that may wrap: the number keeps its intrinsic width
+   and the optional cap badge moves to a second line rather than truncating it.
+   Truncating the live speed to "11.2 MB/s/…" hid the number the column exists
+   for, and only ever happened when a per-download cap was set. */
+.dl-speed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 5px;
+  min-width: 0;
+  color: var(--accent);
+  font-weight: 580;
+}
+.dl-speed-v { flex: 0 0 auto; white-space: nowrap; }
 .dl-row[data-state="Failed"] .dl-speed,
 .dl-row[data-state="Complete"] .dl-speed,
 .dl-row[data-state="Paused"] .dl-speed { color: var(--text-3); font-weight: 450; }

@@ -70,9 +70,12 @@ const GroupsView = {
     if (tab.active) classes.push("active");
     if (tab.paused) classes.push("paused");
     const n = count > 0 ? `<span class="grp-tab-n">${count}</span>` : "";
-    return `<button class="${classes.join(" ")}" type="button" role="tab"
+    // The group tabs re-filter the one Downloads list instead of switching
+    // panels, so the open group is a pressed toggle button rather than a tab
+    // (a `role="tab"` outside a `role="tablist"` is ignored by assistive tech).
+    return `<button class="${classes.join(" ")}" type="button"
                     data-group="${this.esc(tab.id)}"
-                    aria-selected="${tab.active}"
+                    aria-pressed="${tab.active}"
                     title="${this.esc(label)}">
               <span class="grp-tab-dot grp-dot-${tab.tone}" aria-hidden="true"></span>
               <span class="grp-tab-name">${this.esc(label)}</span>

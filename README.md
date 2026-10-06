@@ -55,19 +55,35 @@ N13 gives you control when you need it, while keeping everyday downloads simple.
 
 ---
 
-## 🆕 What's new in v1.4.0
+## 🆕 What's new in v1.4.1
 
-- 📁 **Download groups** — the Downloads page now has a tab strip. Group downloads
-  that belong together (a series, a game, a project) into their own tab, each with
-  its own destination folder, concurrency limit, time window and completion action.
-  See [Download Groups](#-download-groups).
-- 🔀 **Switching a group is a filter, not a different screen** — there is still one
-  download queue, one history and one set of workers. A group only changes *which*
-  downloads you are looking at, so nothing is duplicated or downloaded twice.
-- ⏸️ **Groups can be paused on their own** — pausing a group stops it from starting
-  anything new without disturbing any other group.
-- 🗄️ **A real database layer** — the SQLite schema is now versioned and migrated
-  automatically, so upgrades no longer risk touching your existing downloads.
+A correctness and accessibility pass over the whole interface. No new features —
+this release makes the app agree with itself and behave predictably at every
+window size.
+
+- 🗂️ **Categories are now consistent everywhere** — the New-download dialog
+  offered a category the engine can never produce, so a `.rar` download could
+  arrive with *no* category highlighted while its destination folder quietly
+  changed. Disc images (`.iso`) were offered as *Programs* and then recorded as
+  *Archives* — the same file described two different ways. The dialog, the
+  category filter and the engine now share one definition.
+- 📐 **The History table fits its window** — with seven content-sized columns it
+  was a fixed width, so at the app's own minimum window the Status, Location and
+  Actions columns were cut off with no way to reach them. Columns now fit, the
+  long ones truncate, and Location steps aside on narrow windows.
+- 🚪 **No more dead ends** — filtering by status or searching for something that
+  does not exist left you on an empty screen whose only control was the filter
+  hiding your downloads. The empty state now always offers the way back.
+- ♿ **Keyboard and screen-reader fixes** — the download list is a proper
+  listbox, filter chips announce which one is active, and the Batch tabs no
+  longer claim to be selected after you have switched away from them. The Batch
+  tabs are also reachable with the arrow keys.
+- 🧹 **Smaller corrections** — the "New download" button appeared twice on
+  screen at once; the Dashboard panel labelled "Active downloads" also listed
+  paused and queued downloads; finished downloads showed a `00:00` time
+  remaining; a per-download speed limit could truncate the live speed; the
+  right-click menu was positioned from a rough estimate and could cut a long
+  label in half; and a download with no name and no URL showed a blank row.
 
 ---
 
@@ -676,12 +692,20 @@ Development focuses on:
 
 ### Running the tests
 
-The test suite covers the download engine, the queue, the scheduler, groups,
+The Python suite covers the download engine, the queue, the scheduler, groups,
 the updater and the browser integration:
 
 ```bash
 pip install pytest
 python -m pytest tests/ -q
+```
+
+The interface has its own suite for the pure logic behind it — how the download
+list is filtered and ordered, the group tabs, which actions a row offers, and
+whether the translations are complete. It needs only Node, no dependencies:
+
+```bash
+node --test tests/frontend/*.mjs
 ```
 
 Some tests exercise the GUI layer and skip automatically when a display or a
@@ -1419,11 +1443,17 @@ N13 یک پروژه متن‌باز است که توسعه آن ادامه دا�
 
 ### اجرای تست‌ها
 
-مجموعه تست‌ها موتور دانلود، صف، زمان‌بندی، گروه‌ها، بروزرسان و اتصال به مرورگر را پوشش می‌دهد:
+مجموعه تست‌های پایتون موتور دانلود، صف، زمان‌بندی، گروه‌ها، بروزرسان و اتصال به مرورگر را پوشش می‌دهد:
 
 ```bash
 pip install pytest
 python -m pytest tests/ -q
+```
+
+رابط کاربری هم مجموعه تست جداگانه‌ای برای منطق خالص پشت آن دارد — نحوه فیلتر و مرتب‌سازی فهرست دانلودها، تب‌های گروه، اینکه هر ردیف چه کارهایی ارائه می‌دهد، و کامل بودن ترجمه‌ها. فقط به Node نیاز دارد و هیچ وابستگی دیگری نمی‌خواهد:
+
+```bash
+node --test tests/frontend/*.mjs
 ```
 
 برخی تست‌ها به رابط گرافیکی نیاز دارند و در صورت نبودن نمایشگر یا در حال اجرا بودن یک نسخه از برنامه، به‌صورت خودکار رد می‌شوند.
