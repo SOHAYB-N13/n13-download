@@ -310,6 +310,12 @@
     <string name="toast_no_file_manager">No file manager can open this folder</string>
     <string name="toast_file_gone">%1$s is no longer on disk</string>
 
+    <!-- Update check -->
+    <string name="update_available_title">New version available</string>
+    <string name="update_available_message">A new version of N13 Download Manager has been released.\n\nVersion %1$s</string>
+    <string name="update_download">Download new version</string>
+    <string name="update_later">Later</string>
+
     <!-- Categories (display labels for the stored category keys) -->
     <string name="category_general">General</string>
     <string name="category_archives">Archives</string>

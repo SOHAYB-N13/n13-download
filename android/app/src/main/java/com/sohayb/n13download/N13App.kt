@@ -13,6 +13,7 @@ import com.sohayb.n13download.ui.navigation.N13Destination
 import com.sohayb.n13download.ui.navigation.N13NavHost
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13Theme
+import com.sohayb.n13download.ui.update.N13UpdateDialog
 
 /**
  * Application root.
@@ -34,6 +35,9 @@ fun N13App(
     val settings by container.settingsProvider.settings
         .collectAsStateWithLifecycle(initialValue = DownloadSettings())
 
+    // Application-scoped, so "Later" survives recomposition and recreation.
+    val availableUpdate by container.updateCenter.update.collectAsStateWithLifecycle()
+
     N13Theme(
         themeMode = settings.themeMode,
         accentOverride = Color(settings.accentColor.toInt()),
@@ -50,6 +54,10 @@ fun N13App(
                 onPendingTaskConsumed = onPendingTaskConsumed,
                 initialRoute = initialRoute,
             )
+        }
+
+        availableUpdate?.let { update ->
+            N13UpdateDialog(update = update, onDismiss = container.updateCenter::dismiss)
         }
     }
 }

@@ -64,6 +64,16 @@ data class DownloadSettings(
     val accentColor: Long = DEFAULT_ACCENT,
     /** UI language. English by default, matching the shipping behaviour. */
     val language: AppLanguage = AppLanguage.DEFAULT,
+
+    // --- Update check ------------------------------------------------------
+    /**
+     * Epoch millis of the last update check that successfully reached GitHub;
+     * 0 means "never checked".
+     *
+     * Kept here so the ~24h interval rides on the existing DataStore rather than
+     * introducing a second persistence mechanism for one timestamp.
+     */
+    val lastUpdateCheckAt: Long = 0L,
 ) {
     /** The effective per-download cap, falling back to the global one. */
     fun effectiveSpeedLimit(taskLimit: Long): Long = if (taskLimit > 0L) taskLimit else maxSpeedBps

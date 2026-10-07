@@ -309,6 +309,12 @@
     <string name="toast_no_file_manager">هیچ مدیر فایلی نمی‌تواند این پوشه را باز کند</string>
     <string name="toast_file_gone">%1$s دیگر روی حافظه نیست</string>
 
+    <!-- Update check -->
+    <string name="update_available_title">نسخه جدید موجود است</string>
+    <string name="update_available_message">نسخه جدید N13 Download Manager منتشر شده است.\n\nنسخه %1$s</string>
+    <string name="update_download">دانلود نسخه جدید</string>
+    <string name="update_later">بعداً</string>
+
     <!-- Categories -->
     <string name="category_general">عمومی</string>
     <string name="category_archives">آرشیو</string>

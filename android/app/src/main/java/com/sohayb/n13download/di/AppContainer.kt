@@ -3,17 +3,20 @@ package com.sohayb.n13download.di
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import com.sohayb.n13download.core.appVersionInfo
 import com.sohayb.n13download.data.engine.OkHttpDownloadEngine
 import com.sohayb.n13download.data.local.N13Database
 import com.sohayb.n13download.data.prefs.DataStoreSettingsProvider
 import com.sohayb.n13download.data.repository.RoomDownloadRepository
 import com.sohayb.n13download.data.storage.DestinationFactoryImpl
+import com.sohayb.n13download.data.update.GitHubUpdateRepository
 import com.sohayb.n13download.domain.download.DownloadEngine
 import com.sohayb.n13download.domain.download.DownloadManager
 import com.sohayb.n13download.domain.download.DownloadQueue
 import com.sohayb.n13download.domain.download.SettingsProvider
 import com.sohayb.n13download.domain.model.DownloadSettings
 import com.sohayb.n13download.domain.repository.DownloadRepository
+import com.sohayb.n13download.domain.update.UpdateCenter
 import com.sohayb.n13download.service.DownloadNotifications
 import com.sohayb.n13download.service.DownloadService
 import kotlinx.coroutines.CoroutineScope
@@ -67,6 +70,21 @@ class AppContainer(context: Context) {
     )
 
     /**
+     * Checks GitHub for a newer Android release.
+     *
+     * Application-scoped so the check happens once per process regardless of how
+     * often the UI recomposes, and so a dismissed dialog stays dismissed across
+     * Activity recreations. It never blocks startup: the work happens on [scope].
+     */
+    val updateCenter = UpdateCenter(
+        repository = GitHubUpdateRepository(settingsProvider),
+        settingsProvider = settingsProvider,
+        installedVersionCode = appContext.appVersionInfo().versionCode,
+        installedVersionName = appContext.appVersionInfo().versionName,
+        scope = scope,
+    )
+
+    /**
      * Latest settings, cached so synchronous callers (the service's notification
      * path, for instance) never have to block on DataStore.
      */
@@ -79,6 +97,9 @@ class AppContainer(context: Context) {
         scope.launch {
             settingsProvider.settings.collect { cachedSettings = it }
         }
+
+        // Look for a newer Android release. Fire-and-forget by design.
+        updateCenter.start()
 
         // Recover tasks that were mid-transfer when the process died.
         scope.launch {

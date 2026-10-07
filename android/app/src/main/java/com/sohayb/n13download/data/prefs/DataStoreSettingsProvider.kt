@@ -72,6 +72,7 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             prefs[Keys.THEME_MODE] = settings.themeMode.storageValue
             prefs[Keys.ACCENT_COLOR] = settings.accentColor
             prefs[Keys.LANGUAGE] = settings.language.storageValue
+            prefs[Keys.LAST_UPDATE_CHECK_AT] = settings.lastUpdateCheckAt
         }
     }
 
@@ -134,6 +135,7 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             themeMode = ThemeMode.fromStorage(this[Keys.THEME_MODE]),
             accentColor = this[Keys.ACCENT_COLOR] ?: defaults.accentColor,
             language = AppLanguage.fromStorage(this[Keys.LANGUAGE]),
+            lastUpdateCheckAt = this[Keys.LAST_UPDATE_CHECK_AT] ?: defaults.lastUpdateCheckAt,
         )
     }
 
@@ -167,5 +169,6 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_COLOR = longPreferencesKey("accent_color")
         val LANGUAGE = stringPreferencesKey("language")
+        val LAST_UPDATE_CHECK_AT = longPreferencesKey("last_update_check_at")
     }
 }
