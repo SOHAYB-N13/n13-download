@@ -26,3 +26,14 @@ local.properties
 # IDE state is machine specific and never shared.  This supersedes the individual
 # /.idea/... entries above, which are kept for anyone using the file standalone.
 /.idea/
+
+# --- Release signing material must never be committed ------------------------
+# The release keystore lives outside this repository (see SIGNING.md).  These
+# rules are a second line of defence in case one is ever created in-tree.
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+
