@@ -85,16 +85,6 @@ html:not([dir="rtl"]) .app-main { direction: ltr; }
   gap: 3px;
 }
 
-/* Thin separator between the everyday nav group and the management group.
-   Sidebar has its own LTR direction (see #sidebar), so the divider renders
-   identically in LTR and RTL. */
-.nav-divider {
-  height: 1px;
-  margin: 7px 6px;
-  background: var(--border);
-  flex: none;
-}
-
 .nav-indicator {
   position: absolute;
   left: 0;

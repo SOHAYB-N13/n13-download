@@ -4,7 +4,7 @@
 
 const App = {
   state: {
-    page: "downloads",
+    page: "dashboard",
     downloads: {},
     history: [],
     logs: [],
@@ -1240,4 +1240,4 @@ const App = {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 
-document.addEventListener("DOMContentLoaded", () => { App.init(); App._moveNavIndicator(); });
+document.addEventListener("DOMContentLoaded", () => App.init());

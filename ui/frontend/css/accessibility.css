@@ -36,6 +36,7 @@
   .dl-speed, .dl-head .c-speed { visibility: hidden; overflow: hidden; }
   .dl-conn, .dl-head .c-conn { visibility: hidden; overflow: hidden; }
   #content { padding: 8px 20px 28px; }
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 }
 
 @media (min-width: 1500px) {
@@ -46,6 +47,6 @@
   /* 4K breathing room */
   #content { padding: 12px 44px 44px; }
   .page-head h1 { font-size: 28px; }
-  .stats-grid { gap: 14px; }
+  .stats-grid { gap: 18px; }
   .settings-wrap { max-width: 1320px; }
 }
