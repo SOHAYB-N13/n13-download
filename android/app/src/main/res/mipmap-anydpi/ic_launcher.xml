@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- N13 brand mark, generated from the Windows N13 artwork
+         (H:/app/n13-download/assets/icon.png, read-only source).
+         The artwork's own tile background is the same near-black as
+         @color/n13_icon_background, so the logo blends into the canvas on
+         every mask shape. -->
+    <background android:drawable="@color/n13_icon_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  N13 is a download manager: plain HTTP is a supported protocol, exactly as it is
+  in the Windows product, so cleartext traffic has to be permitted.  Without this
+  the platform silently refuses every http:// link (and every LAN/NAS host the
+  user opts into by turning off the private-address block) with an
+  UnknownServiceException, which is not a download manager.
+
+  HTTPS is unaffected: certificate verification is still enforced, and it stays
+  configurable in Settings for the self-signed case.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

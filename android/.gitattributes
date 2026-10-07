@@ -1,0 +1,24 @@
+# Line endings for the Android project.
+#
+# The Gradle wrapper scripts must keep LF endings: a CRLF `gradlew` breaks its
+# `#!/bin/sh` shebang on Linux and macOS, and on CI runners.  With
+# core.autocrlf=true a Windows checkout would otherwise rewrite them.
+
+* text=auto
+
+gradlew        text eol=lf
+*.sh           text eol=lf
+*.bat          text eol=crlf
+
+# The wrapper jar is a binary artifact and must never be line-ending converted.
+*.jar          binary
+*.apk          binary
+*.aab          binary
+*.keystore     binary
+*.jks          binary
+
+# Keep generated Kotlin/Java out of diffs.
+*.kt           text
+*.kts          text
+*.xml          text
+*.properties   text

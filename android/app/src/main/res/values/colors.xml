@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- N13 palette. Mirrors ui/theme/Color.kt, which in turn mirrors the Windows
+         N13 design tokens (H:/app/n13-download/ui/frontend/css/tokens.css). -->
+    <color name="n13_background">#FF0B0F14</color>
+    <color name="n13_surface">#FF171F2B</color>
+    <color name="n13_surface_elevated">#FF1C2634</color>
+    <color name="n13_accent">#FFEF4444</color>
+    <color name="n13_icon_background">#FF0B0F14</color>
+</resources>

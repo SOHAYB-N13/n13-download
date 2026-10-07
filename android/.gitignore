@@ -1,0 +1,28 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# --- Added when the Android project was integrated into this repository -------
+
+# Module build outputs.  The repository root also ignores `build/` at any depth;
+# this keeps the rule self-contained for the android module.
+/app/build/
+
+# Kotlin incremental compilation state (AGP 9 / KSP).
+.kotlin/
+
+# IDE state is machine specific and never shared.  This supersedes the individual
+# /.idea/... entries above, which are kept for anyone using the file standalone.
+/.idea/

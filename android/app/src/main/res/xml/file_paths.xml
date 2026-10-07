@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths the FileProvider may hand out for open/share intents.
+     Only the N13 download folders are exposed; nothing else on the device. -->
+<paths>
+    <external-files-path
+        name="n13_downloads"
+        path="Download/" />
+    <files-path
+        name="n13_internal_downloads"
+        path="downloads/" />
+</paths>

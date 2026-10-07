@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Dark platform theme so the window background matches the Compose surface
+         before the first frame is drawn (no white flash on cold start). -->
+    <style name="Theme.N13DownloadManager" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/n13_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">@color/n13_accent</item>
+    </style>
+</resources>
