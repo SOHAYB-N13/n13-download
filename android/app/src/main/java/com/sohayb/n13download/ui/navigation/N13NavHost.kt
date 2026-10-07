@@ -1,6 +1,7 @@
 package com.sohayb.n13download.ui.navigation
 
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -22,6 +23,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.sohayb.n13download.R
 import com.sohayb.n13download.di.AppContainer
 import com.sohayb.n13download.ui.components.N13BottomBar
 import com.sohayb.n13download.ui.components.N13Icons
@@ -40,12 +42,12 @@ import com.sohayb.n13download.ui.theme.LocalN13Colors
  */
 enum class N13Destination(
     val route: String,
-    val label: String,
+    @param:StringRes val labelRes: Int,
     val icon: ImageVector,
 ) {
-    Downloads("downloads", "Downloads", N13Icons.Download),
-    History("history", "History", N13Icons.History),
-    Settings("settings", "Settings", N13Icons.Settings),
+    Downloads("downloads", R.string.nav_downloads, N13Icons.Download),
+    History("history", R.string.nav_history, N13Icons.History),
+    Settings("settings", R.string.nav_settings, N13Icons.Settings),
     ;
 
     companion object {
@@ -85,6 +87,8 @@ fun N13NavHost(
     onSharedUrlConsumed: () -> Unit,
     pendingTaskId: Long?,
     onPendingTaskConsumed: () -> Unit,
+    /** Tab to open on first composition; defaults to the downloads list. */
+    initialRoute: String = N13Destination.START.route,
     modifier: Modifier = Modifier,
 ) {
     val navController = rememberNavController()
@@ -129,7 +133,7 @@ fun N13NavHost(
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = N13Destination.START.route,
+            startDestination = initialRoute,
             modifier = Modifier.padding(
                 top = innerPadding.calculateTopPadding(),
                 bottom = if (showBottomBar) innerPadding.calculateBottomPadding() else 0.dp,

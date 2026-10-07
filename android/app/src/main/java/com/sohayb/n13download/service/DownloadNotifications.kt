@@ -43,25 +43,32 @@ class DownloadNotifications(private val context: Context) {
         // Progress updates must be silent; only real events may make a sound.
         val progress = NotificationChannel(
             CHANNEL_PROGRESS,
-            "Download progress",
+            context.getString(R.string.notif_channel_progress),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Live progress of running downloads"
+            description = context.getString(R.string.notif_channel_progress_desc)
             setShowBadge(false)
         }
 
         val events = NotificationChannel(
             CHANNEL_EVENTS,
-            "Download events",
+            context.getString(R.string.notif_channel_events),
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "Completed and failed downloads"
+            description = context.getString(R.string.notif_channel_events_desc)
         }
 
         system.createNotificationChannels(listOf(progress, events))
     }
 
-    /** Live progress for a running download. */
+    /**
+     * Live progress for a running download.
+     *
+     * This is the *only* notification a download ever has.  The foreground
+     * service promotes this exact object (same id) with `startForeground`, so
+     * the task never ends up with a progress notification and a separate
+     * service notification describing the same transfer.
+     */
     fun progress(task: DownloadTask, totalSpeed: Double): Notification {
         val percent = task.percent.toInt().coerceIn(0, 100)
         val known = task.hasKnownSize
@@ -85,18 +92,21 @@ class DownloadNotifications(private val context: Context) {
 
         when (task.status) {
             TaskStatus.PAUSED -> {
-                builder.addAction(action(task, ACTION_RESUME, "Resume", 1))
-                builder.addAction(action(task, ACTION_CANCEL, "Cancel", 2))
-            }
-
-            TaskStatus.QUEUED, TaskStatus.ANALYZING, TaskStatus.STARTING -> {
-                builder.addAction(action(task, ACTION_PAUSE, "Pause", 1))
-                builder.addAction(action(task, ACTION_CANCEL, "Cancel", 2))
+                builder.addAction(
+                    action(task, ACTION_RESUME, context.getString(R.string.action_resume), 1),
+                )
+                builder.addAction(
+                    action(task, ACTION_CANCEL, context.getString(R.string.action_cancel), 2),
+                )
             }
 
             else -> {
-                builder.addAction(action(task, ACTION_PAUSE, "Pause", 1))
-                builder.addAction(action(task, ACTION_CANCEL, "Cancel", 2))
+                builder.addAction(
+                    action(task, ACTION_PAUSE, context.getString(R.string.action_pause), 1),
+                )
+                builder.addAction(
+                    action(task, ACTION_CANCEL, context.getString(R.string.action_cancel), 2),
+                )
             }
         }
 
@@ -106,24 +116,17 @@ class DownloadNotifications(private val context: Context) {
         return builder.build()
     }
 
-    /** Shown when a download is starting but has no progress to report yet. */
-    fun preparing(task: DownloadTask): Notification =
-        base(CHANNEL_PROGRESS, task)
-            .setContentTitle(task.filename)
-            .setContentText("Starting…")
-            .setOngoing(true)
-            .setSilent(true)
-            .setOnlyAlertOnce(true)
-            .setProgress(100, 0, true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(action(task, ACTION_CANCEL, "Cancel", 2))
-            .build()
-
-    /** Shown by the foreground service while it is being brought up. */
-    fun serviceIdle(): Notification =
+    /**
+     * Shown only for the few hundred milliseconds between the service being
+     * started and the first real task notification.  Android requires a
+     * notification within seconds of `startForegroundService`, and this is the
+     * placeholder that satisfies it without ever lingering: the moment a task is
+     * selected the service re-promotes itself onto that task's own id.
+     */
+    fun serviceStarting(): Notification =
         base(CHANNEL_PROGRESS, null)
-            .setContentTitle("N13 Download Manager")
-            .setContentText("Preparing downloads…")
+            .setContentTitle(context.getString(R.string.app_name))
+            .setContentText(context.getString(R.string.notif_preparing))
             .setOngoing(true)
             .setSilent(true)
             .setOnlyAlertOnce(true)
@@ -133,7 +136,7 @@ class DownloadNotifications(private val context: Context) {
 
     fun completed(task: DownloadTask): Notification =
         base(CHANNEL_EVENTS, task)
-            .setContentTitle("Download complete")
+            .setContentTitle(context.getString(R.string.notif_complete_title))
             .setContentText("${task.filename} · ${N13Format.humanSize(task.downloadedSize)}")
             .setAutoCancel(true)
             .setOngoing(false)
@@ -143,7 +146,7 @@ class DownloadNotifications(private val context: Context) {
 
     fun failed(task: DownloadTask, error: String): Notification {
         val builder = base(CHANNEL_EVENTS, task)
-            .setContentTitle("Download failed")
+            .setContentTitle(context.getString(R.string.notif_failed_title))
             .setContentText(task.filename)
             .setStyle(NotificationCompat.BigTextStyle().bigText("${task.filename}\n$error"))
             .setAutoCancel(true)
@@ -151,14 +154,16 @@ class DownloadNotifications(private val context: Context) {
             .setSilent(false)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         if (task.isRetryable) {
-            builder.addAction(action(task, ACTION_RETRY, "Retry", 3))
+            builder.addAction(
+                action(task, ACTION_RETRY, context.getString(R.string.action_retry), 3),
+            )
         }
         return builder.build()
     }
 
     fun cancelled(task: DownloadTask): Notification =
         base(CHANNEL_EVENTS, task)
-            .setContentTitle("Download cancelled")
+            .setContentTitle(context.getString(R.string.notif_cancelled_title))
             .setContentText(task.filename)
             .setAutoCancel(true)
             .setOngoing(false)
@@ -225,11 +230,19 @@ class DownloadNotifications(private val context: Context) {
         const val ACTION_CANCEL = "com.sohayb.n13download.action.CANCEL"
         const val ACTION_RETRY = "com.sohayb.n13download.action.RETRY"
 
-        /** Notification id for a task.  Kept stable so updates replace in place. */
+        /**
+         * Notification id for a task.
+         *
+         * Stable for the life of the task, so every update — starting,
+         * 15%, 82%, complete — replaces the previous one in place.  Room ids
+         * start at 1, and [SERVICE_STARTING_ID] is pinned to 0 so the
+         * placeholder used during service startup can never collide with a real
+         * task id even if the autoincrement ever wrapped to zero.
+         */
         fun notificationId(taskId: Long): Int = (TASK_ID_BASE + taskId).toInt()
 
-        /** The foreground service reuses the first active task's notification. */
-        const val SERVICE_NOTIFICATION_ID = 1
+        /** Placeholder id used only while the service is being brought up. */
+        const val SERVICE_STARTING_ID = 0
 
         private const val TASK_ID_BASE = 2000L
     }

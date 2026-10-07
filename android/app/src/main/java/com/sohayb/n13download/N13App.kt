@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sohayb.n13download.domain.model.DownloadSettings
+import com.sohayb.n13download.ui.navigation.N13Destination
 import com.sohayb.n13download.ui.navigation.N13NavHost
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13Theme
@@ -25,6 +26,7 @@ fun N13App(
     onSharedUrlConsumed: () -> Unit = {},
     pendingTaskId: Long? = null,
     onPendingTaskConsumed: () -> Unit = {},
+    initialRoute: String = N13Destination.START.route,
 ) {
     val application = LocalContext.current.applicationContext as N13Application
     val container = application.container
@@ -46,6 +48,7 @@ fun N13App(
                 onSharedUrlConsumed = onSharedUrlConsumed,
                 pendingTaskId = pendingTaskId,
                 onPendingTaskConsumed = onPendingTaskConsumed,
+                initialRoute = initialRoute,
             )
         }
     }

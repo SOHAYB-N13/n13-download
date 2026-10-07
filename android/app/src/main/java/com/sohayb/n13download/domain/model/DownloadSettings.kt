@@ -9,11 +9,16 @@ package com.sohayb.n13download.domain.model
  */
 data class DownloadSettings(
     // --- Destination -------------------------------------------------------
-    val destinationKind: DestinationKind = DestinationKind.APP,
+    /**
+     * Public `Downloads/N13-Download/` through MediaStore by default, so a
+     * finished file lands where the user expects to find it and stays visible
+     * to every other app.  `APP` and `TREE` remain available as opt-ins.
+     */
+    val destinationKind: DestinationKind = DestinationKind.MEDIA_STORE,
     /** SAF tree URI or MediaStore subfolder name, depending on [destinationKind]. */
     val destinationUri: String = "",
     /** Sub-folder inside the destination; empty = the destination root. */
-    val destinationFolder: String = "",
+    val destinationFolder: String = DEFAULT_FOLDER,
 
     // --- Connections -------------------------------------------------------
     val connectionMode: ConnectionMode = ConnectionMode.SMART,
@@ -57,6 +62,8 @@ data class DownloadSettings(
     val themeMode: ThemeMode = ThemeMode.DARK,
     /** ARGB accent, defaulting to the N13 red. */
     val accentColor: Long = DEFAULT_ACCENT,
+    /** UI language. English by default, matching the shipping behaviour. */
+    val language: AppLanguage = AppLanguage.DEFAULT,
 ) {
     /** The effective per-download cap, falling back to the global one. */
     fun effectiveSpeedLimit(taskLimit: Long): Long = if (taskLimit > 0L) taskLimit else maxSpeedBps
@@ -69,6 +76,15 @@ data class DownloadSettings(
         const val MAX_THREADS = 64
         const val MAX_CONCURRENT_LIMIT = 10
         const val MIN_CONCURRENT = 1
+
+        /**
+         * The default sub-folder inside the public Downloads collection.
+         *
+         * Every normal download goes to `Downloads/N13-Download/`, which is
+         * created on demand, so the user never has to make it by hand and never
+         * has to guess where a file went.
+         */
+        const val DEFAULT_FOLDER = "N13-Download"
 
         /** The N13 brand red, matching `--accent` in the Windows tokens. */
         const val DEFAULT_ACCENT = 0xFFEF4444L

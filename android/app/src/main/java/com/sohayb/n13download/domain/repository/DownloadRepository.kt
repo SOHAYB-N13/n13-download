@@ -23,6 +23,18 @@ interface DownloadRepository {
 
     fun observeTask(id: Long): Flow<DownloadTask?>
 
+    /**
+     * An authoritative, uncached read of every task.
+     *
+     * [observeAll] is a UI stream: it is de-duplicated, shared and replayed so
+     * screens stay cheap.  That makes it wrong as a scheduling input — a
+     * one-shot read of it can be served instantly from the replay buffer and
+     * therefore miss a row written a moment earlier.  The queue must decide what
+     * to start from what is actually in the database, so it reads through this
+     * instead.
+     */
+    suspend fun allNow(): List<DownloadTask>
+
     suspend fun get(id: Long): DownloadTask?
 
     /** Existing task for this URL, used by duplicate detection. */

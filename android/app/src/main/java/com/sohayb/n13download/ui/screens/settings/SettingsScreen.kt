@@ -1,6 +1,8 @@
 package com.sohayb.n13download.ui.screens.settings
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -24,7 +26,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -37,15 +38,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sohayb.n13download.R
+import com.sohayb.n13download.core.AppLocale
 import com.sohayb.n13download.core.BrowserHeaders
 import com.sohayb.n13download.core.N13Format
 import com.sohayb.n13download.domain.download.DownloadManager
+import com.sohayb.n13download.domain.model.AppLanguage
 import com.sohayb.n13download.domain.model.ConnectionMode
 import com.sohayb.n13download.domain.model.DestinationKind
 import com.sohayb.n13download.domain.model.DownloadSettings
@@ -67,8 +71,12 @@ import com.sohayb.n13download.ui.theme.N13Shapes
  * Settings.
  *
  * Every control here changes real behaviour — connection counts, the bandwidth
- * cap, retry budget, duplicate handling, the storage destination, notifications
- * and the theme.  There are no placeholder toggles.
+ * cap, retry budget, duplicate handling, the storage destination, notifications,
+ * the theme and the interface language.  There are no placeholder toggles.
+ *
+ * All prose comes from string resources so the screen follows the chosen
+ * language; the paths and byte counts shown alongside it do not, because they
+ * are data.
  */
 @Composable
 fun SettingsScreen(
@@ -102,17 +110,20 @@ fun SettingsScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        N13PageHeader(title = "Settings", brandLine = "Tune N13 to your workflow")
+        N13PageHeader(
+            titleRes = R.string.settings_title,
+            brandLineRes = R.string.settings_brand_line,
+        )
 
         // ---- Storage --------------------------------------------------------
-        SettingsGroup(title = "Storage") {
+        SettingsGroup(title = stringResource(R.string.settings_group_storage)) {
             ChoiceRow(
-                label = "Destination",
-                hint = "Where finished files are written.",
+                label = stringResource(R.string.settings_destination),
+                hint = stringResource(R.string.settings_destination_hint),
                 options = listOf(
-                    DestinationKind.APP to "App storage",
-                    DestinationKind.MEDIA_STORE to "Downloads",
-                    DestinationKind.TREE to "Chosen folder",
+                    DestinationKind.APP to stringResource(R.string.dest_app_storage),
+                    DestinationKind.MEDIA_STORE to stringResource(R.string.dest_downloads),
+                    DestinationKind.TREE to stringResource(R.string.dest_chosen_folder),
                 ),
                 selected = settings.destinationKind,
                 onSelect = viewModel::setDestinationKind,
@@ -121,7 +132,7 @@ fun SettingsScreen(
             if (settings.destinationKind == DestinationKind.TREE) {
                 SettingsRowContainer {
                     N13SecondaryButton(
-                        label = "Choose folder",
+                        label = stringResource(R.string.settings_choose_folder),
                         onClick = { folderPicker.launch(null) },
                         icon = N13Icons.FolderOpen,
                         modifier = Modifier.fillMaxWidth(),
@@ -144,86 +155,87 @@ fun SettingsScreen(
             )
 
             N13InfoRow(
-                label = "App storage path",
+                label = stringResource(R.string.settings_app_storage_path),
                 value = appStoragePath(context),
                 icon = N13Icons.Folder,
                 mono = true,
+                ltr = true,
             )
         }
 
         // ---- Downloads ------------------------------------------------------
-        SettingsGroup(title = "Downloads") {
+        SettingsGroup(title = stringResource(R.string.settings_group_downloads)) {
             StepperRow(
-                label = "Simultaneous downloads",
-                hint = "How many downloads run at the same time.",
+                label = stringResource(R.string.settings_simultaneous),
+                hint = stringResource(R.string.settings_simultaneous_hint),
                 value = settings.maxConcurrent,
                 range = DownloadSettings.MIN_CONCURRENT..DownloadSettings.MAX_CONCURRENT_LIMIT,
                 onChange = viewModel::setMaxConcurrent,
             )
             StepperRow(
-                label = "Connections per download",
-                hint = "Used when the connection mode is Manual.",
+                label = stringResource(R.string.settings_connections),
+                hint = stringResource(R.string.settings_connections_hint),
                 value = settings.numThreads,
                 range = 1..DownloadSettings.MAX_THREADS,
                 onChange = viewModel::setNumThreads,
             )
             ChoiceRow(
-                label = "Connection mode",
-                hint = "Smart adapts the connection count to the file and the server.",
+                label = stringResource(R.string.settings_connection_mode),
+                hint = stringResource(R.string.settings_connection_mode_hint),
                 options = listOf(
-                    ConnectionMode.SMART to "Smart",
-                    ConnectionMode.MANUAL to "Manual",
+                    ConnectionMode.SMART to stringResource(R.string.connection_smart),
+                    ConnectionMode.MANUAL to stringResource(R.string.connection_manual),
                 ),
                 selected = settings.connectionMode,
                 onSelect = viewModel::setConnectionMode,
             )
             StepperRow(
-                label = "Smart max connections",
-                hint = "Ceiling Smart mode will not exceed.",
+                label = stringResource(R.string.settings_smart_max),
+                hint = stringResource(R.string.settings_smart_max_hint),
                 value = settings.smartMaxConnections,
                 range = 1..32,
                 onChange = viewModel::setSmartMax,
             )
             ToggleRow(
-                label = "Adaptive scaling",
-                hint = "Increase connections while throughput keeps improving.",
+                label = stringResource(R.string.settings_adaptive),
+                hint = stringResource(R.string.settings_adaptive_hint),
                 checked = settings.smartAdaptive,
                 onCheckedChange = viewModel::setSmartAdaptive,
             )
             ChoiceRow(
-                label = "Duplicate handling",
-                hint = "What to do when the file name already exists.",
+                label = stringResource(R.string.settings_duplicate_handling),
+                hint = stringResource(R.string.settings_duplicate_hint),
                 options = listOf(
-                    DuplicatePolicy.ASK to "Ask",
-                    DuplicatePolicy.ALLOW to "Allow",
-                    DuplicatePolicy.RENAME to "Rename",
-                    DuplicatePolicy.REPLACE to "Replace",
+                    DuplicatePolicy.ASK to stringResource(R.string.dup_ask),
+                    DuplicatePolicy.ALLOW to stringResource(R.string.dup_allow),
+                    DuplicatePolicy.RENAME to stringResource(R.string.dup_rename),
+                    DuplicatePolicy.REPLACE to stringResource(R.string.dup_replace),
                 ),
                 selected = settings.duplicatePolicy,
                 onSelect = viewModel::setDuplicatePolicy,
             )
             ToggleRow(
-                label = "Auto-detect category",
-                hint = "Pick the category from the file extension.",
+                label = stringResource(R.string.settings_auto_category),
+                hint = stringResource(R.string.settings_auto_category_hint),
                 checked = settings.autoCategorize,
                 onCheckedChange = viewModel::setAutoCategorize,
             )
             ToggleRow(
-                label = "Start immediately",
-                hint = "New downloads start as soon as a slot is free.",
+                label = stringResource(R.string.settings_start_immediately),
+                hint = stringResource(R.string.settings_start_immediately_hint),
                 checked = settings.startImmediately,
                 onCheckedChange = viewModel::setStartImmediately,
             )
             ToggleRow(
-                label = "Resume on startup",
-                hint = "Continue unfinished downloads when the app starts.",
+                label = stringResource(R.string.settings_resume_on_startup),
+                hint = stringResource(R.string.settings_resume_on_startup_hint),
                 checked = settings.resumeOnStartup,
                 onCheckedChange = viewModel::setResumeOnStartup,
             )
         }
 
         // ---- Bandwidth ------------------------------------------------------
-        SettingsGroup(title = "Bandwidth") {
+        SettingsGroup(title = stringResource(R.string.settings_group_bandwidth)) {
             SpeedLimitRow(
                 current = settings.maxSpeedBps,
                 onChange = viewModel::setSpeedLimit,
@@ -231,56 +243,56 @@ fun SettingsScreen(
         }
 
         // ---- Reliability ----------------------------------------------------
-        SettingsGroup(title = "Reliability") {
+        SettingsGroup(title = stringResource(R.string.settings_group_reliability)) {
             StepperRow(
-                label = "Retry attempts",
-                hint = "Tries per connection before a download fails.",
+                label = stringResource(R.string.settings_retry_attempts),
+                hint = stringResource(R.string.settings_retry_attempts_hint),
                 value = settings.maxRetries,
                 range = 0..20,
                 onChange = viewModel::setMaxRetries,
             )
             ToggleRow(
-                label = "Verify SSL certificates",
-                hint = "Turn off only for servers with a self-signed certificate.",
+                label = stringResource(R.string.settings_verify_ssl),
+                hint = stringResource(R.string.settings_verify_ssl_hint),
                 checked = settings.verifySsl,
                 onCheckedChange = viewModel::setVerifySsl,
             )
             ToggleRow(
-                label = "Verify file size",
-                hint = "Check the byte count against Content-Length.",
+                label = stringResource(R.string.settings_verify_size),
+                hint = stringResource(R.string.settings_verify_size_hint),
                 checked = settings.verifySize,
                 onCheckedChange = viewModel::setVerifySize,
             )
             ToggleRow(
-                label = "Block private addresses",
-                hint = "Refuse localhost and LAN targets (SSRF protection).",
+                label = stringResource(R.string.settings_block_private),
+                hint = stringResource(R.string.settings_block_private_hint),
                 checked = settings.blockPrivateUrls,
                 onCheckedChange = viewModel::setBlockPrivateUrls,
             )
         }
 
         // ---- Notifications --------------------------------------------------
-        SettingsGroup(title = "Notifications") {
+        SettingsGroup(title = stringResource(R.string.settings_group_notifications)) {
             ToggleRow(
-                label = "Notifications",
-                hint = "Show progress and event notifications.",
+                label = stringResource(R.string.settings_notifications),
+                hint = stringResource(R.string.settings_notifications_hint),
                 checked = settings.notificationsEnabled,
                 onCheckedChange = viewModel::setNotificationsEnabled,
             )
             ToggleRow(
-                label = "Notify on completion",
+                label = stringResource(R.string.settings_notify_completed),
                 checked = settings.notifyCompleted,
                 onCheckedChange = viewModel::setNotifyCompleted,
                 enabled = settings.notificationsEnabled,
             )
             ToggleRow(
-                label = "Notify on failure",
+                label = stringResource(R.string.settings_notify_failed),
                 checked = settings.notifyFailed,
                 onCheckedChange = viewModel::setNotifyFailed,
                 enabled = settings.notificationsEnabled,
             )
             ToggleRow(
-                label = "Notify on start",
+                label = stringResource(R.string.settings_notify_started),
                 checked = settings.notifyStarted,
                 onCheckedChange = viewModel::setNotifyStarted,
                 enabled = settings.notificationsEnabled,
@@ -288,7 +300,7 @@ fun SettingsScreen(
         }
 
         // ---- Network --------------------------------------------------------
-        SettingsGroup(title = "Network") {
+        SettingsGroup(title = stringResource(R.string.settings_group_network)) {
             UserAgentRow(
                 value = settings.userAgent,
                 onChange = viewModel::setUserAgent,
@@ -297,13 +309,13 @@ fun SettingsScreen(
         }
 
         // ---- Appearance -----------------------------------------------------
-        SettingsGroup(title = "Appearance") {
+        SettingsGroup(title = stringResource(R.string.settings_group_appearance)) {
             ChoiceRow(
-                label = "Theme",
+                label = stringResource(R.string.settings_theme),
                 options = listOf(
-                    ThemeMode.DARK to "Dark",
-                    ThemeMode.LIGHT to "Light",
-                    ThemeMode.SYSTEM to "System",
+                    ThemeMode.DARK to stringResource(R.string.theme_dark),
+                    ThemeMode.LIGHT to stringResource(R.string.theme_light),
+                    ThemeMode.SYSTEM to stringResource(R.string.theme_system),
                 ),
                 selected = settings.themeMode,
                 onSelect = viewModel::setThemeMode,
@@ -314,16 +326,59 @@ fun SettingsScreen(
             )
         }
 
+        // ---- Language -------------------------------------------------------
+        SettingsGroup(title = stringResource(R.string.settings_group_language)) {
+            ChoiceRow(
+                label = stringResource(R.string.settings_language),
+                hint = stringResource(R.string.settings_language_hint),
+                options = AppLanguage.entries.map { it to it.nativeName },
+                selected = settings.language,
+                onSelect = { language ->
+                    // Persist first, then rebuild the UI so the new language is
+                    // applied from the very next frame.
+                    viewModel.setLanguage(language)
+                    context.findActivity()?.let { AppLocale.switchTo(it, language) }
+                },
+            )
+        }
+
         // ---- About ----------------------------------------------------------
-        SettingsGroup(title = "About") {
-            N13InfoRow(label = "Application", value = "N13 Download Manager", icon = N13Icons.Info)
-            N13InfoRow(label = "Version", value = appInfo.versionName, icon = N13Icons.Info)
-            N13InfoRow(label = "Package", value = appInfo.packageName, icon = N13Icons.Cpu, mono = true)
-            N13InfoRow(label = "Platform", value = appInfo.platform, icon = N13Icons.Server)
+        SettingsGroup(title = stringResource(R.string.settings_group_about)) {
             N13InfoRow(
-                label = "Storage",
-                value = appInfo.storage,
+                label = stringResource(R.string.about_application),
+                value = stringResource(R.string.app_name),
+                icon = N13Icons.Info,
+            )
+            N13InfoRow(
+                label = stringResource(R.string.about_version),
+                value = appInfo.versionName,
+                icon = N13Icons.Info,
+                ltr = true,
+            )
+            N13InfoRow(
+                label = stringResource(R.string.about_package),
+                value = appInfo.packageName,
+                icon = N13Icons.Cpu,
+                mono = true,
+                ltr = true,
+            )
+            N13InfoRow(
+                label = stringResource(R.string.about_platform),
+                value = stringResource(
+                    R.string.about_platform_value,
+                    appInfo.release,
+                    appInfo.apiLevel,
+                ),
+                icon = N13Icons.Server,
+            )
+            N13InfoRow(
+                label = stringResource(R.string.about_storage),
+                value = stringResource(
+                    R.string.about_storage_free,
+                    N13Format.humanSize(appInfo.freeBytes),
+                ),
                 icon = N13Icons.Disk,
+                ltr = true,
             )
         }
 
@@ -433,7 +488,8 @@ private fun StepperRow(
             modifier = Modifier.width(46.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
+            // A count is a technical value: always left-to-right.
+            com.sohayb.n13download.ui.components.N13LtrText(
                 text = value.toString(),
                 style = MaterialTheme.typography.titleMedium,
                 color = n13.text1,
@@ -527,7 +583,7 @@ private fun ToggleRow(
 private fun SpeedLimitRow(current: Long, onChange: (Long) -> Unit) {
     val n13 = LocalN13Colors.current
     val presets = listOf(
-        "Unlimited" to 0L,
+        stringResource(R.string.settings_unlimited) to 0L,
         "256 KB/s" to 256L * 1024,
         "512 KB/s" to 512L * 1024,
         "1 MB/s" to 1024L * 1024,
@@ -542,16 +598,19 @@ private fun SpeedLimitRow(current: Long, onChange: (Long) -> Unit) {
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text(
-            text = "Download speed limit",
+            text = stringResource(R.string.settings_speed_limit),
             style = MaterialTheme.typography.bodyMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(2.dp))
         Text(
             text = if (current <= 0L) {
-                "Unlimited — no throttling applied."
+                stringResource(R.string.settings_speed_unlimited_hint)
             } else {
-                "Currently capped at ${N13Format.formatSpeed(current.toDouble())}."
+                stringResource(
+                    R.string.settings_speed_capped_hint,
+                    N13Format.formatSpeed(current.toDouble()),
+                )
             },
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
@@ -582,13 +641,13 @@ private fun UserAgentRow(value: String, onChange: (String) -> Unit, onReset: () 
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text(
-            text = "User agent",
+            text = stringResource(R.string.settings_user_agent),
             style = MaterialTheme.typography.bodyMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = "Sent with every request. Some hosts reject unknown clients.",
+            text = stringResource(R.string.settings_user_agent_hint),
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
         )
@@ -615,7 +674,7 @@ private fun UserAgentRow(value: String, onChange: (String) -> Unit, onReset: () 
         if (!isDefault) {
             Spacer(Modifier.height(8.dp))
             N13SecondaryButton(
-                label = "Reset to N13 default",
+                label = stringResource(R.string.settings_reset_agent),
                 onClick = onReset,
                 icon = N13Icons.Refresh,
             )
@@ -633,13 +692,13 @@ private fun AccentRow(current: Long, onChange: (Long) -> Unit) {
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text(
-            text = "Accent colour",
+            text = stringResource(R.string.settings_accent),
             style = MaterialTheme.typography.bodyMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = "The N13 default is red. The whole UI follows this choice.",
+            text = stringResource(R.string.settings_accent_hint),
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
         )
@@ -676,13 +735,13 @@ private fun SubfolderField(value: String, onValueChange: (String) -> Unit) {
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Text(
-            text = "Sub-folder",
+            text = stringResource(R.string.settings_subfolder),
             style = MaterialTheme.typography.bodyMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = "Optional folder inside the destination. Leave empty for the root.",
+            text = stringResource(R.string.settings_subfolder_hint),
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
         )
@@ -715,8 +774,9 @@ private fun SubfolderField(value: String, onValueChange: (String) -> Unit) {
 private data class AppInfo(
     val versionName: String,
     val packageName: String,
-    val platform: String,
-    val storage: String,
+    val release: String,
+    val apiLevel: Int,
+    val freeBytes: Long,
 )
 
 private fun readAppInfo(context: Context): AppInfo {
@@ -733,13 +793,31 @@ private fun readAppInfo(context: Context): AppInfo {
     }.getOrDefault(0L)
 
     return AppInfo(
-        versionName = packageInfo.versionName.orEmpty().ifBlank { "unknown" },
+        // A missing version is a value, not prose, so it stays untranslated here
+        // and the row renders the em dash the rest of the app uses.
+        versionName = packageInfo.versionName.orEmpty().ifBlank { N13Format.UNKNOWN },
         packageName = context.packageName,
-        platform = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-        storage = "${N13Format.humanSize(freeBytes)} free",
+        release = Build.VERSION.RELEASE,
+        apiLevel = Build.VERSION.SDK_INT,
+        freeBytes = freeBytes,
     )
 }
 
 private fun appStoragePath(context: Context): String =
     (context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
         ?: context.filesDir).absolutePath
+
+/**
+ * The Activity hosting the current composition.
+ *
+ * Needed because switching language has to rebuild the Activity, and Compose's
+ * context is often a wrapper around it rather than the Activity itself.
+ */
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
+}

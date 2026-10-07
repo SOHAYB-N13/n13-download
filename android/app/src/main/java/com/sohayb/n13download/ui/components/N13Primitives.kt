@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,26 +48,37 @@ import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13PillShape
 import com.sohayb.n13download.ui.theme.N13Shapes
 
-/** The N13 panel: card surface, hairline border, 14dp radius. */
+/**
+ * The N13 panel: card surface, hairline border, 14dp radius.
+ *
+ * The content sits in a [Column], not a [Box]: a card routinely holds several
+ * stacked children (the Properties sections, for instance), and a Box would
+ * draw every one of them on top of the others.  [horizontalAlignment] and
+ * [verticalArrangement] let callers tune the stack without wrapping the content
+ * in yet another layout.
+ */
 @Composable
 fun N13Card(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     borderColor: Color? = null,
     containerColor: Color? = null,
-    content: @Composable () -> Unit,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     val n13 = LocalN13Colors.current
     val shape = N13Shapes.medium
-    Box(
+    Column(
         modifier = modifier
             .clip(shape)
             .background(containerColor ?: n13.card)
             .border(BorderStroke(1.dp, borderColor ?: n13.border), shape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-    ) {
-        content()
-    }
+        horizontalAlignment = horizontalAlignment,
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
 }
 
 /** Uppercase section label, as used above every settings group in N13. */
@@ -322,7 +335,18 @@ fun N13IconButton(
     }
 }
 
-/** A labelled key/value row, used by Settings and Properties. */
+/**
+ * A labelled key/value row, used by Settings and Properties.
+ *
+ * The label sits above the value in its own [Column] so an arbitrarily long
+ * value — a filename, a URL, a SAF path — wraps onto as many lines as it needs
+ * and can never collide with the label or escape the card. Long values that
+ * should stay on one line (paths, URLs) can opt into [maxLines] + [ellipsis].
+ *
+ * [ltr] pins the value to left-to-right, which is what every technical value
+ * (path, URL, checksum, byte count) needs under a right-to-left language. The
+ * label is UI prose and always follows the app direction.
+ */
 @Composable
 fun N13InfoRow(
     label: String,
@@ -331,6 +355,9 @@ fun N13InfoRow(
     icon: ImageVector? = null,
     valueColor: Color? = null,
     mono: Boolean = false,
+    maxLines: Int = Int.MAX_VALUE,
+    ellipsis: Boolean = false,
+    ltr: Boolean = false,
 ) {
     val n13 = LocalN13Colors.current
     Row(
@@ -344,31 +371,70 @@ fun N13InfoRow(
                 imageVector = icon,
                 contentDescription = null,
                 tint = n13.text3,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(16.dp),
             )
             Spacer(Modifier.width(12.dp))
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = n13.text3,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = value,
-                style = if (mono) {
-                    MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontSize = 12.sp,
-                    )
-                } else {
-                    MaterialTheme.typography.bodyMedium
-                },
-                color = valueColor ?: n13.text1,
-            )
+            Spacer(Modifier.height(3.dp))
+            val valueStyle = if (mono) {
+                MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            } else {
+                MaterialTheme.typography.bodyMedium
+            }
+            if (ltr) {
+                N13LtrText(
+                    text = value,
+                    style = valueStyle,
+                    color = valueColor ?: n13.text1,
+                    maxLines = maxLines,
+                    overflow = if (ellipsis || maxLines == 1) {
+                        TextOverflow.Ellipsis
+                    } else {
+                        TextOverflow.Clip
+                    },
+                )
+            } else {
+                Text(
+                    text = value,
+                    style = valueStyle,
+                    color = valueColor ?: n13.text1,
+                    maxLines = maxLines,
+                    overflow = if (ellipsis || maxLines == 1) {
+                        TextOverflow.Ellipsis
+                    } else {
+                        TextOverflow.Clip
+                    },
+                )
+            }
         }
     }
+}
+
+/** Hairline separator drawn between two rows inside the same card. */
+@Composable
+fun N13RowDivider(modifier: Modifier = Modifier) {
+    val n13 = LocalN13Colors.current
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp)
+            .height(1.dp)
+            .background(n13.border),
+    )
 }
 
 /** Full-width primary action, matching the N13 `.btn-primary` treatment. */

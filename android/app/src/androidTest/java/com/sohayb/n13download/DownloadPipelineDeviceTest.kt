@@ -135,6 +135,45 @@ class DownloadPipelineDeviceTest {
 
     // ------------------------------------------------------------------ //
 
+    /**
+     * Regression: a download added with "start now" must actually leave the
+     * queue immediately.
+     *
+     * The scheduler used to read its candidate list from the repository's shared
+     * UI stream.  Because that stream is replayed, a one-shot read could be
+     * answered with a snapshot taken *before* the row was inserted — so the task
+     * sat at 0% in the list and never started, while `addDownload` reported
+     * success.  The assertion below is deliberately about liveness rather than
+     * completion: it must begin transferring within a couple of seconds, not
+     * merely finish eventually once some unrelated write happens to wake the
+     * queue.
+     */
+    @Test
+    fun addDownload_startsTransferringPromptlyWithoutAnyOtherNudge() = runBlocking {
+        server.stop()
+        server = LocalHttpServer(
+            body = body,
+            supportsRange = true,
+            filename = "prompt.bin",
+            bytesPerSecond = 1024 * 1024,
+        ).also { it.start() }
+
+        val outcome = manager.addDownload(
+            AddDownloadRequest(url = server.url(), filename = "prompt.bin", startNow = true),
+        )
+        val taskId = (outcome as AddDownloadOutcome.Queued).taskId
+
+        // Nothing else touches the queue here: no settings change, no second
+        // enqueue.  Only the add itself may be the reason work starts.
+        val started = awaitStatus(taskId, timeoutMillis = 8_000L) { it.downloadedSize > 0L }
+        assertTrue(
+            "the download never started transferring, last state was " +
+                "${started.status.value} (${started.downloadedSize}/${started.totalSize})",
+            started.downloadedSize > 0L,
+        )
+        assertTrue("the transfer must be marked as running", started.status.isRunning)
+    }
+
     @Test
     fun addDownload_queuesRunsAndCompletesWithoutTheUi() = runBlocking {
         val events = mutableListOf<TaskEvent>()

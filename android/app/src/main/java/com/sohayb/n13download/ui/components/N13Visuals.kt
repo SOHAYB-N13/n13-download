@@ -3,15 +3,17 @@ package com.sohayb.n13download.ui.components
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import com.sohayb.n13download.R
 import com.sohayb.n13download.domain.model.TaskStatus
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 
 /**
  * How a [TaskStatus] is presented.
  *
- * Labels are the exact N13 strings; the colour mapping follows the Windows
- * status badges (active = accent red, paused = amber, complete = green,
- * failed = red, queued/cancelled = grey).
+ * Labels are resolved from string resources so they follow the app language; the
+ * colour mapping follows the Windows status badges (active = accent red,
+ * paused = amber, complete = green, failed = red, queued/cancelled = grey).
  */
 data class StatusVisual(
     val label: String,
@@ -25,17 +27,38 @@ data class StatusVisual(
 fun TaskStatus.visual(): StatusVisual {
     val n13 = LocalN13Colors.current
     return when (this) {
-        TaskStatus.QUEUED -> StatusVisual("Queued", n13.text3, N13Icons.Clock)
-        TaskStatus.ANALYZING -> StatusVisual("Analyzing", n13.accent, N13Icons.Search, pulsing = true)
-        TaskStatus.STARTING -> StatusVisual("Starting", n13.accent, N13Icons.Play, pulsing = true)
-        TaskStatus.DOWNLOADING -> StatusVisual("Downloading", n13.accent, N13Icons.Download, pulsing = true)
-        TaskStatus.PAUSED -> StatusVisual("Paused", n13.warning, N13Icons.Pause)
-        TaskStatus.MERGING -> StatusVisual("Merging", n13.accent, N13Icons.Batch, pulsing = true)
-        TaskStatus.VERIFYING -> StatusVisual("Verifying", n13.accent, N13Icons.Shield, pulsing = true)
-        TaskStatus.COMPLETED -> StatusVisual("Completed", n13.success, N13Icons.Check)
-        TaskStatus.FAILED -> StatusVisual("Failed", n13.danger, N13Icons.Alert)
-        TaskStatus.CANCELLED -> StatusVisual("Cancelled", n13.text3, N13Icons.XCircle)
-        TaskStatus.REMOVED -> StatusVisual("Removed", n13.text3, N13Icons.XCircle)
+        TaskStatus.QUEUED ->
+            StatusVisual(stringResource(R.string.status_queued), n13.text3, N13Icons.Clock)
+
+        TaskStatus.ANALYZING ->
+            StatusVisual(stringResource(R.string.status_analyzing), n13.accent, N13Icons.Search, pulsing = true)
+
+        TaskStatus.STARTING ->
+            StatusVisual(stringResource(R.string.status_starting), n13.accent, N13Icons.Play, pulsing = true)
+
+        TaskStatus.DOWNLOADING ->
+            StatusVisual(stringResource(R.string.status_downloading), n13.accent, N13Icons.Download, pulsing = true)
+
+        TaskStatus.PAUSED ->
+            StatusVisual(stringResource(R.string.status_paused), n13.warning, N13Icons.Pause)
+
+        TaskStatus.MERGING ->
+            StatusVisual(stringResource(R.string.status_merging), n13.accent, N13Icons.Batch, pulsing = true)
+
+        TaskStatus.VERIFYING ->
+            StatusVisual(stringResource(R.string.status_verifying), n13.accent, N13Icons.Shield, pulsing = true)
+
+        TaskStatus.COMPLETED ->
+            StatusVisual(stringResource(R.string.status_completed), n13.success, N13Icons.Check)
+
+        TaskStatus.FAILED ->
+            StatusVisual(stringResource(R.string.status_failed), n13.danger, N13Icons.Alert)
+
+        TaskStatus.CANCELLED ->
+            StatusVisual(stringResource(R.string.status_cancelled), n13.text3, N13Icons.XCircle)
+
+        TaskStatus.REMOVED ->
+            StatusVisual(stringResource(R.string.status_removed), n13.text3, N13Icons.XCircle)
     }
 }
 

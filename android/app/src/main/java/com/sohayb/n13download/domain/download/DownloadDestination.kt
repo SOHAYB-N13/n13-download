@@ -17,8 +17,16 @@ interface DownloadDestination {
 
     val kind: DestinationKind
 
-    /** What the user sees, e.g. `Download/N13` or `Downloads`. */
+    /** What the user sees, e.g. `Downloads/N13-Download` or `App storage`. */
     val displayPath: String
+
+    /**
+     * The location phrased the way a user would say it — a public, browsable
+     * path where one exists (`Downloads/N13-Download/`), otherwise the same as
+     * [displayPath].  Shown on Properties and in the Add Download summary so the
+     * answer to "where did my file go?" is always one line.
+     */
+    val friendlyPath: String get() = displayPath
 
     /** Value persisted on the task so the destination can be rebuilt later. */
     val reference: String
@@ -48,6 +56,15 @@ interface DownloadDestination {
 
     /** URI other apps can use for open/share intents. */
     fun contentUri(name: String): Uri
+
+    /**
+     * A URI for the folder holding [name], for the "Open Folder" action.
+     *
+     * Distinct from [contentUri], which points at the file itself.  Returns null
+     * when the backend has no folder a file manager could be pointed at, in which
+     * case the caller uses the on-disk path instead.
+     */
+    fun folderUri(name: String): Uri? = null
 
     /** The on-disk path when one exists, for display and logs. */
     fun filePath(name: String): String?

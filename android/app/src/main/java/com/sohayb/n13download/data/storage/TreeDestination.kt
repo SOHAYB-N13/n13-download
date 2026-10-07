@@ -165,6 +165,12 @@ class TreeDestination(
         return directory?.let { findChild(it, name) } ?: treeUri
     }
 
+    /**
+     * The SAF folder itself, which is already a document URI "Open Folder" can
+     * be pointed at directly.
+     */
+    override fun folderUri(name: String): Uri? = ensureDirectory() ?: treeUri
+
     override fun filePath(name: String): String? = null
 
     // ------------------------------------------------------------------ //

@@ -14,7 +14,6 @@ import com.sohayb.n13download.domain.model.TaskStatus
 import com.sohayb.n13download.domain.repository.DownloadRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -255,6 +254,29 @@ class DownloadManager(
         destinationFor(task).filePath(task.filename)
     }
 
+    /**
+     * A document URI for the folder that holds this task's file.
+     *
+     * Used by the "Open Folder" action, which must reveal the containing folder
+     * rather than the file.  Returns null when this task's destination has no
+     * addressable folder URI (plain app storage), so the caller uses the on-disk
+     * path instead.  It deliberately does **not** fall back to the file's own
+     * URI — pointing a file-manager intent at the file is the bug this exists to
+     * fix.
+     */
+    suspend fun folderUriFor(task: DownloadTask): android.net.Uri? = withContext(Dispatchers.IO) {
+        destinationFor(task).folderUri(task.filename)
+    }
+
+    /**
+     * The destination's folder reference as persisted on the task, i.e. the
+     * MediaStore sub-folder name or SAF document id.  Lets a caller rebuild an
+     * on-disk path when [filePathFor] returns null under scoped storage.
+     */
+    suspend fun folderReferenceFor(task: DownloadTask): String = withContext(Dispatchers.IO) {
+        destinationFor(task).reference
+    }
+
     /** Deletes the finished file from its destination. Never touches the task row. */
     suspend fun deleteFile(task: DownloadTask): Boolean = withContext(Dispatchers.IO) {
         runCatching { destinationFor(task).delete(task.filename) }.getOrDefault(false)
@@ -288,7 +310,10 @@ class DownloadManager(
             // Park recovered work so the queue does not restart it behind the
             // user's back. A task with bytes on disk or a start time is a
             // restored transfer, not something the user just queued.
-            repository.observeAll().first()
+            // Authoritative read: this runs immediately after recoverInterrupted
+            // wrote to the table, and the shared UI stream could still be
+            // replaying the pre-recovery snapshot.
+            repository.allNow()
                 .filter { it.status == TaskStatus.QUEUED && it.autostart }
                 .filter { it.downloadedSize > 0L || it.startedAt != null }
                 .forEach { repository.update(it.copy(autostart = false)) }

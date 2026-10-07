@@ -2,6 +2,7 @@ package com.sohayb.n13download
 
 import android.app.Application
 import android.util.Log
+import com.sohayb.n13download.core.AppLocale
 import com.sohayb.n13download.di.AppContainer
 
 /**
@@ -19,6 +20,23 @@ class N13Application : Application() {
         super.onCreate()
         installCrashLogger()
         container = AppContainer(this)
+        seedLanguage()
+    }
+
+    /**
+     * Reads the persisted language before any Activity is created.
+     *
+     * `attachBaseContext` cannot suspend, so the choice has to be in memory by
+     * the time the first Activity starts.  This is a single small DataStore read
+     * at process start — the only blocking call in the startup path, and the
+     * price of a locale that is correct on the very first frame instead of
+     * flashing the wrong language and then recreating.
+     */
+    private fun seedLanguage() {
+        val language = runCatching {
+            kotlinx.coroutines.runBlocking { container.settingsProvider.current().language }
+        }.getOrDefault(com.sohayb.n13download.domain.model.AppLanguage.DEFAULT)
+        AppLocale.seed(language)
     }
 
     override fun onTerminate() {

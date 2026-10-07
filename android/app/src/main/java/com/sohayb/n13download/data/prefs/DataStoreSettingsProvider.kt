@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.sohayb.n13download.core.BrowserHeaders
 import com.sohayb.n13download.domain.download.SettingsProvider
+import com.sohayb.n13download.domain.model.AppLanguage
 import com.sohayb.n13download.domain.model.ConnectionMode
 import com.sohayb.n13download.domain.model.DestinationKind
 import com.sohayb.n13download.domain.model.DownloadSettings
@@ -70,15 +71,40 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             prefs[Keys.USER_AGENT] = settings.userAgent
             prefs[Keys.THEME_MODE] = settings.themeMode.storageValue
             prefs[Keys.ACCENT_COLOR] = settings.accentColor
+            prefs[Keys.LANGUAGE] = settings.language.storageValue
         }
     }
 
     private fun Preferences.toSettings(): DownloadSettings {
         val defaults = DownloadSettings()
+
+        // --- Destination migration -------------------------------------------
+        // Older builds defaulted to app-private storage with no sub-folder,
+        // which left finished files buried in Android/data/.../files/Download.
+        // A row that still carries that exact legacy combination is upgraded
+        // once to the public Downloads/N13-Download/ default.  A user who
+        // deliberately picked a SAF tree, or typed their own folder, is left
+        // untouched because their stored values no longer match the legacy pair.
+        val storedKind = this[Keys.DESTINATION_KIND]
+        val storedFolder = this[Keys.DESTINATION_FOLDER]
+        val storedUri = this[Keys.DESTINATION_URI]
+        val legacyDestination = storedKind == null && storedFolder == null && storedUri == null
+
+        val destinationKind = if (legacyDestination) {
+            defaults.destinationKind
+        } else {
+            DestinationKind.fromStorage(storedKind)
+        }
+        val destinationFolder = if (legacyDestination) {
+            defaults.destinationFolder
+        } else {
+            storedFolder ?: defaults.destinationFolder
+        }
+
         return DownloadSettings(
-            destinationKind = DestinationKind.fromStorage(this[Keys.DESTINATION_KIND]),
-            destinationUri = this[Keys.DESTINATION_URI] ?: defaults.destinationUri,
-            destinationFolder = this[Keys.DESTINATION_FOLDER] ?: defaults.destinationFolder,
+            destinationKind = destinationKind,
+            destinationUri = storedUri ?: defaults.destinationUri,
+            destinationFolder = destinationFolder,
             connectionMode = ConnectionMode.fromStorage(this[Keys.CONNECTION_MODE]),
             numThreads = (this[Keys.NUM_THREADS] ?: defaults.numThreads)
                 .coerceIn(1, DownloadSettings.MAX_THREADS),
@@ -107,6 +133,7 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             userAgent = this[Keys.USER_AGENT] ?: BrowserHeaders.DEFAULT_USER_AGENT,
             themeMode = ThemeMode.fromStorage(this[Keys.THEME_MODE]),
             accentColor = this[Keys.ACCENT_COLOR] ?: defaults.accentColor,
+            language = AppLanguage.fromStorage(this[Keys.LANGUAGE]),
         )
     }
 
@@ -139,5 +166,6 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
         val USER_AGENT = stringPreferencesKey("user_agent")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_COLOR = longPreferencesKey("accent_color")
+        val LANGUAGE = stringPreferencesKey("language")
     }
 }

@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
+import com.sohayb.n13download.domain.model.TaskStatusValues
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -23,16 +24,22 @@ interface DownloadTaskDao {
     @Query(
         """
         SELECT * FROM download_tasks
-        WHERE status NOT IN ('Complete', 'Failed', 'Cancelled', 'Removed')
+        WHERE status NOT IN (${TaskStatusValues.SQL_TERMINAL})
         ORDER BY priority ASC, created_at ASC
         """,
     )
     fun observeQueue(): Flow<List<DownloadTaskEntity>>
 
+    /**
+     * Completed, failed and cancelled work, newest finish first.
+     *
+     * The status list comes from [TaskStatusValues.SQL_HISTORY], so it is impossible
+     * for this query to stop matching the values the app actually writes.
+     */
     @Query(
         """
         SELECT * FROM download_tasks
-        WHERE status IN ('Complete', 'Failed', 'Cancelled')
+        WHERE status IN (${TaskStatusValues.SQL_HISTORY})
         ORDER BY COALESCE(completed_at, created_at) DESC
         """,
     )
@@ -43,6 +50,16 @@ interface DownloadTaskDao {
 
     @Query("SELECT * FROM download_tasks WHERE id = :id")
     suspend fun getById(id: Long): DownloadTaskEntity?
+
+    /**
+     * A one-shot read of the whole table.
+     *
+     * Exists so the scheduler can see the database as it is *now*.  The `Flow`
+     * queries above are cached and replayed for the UI, so a one-shot read of
+     * one of them can return a snapshot that predates the caller's own write.
+     */
+    @Query("SELECT * FROM download_tasks ORDER BY created_at DESC")
+    suspend fun getAllOnce(): List<DownloadTaskEntity>
 
     @Query("SELECT * FROM download_tasks WHERE url = :url ORDER BY created_at DESC LIMIT 1")
     suspend fun findByUrl(url: String): DownloadTaskEntity?
@@ -59,7 +76,7 @@ interface DownloadTaskDao {
     @Query(
         """
         SELECT * FROM download_tasks
-        WHERE status IN ('Queued', 'Analyzing', 'Starting', 'Downloading', 'Paused', 'Merging', 'Verifying')
+        WHERE status IN (${TaskStatusValues.SQL_ACTIVE})
         ORDER BY priority ASC, created_at ASC
         """,
     )
@@ -94,12 +111,12 @@ interface DownloadTaskDao {
         UPDATE download_tasks
         SET status = :status,
             error = COALESCE(:error, error),
-            started_at = CASE WHEN :status = 'Starting' THEN COALESCE(started_at, :now) ELSE started_at END,
+            started_at = CASE WHEN :status = ${TaskStatusValues.SQL_STARTING} THEN COALESCE(started_at, :now) ELSE started_at END,
             completed_at = CASE
-                WHEN :status IN ('Complete', 'Failed', 'Cancelled', 'Removed') THEN COALESCE(completed_at, :now)
-                WHEN :status = 'Queued' THEN NULL
+                WHEN :status IN (${TaskStatusValues.SQL_TERMINAL}) THEN COALESCE(completed_at, :now)
+                WHEN :status = ${TaskStatusValues.SQL_QUEUED} THEN NULL
                 ELSE completed_at END,
-            current_speed = CASE WHEN :status IN ('Complete', 'Failed', 'Cancelled', 'Paused') THEN 0 ELSE current_speed END
+            current_speed = CASE WHEN :status IN (${TaskStatusValues.SQL_TERMINAL}, ${TaskStatusValues.SQL_PAUSED}) THEN 0 ELSE current_speed END
         WHERE id = :id
         """,
     )
@@ -117,7 +134,7 @@ interface DownloadTaskDao {
     @Query("DELETE FROM download_tasks WHERE id = :id")
     suspend fun deleteById(id: Long)
 
-    @Query("DELETE FROM download_tasks WHERE status IN ('Complete', 'Failed', 'Cancelled')")
+    @Query("DELETE FROM download_tasks WHERE status IN (${TaskStatusValues.SQL_HISTORY})")
     suspend fun clearHistory()
 
     /**
@@ -128,8 +145,9 @@ interface DownloadTaskDao {
     @Query(
         """
         UPDATE download_tasks
-        SET status = 'Queued', started_at = NULL, current_speed = 0, average_speed = 0, eta_seconds = NULL
-        WHERE status IN ('Analyzing', 'Starting', 'Downloading', 'Merging', 'Verifying')
+        SET status = ${TaskStatusValues.SQL_QUEUED}, started_at = NULL,
+            current_speed = 0, average_speed = 0, eta_seconds = NULL
+        WHERE status IN (${TaskStatusValues.SQL_INTERRUPTED})
         """,
     )
     suspend fun requeueInterrupted(): Int
@@ -139,7 +157,7 @@ interface DownloadTaskDao {
         """
         UPDATE download_tasks
         SET current_speed = 0, eta_seconds = NULL, connections = 1
-        WHERE status IN ('Queued', 'Paused', 'Complete', 'Failed', 'Cancelled', 'Removed')
+        WHERE status NOT IN (${TaskStatusValues.SQL_RUNNING})
         """,
     )
     suspend fun clearStaleRuntimeState()

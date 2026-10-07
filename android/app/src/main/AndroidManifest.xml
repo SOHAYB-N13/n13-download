@@ -18,6 +18,25 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Open Folder hands a directory document to a file manager. On Android 11+
+         package visibility hides apps we do not declare, so without this the
+         folder intent can look unresolvable even when one is installed. The
+         directory type carries no OPENABLE category: declaring it would not match
+         how DocumentsUI registers. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="vnd.android.document/directory" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="resource/folder" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.OPEN_DOCUMENT_TREE" />
+        </intent>
+    </queries>
+
     <application
         android:name=".N13Application"
         android:allowBackup="true"

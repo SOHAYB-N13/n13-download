@@ -1,3 +1,357 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Every user-visible string in N13.
+
+  The default file is English; values-fa/ carries the Persian translation of the
+  same keys.  Keys are grouped by the screen or component that uses them so a
+  translation can be reviewed without hunting through the code.
+
+  Note on direction: these strings are UI prose and follow the app's layout
+  direction.  Technical values (URLs, paths, file names, checksums, byte counts)
+  are *not* here — they are data, and they are pinned left-to-right in the UI by
+  N13Ltr / N13LtrText.
+-->
 <resources>
+
     <string name="app_name">N13 Download Manager</string>
+    <string name="brand_line">N13 Download Manager</string>
+
+    <!-- Navigation -->
+    <string name="nav_downloads">Downloads</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Shared actions -->
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_remove">Remove</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_open">Open</string>
+    <string name="action_share">Share</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_copy_path">Copy path</string>
+    <string name="action_copy_url">Copy URL</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_start_now">Start now</string>
+    <string name="action_redownload">Redownload</string>
+    <string name="action_properties">Properties</string>
+    <string name="action_remove_from_list">Remove from list</string>
+    <string name="action_delete_file">Delete file</string>
+    <string name="action_open_file">Open file</string>
+    <string name="action_open_folder">Open folder</string>
+    <string name="action_more">More</string>
+    <string name="action_expand">Expand</string>
+    <string name="action_collapse">Collapse</string>
+    <string name="action_back">Back</string>
+    <string name="action_ok">OK</string>
+    <string name="action_show_all">Show all</string>
+
+    <!-- Downloads screen -->
+    <string name="downloads_title">Downloads</string>
+    <string name="downloads_resume_queue">Resume the queue</string>
+    <string name="downloads_pause_queue">Pause the queue</string>
+    <string name="downloads_new">New download</string>
+    <string name="downloads_queue_paused">Queue paused — waiting downloads will not start</string>
+    <string name="downloads_stat_active">Active</string>
+    <string name="downloads_stat_waiting">Waiting</string>
+    <string name="downloads_stat_bandwidth">Bandwidth</string>
+    <string name="downloads_waiting_none">none</string>
+    <string name="downloads_active_of">%1$d of %2$d</string>
+    <string name="downloads_retry_failed">Retry failed (%1$d)</string>
+    <string name="downloads_empty_title">No downloads yet</string>
+    <string name="downloads_empty_message">Paste a link or share one to N13 and it will show up here.</string>
+    <string name="downloads_open_history">Open history</string>
+    <string name="downloads_nothing_matches_title">Nothing matches</string>
+    <string name="downloads_nothing_matches_message">Try a different filter.</string>
+    <string name="downloads_show_all">Show all downloads</string>
+
+    <!-- Queue and history filters -->
+    <string name="filter_all">All</string>
+    <string name="filter_active">Active</string>
+    <string name="filter_queued">Queued</string>
+    <string name="filter_paused">Paused</string>
+    <string name="filter_completed">Completed</string>
+    <string name="filter_failed">Failed</string>
+    <string name="filter_cancelled">Cancelled</string>
+
+    <!-- Sort orders -->
+    <string name="sort_newest">Newest first</string>
+    <string name="sort_oldest">Oldest first</string>
+    <string name="sort_queue">Queue order</string>
+    <string name="sort_name">Name A-Z</string>
+    <string name="sort_largest">Largest first</string>
+    <string name="sort_progress">Most complete</string>
+
+    <!-- Task status -->
+    <string name="status_queued">Queued</string>
+    <string name="status_analyzing">Analyzing</string>
+    <string name="status_starting">Starting</string>
+    <string name="status_downloading">Downloading</string>
+    <string name="status_paused">Paused</string>
+    <string name="status_merging">Merging</string>
+    <string name="status_verifying">Verifying</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_failed">Failed</string>
+    <string name="status_cancelled">Cancelled</string>
+    <string name="status_removed">Removed</string>
+
+    <!-- Priority -->
+    <string name="priority_high">High</string>
+    <string name="priority_normal">Normal</string>
+    <string name="priority_low">Low</string>
+    <string name="priority_chip">%1$s priority</string>
+    <string name="priority_title">Priority</string>
+    <string name="priority_hint">When a queue slot frees up, higher priority downloads start first.</string>
+    <string name="speed_limit_picker_hint">Caps the real transfer rate for this download only.</string>
+
+    <!-- Add Download -->
+    <string name="add_title">New download</string>
+    <string name="add_subtitle">Add a file by URL</string>
+    <string name="add_link">Link</string>
+    <string name="add_link_placeholder">https://example.com/archive.zip</string>
+    <string name="add_paste_link">Paste link from clipboard</string>
+    <string name="add_file_name">File name</string>
+    <string name="add_filename_placeholder">Detected automatically</string>
+    <string name="add_category">Category</string>
+    <string name="add_save_to">Save to</string>
+    <string name="add_destination">Destination</string>
+    <string name="add_change_folder">Change the download folder in Settings.</string>
+    <string name="add_advanced">Advanced options</string>
+    <string name="add_advanced_hide">Hide advanced options</string>
+    <string name="add_checksum">Checksum</string>
+    <string name="add_checksum_placeholder">MD5 or SHA-256, optional</string>
+    <string name="add_checksum_invalid">A checksum must be 32 (MD5) or 64 (SHA-256) hex characters</string>
+    <string name="add_start_immediately">Start immediately</string>
+    <string name="add_start_immediately_hint">Begins as soon as a queue slot is free</string>
+    <string name="add_start_later_hint">Off — added to the queue without starting</string>
+    <string name="add_adding">Adding…</string>
+    <string name="add_download_now">Download now</string>
+    <string name="add_to_queue">Add to queue</string>
+    <string name="add_inspecting">Inspecting link…</string>
+    <string name="add_cannot_inspect">Could not inspect this link</string>
+    <string name="add_resumable">Resumable</string>
+    <string name="add_unknown_size">Unknown size</string>
+
+    <!-- Duplicate conflict -->
+    <string name="duplicate_active_title">Already downloading</string>
+    <string name="duplicate_title">Duplicate detected</string>
+    <string name="duplicate_active_message">This URL is already in your download queue.</string>
+    <string name="duplicate_exists_message">A file named \"%1$s\" already exists in the destination.</string>
+    <string name="duplicate_open_existing">Open existing</string>
+    <string name="duplicate_download_anyway">Download anyway</string>
+    <string name="duplicate_rename">Rename automatically</string>
+    <string name="duplicate_replace">Replace existing</string>
+
+    <!-- Properties / Details -->
+    <string name="details_title">Properties</string>
+    <string name="details_not_found">Not found</string>
+    <string name="details_not_found_message">That download no longer exists.</string>
+    <string name="section_file">File</string>
+    <string name="section_transfer">Transfer</string>
+    <string name="section_server">Server</string>
+    <string name="section_timeline">Timeline</string>
+    <string name="section_last_error">Last error</string>
+    <string name="section_location">Location</string>
+    <string name="field_name">Name</string>
+    <string name="field_category">Category</string>
+    <string name="field_path">Path</string>
+    <string name="field_size">Size</string>
+    <string name="field_speed">Speed</string>
+    <string name="field_average_speed">Average speed</string>
+    <string name="field_time_left">Time left</string>
+    <string name="field_elapsed">Elapsed</string>
+    <string name="field_connections">Connections</string>
+    <string name="field_priority">Priority</string>
+    <string name="field_speed_limit">Speed limit</string>
+    <string name="field_retries">Retries</string>
+    <string name="field_server">Server</string>
+    <string name="field_content_type">Content type</string>
+    <string name="field_resumable">Resumable</string>
+    <string name="field_source_url">Source URL</string>
+    <string name="field_last_modified">Last modified</string>
+    <string name="field_added">Added</string>
+    <string name="field_started">Started</string>
+    <string name="field_finished">Finished</string>
+    <string name="value_yes">Yes</string>
+    <string name="value_no">No</string>
+    <string name="value_unlimited">Unlimited</string>
+    <string name="details_awaiting_file">The file appears here once the download finishes.</string>
+    <string name="details_connections_of">%1$d of %2$d</string>
+    <string name="details_folder">Folder</string>
+
+    <!-- History -->
+    <string name="history_title">History</string>
+    <string name="history_clear">Clear history</string>
+    <string name="history_empty_title">No history yet</string>
+    <string name="history_empty_message">Completed and failed downloads are listed here.</string>
+    <string name="history_back_to_downloads">Back to downloads</string>
+    <string name="history_clear_title">Clear history</string>
+    <string name="history_clear_message">Remove all history entries? Downloaded files are not affected.</string>
+    <string name="history_stat_downloads">Downloads</string>
+    <string name="history_stat_completed">Completed</string>
+    <string name="history_stat_failed">Failed</string>
+    <string name="history_stat_cancelled">Cancelled</string>
+    <string name="history_stat_data">Data</string>
+    <string name="history_stat_avg_speed">Avg speed</string>
+    <string name="history_stat_peak">Peak</string>
+    <string name="history_stat_time">Time</string>
+
+    <!-- Confirmation dialogs -->
+    <string name="confirm_delete_file_title">Delete file</string>
+    <string name="confirm_remove_title">Remove download</string>
+    <string name="confirm_delete_file_message">Permanently delete \"%1$s\" from disk? This cannot be undone.</string>
+    <string name="confirm_remove_message">Remove this entry from the list? The file on disk is kept.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_brand_line">Tune N13 to your workflow</string>
+    <string name="settings_group_storage">Storage</string>
+    <string name="settings_destination">Destination</string>
+    <string name="settings_destination_hint">Where finished files are written.</string>
+    <string name="dest_app_storage">App storage</string>
+    <string name="dest_downloads">Downloads</string>
+    <string name="dest_chosen_folder">Chosen folder</string>
+    <string name="dest_app_storage_no_folder">App storage (no folder chosen yet)</string>
+    <string name="settings_choose_folder">Choose folder</string>
+    <string name="settings_app_storage_path">App storage path</string>
+    <string name="settings_group_downloads">Downloads</string>
+    <string name="settings_simultaneous">Simultaneous downloads</string>
+    <string name="settings_simultaneous_hint">How many downloads run at the same time.</string>
+    <string name="settings_connections">Connections per download</string>
+    <string name="settings_connections_hint">Used when the connection mode is Manual.</string>
+    <string name="settings_connection_mode">Connection mode</string>
+    <string name="settings_connection_mode_hint">Smart adapts the connection count to the file and the server.</string>
+    <string name="connection_smart">Smart</string>
+    <string name="connection_manual">Manual</string>
+    <string name="settings_smart_max">Smart max connections</string>
+    <string name="settings_smart_max_hint">Ceiling Smart mode will not exceed.</string>
+    <string name="settings_adaptive">Adaptive scaling</string>
+    <string name="settings_adaptive_hint">Increase connections while throughput keeps improving.</string>
+    <string name="settings_duplicate_handling">Duplicate handling</string>
+    <string name="settings_duplicate_hint">What to do when the file name already exists.</string>
+    <string name="dup_ask">Ask</string>
+    <string name="dup_allow">Allow</string>
+    <string name="dup_rename">Rename</string>
+    <string name="dup_replace">Replace</string>
+    <string name="settings_auto_category">Auto-detect category</string>
+    <string name="settings_auto_category_hint">Pick the category from the file extension.</string>
+    <string name="settings_start_immediately">Start immediately</string>
+    <string name="settings_start_immediately_hint">New downloads start as soon as a slot is free.</string>
+    <string name="settings_resume_on_startup">Resume on startup</string>
+    <string name="settings_resume_on_startup_hint">Continue unfinished downloads when the app starts.</string>
+    <string name="settings_group_bandwidth">Bandwidth</string>
+    <string name="settings_speed_limit">Download speed limit</string>
+    <string name="settings_speed_unlimited_hint">Unlimited — no throttling applied.</string>
+    <string name="settings_speed_capped_hint">Currently capped at %1$s.</string>
+    <string name="settings_unlimited">Unlimited</string>
+    <string name="settings_group_reliability">Reliability</string>
+    <string name="settings_retry_attempts">Retry attempts</string>
+    <string name="settings_retry_attempts_hint">Tries per connection before a download fails.</string>
+    <string name="settings_verify_ssl">Verify SSL certificates</string>
+    <string name="settings_verify_ssl_hint">Turn off only for servers with a self-signed certificate.</string>
+    <string name="settings_verify_size">Verify file size</string>
+    <string name="settings_verify_size_hint">Check the byte count against Content-Length.</string>
+    <string name="settings_block_private">Block private addresses</string>
+    <string name="settings_block_private_hint">Refuse localhost and LAN targets (SSRF protection).</string>
+    <string name="settings_group_notifications">Notifications</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_hint">Show progress and event notifications.</string>
+    <string name="settings_notify_completed">Notify on completion</string>
+    <string name="settings_notify_failed">Notify on failure</string>
+    <string name="settings_notify_started">Notify on start</string>
+    <string name="settings_group_network">Network</string>
+    <string name="settings_user_agent">User agent</string>
+    <string name="settings_user_agent_hint">Sent with every request. Some hosts reject unknown clients.</string>
+    <string name="settings_reset_agent">Reset to N13 default</string>
+    <string name="settings_group_appearance">Appearance</string>
+    <string name="settings_theme">Theme</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_system">System</string>
+    <string name="settings_accent">Accent colour</string>
+    <string name="settings_accent_hint">The N13 default is red. The whole UI follows this choice.</string>
+    <string name="settings_subfolder">Sub-folder</string>
+    <string name="settings_subfolder_hint">Optional folder inside the destination. Leave empty for the root.</string>
+    <string name="settings_group_language">Language</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_hint">The language N13 uses for its interface.</string>
+    <string name="settings_group_about">About</string>
+    <string name="about_application">Application</string>
+    <string name="about_version">Version</string>
+    <string name="about_package">Package</string>
+    <string name="about_platform">Platform</string>
+    <string name="about_storage">Storage</string>
+    <string name="about_unknown">unknown</string>
+    <string name="about_platform_value">Android %1$s (API %2$d)</string>
+    <string name="about_storage_free">%1$s free</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_progress">Download progress</string>
+    <string name="notif_channel_progress_desc">Live progress of running downloads</string>
+    <string name="notif_channel_events">Download events</string>
+    <string name="notif_channel_events_desc">Completed and failed downloads</string>
+    <string name="notif_preparing">Preparing downloads…</string>
+    <string name="notif_complete_title">Download complete</string>
+    <string name="notif_failed_title">Download failed</string>
+    <string name="notif_cancelled_title">Download cancelled</string>
+
+    <!-- Row metadata -->
+    <string name="row_paused_elapsed">Paused · %1$s</string>
+    <string name="row_stopped_at">Stopped at %1$d%%</string>
+    <string name="row_connections">%1$d conn</string>
+
+    <!-- File actions and toasts -->
+    <string name="toast_no_app_for_file">No app can open this file type</string>
+    <string name="toast_nothing_to_share">Nothing to share with</string>
+    <string name="toast_link_copied">Link copied</string>
+    <string name="toast_path_copied">Path copied</string>
+    <string name="toast_no_file_manager">No file manager can open this folder</string>
+    <string name="toast_file_gone">%1$s is no longer on disk</string>
+
+    <!-- Categories (display labels for the stored category keys) -->
+    <string name="category_general">General</string>
+    <string name="category_archives">Archives</string>
+    <string name="category_videos">Videos</string>
+    <string name="category_music">Music</string>
+    <string name="category_documents">Documents</string>
+    <string name="category_programs">Programs</string>
+    <string name="category_images">Images</string>
+    <string name="category_other">Other</string>
+
+    <!--
+      Error messages.
+
+      These are matched against the stored/engine message at display time, so a
+      download that failed in English still reads in Persian after switching.
+    -->
+    <string name="err_cancelled">Cancelled</string>
+    <string name="err_not_enough_space">Not enough space on the device - free some space and try again</string>
+    <string name="err_destination_unavailable">Cannot write to the destination folder</string>
+    <string name="err_file_name_too_long">File name is too long</string>
+    <string name="err_invalid_url">Enter a valid http:// or https:// link</string>
+    <string name="err_invalid_filename">That file name is not valid</string>
+    <string name="err_resume_unsupported">The server does not support resume - this download has to restart from the beginning</string>
+    <string name="err_html_interstitial">Server returned an HTML page instead of the file (the link may be expired, region-blocked, or require a browser session).</string>
+    <string name="err_checksum_mismatch">Checksum mismatch - the downloaded file is corrupted</string>
+    <string name="err_incomplete">The download stopped before it finished</string>
+    <string name="err_timeout">Connection timed out - the server did not respond</string>
+    <string name="err_unreachable">Cannot reach the server - check the connection</string>
+    <string name="err_network_retrying">Network connection lost - will retry automatically</string>
+    <string name="err_ssl">SSL certificate verification failed</string>
+    <string name="err_stream_reset">The server closed the connection unexpectedly</string>
+    <string name="err_interrupted">The download was interrupted</string>
+    <string name="err_connection_lost">Network connection was lost</string>
+    <string name="err_auth">Authentication required - the server rejected the request (%1$d)</string>
+    <string name="err_not_found">Server returned 404 - the file was not found</string>
+    <string name="err_busy">Server is busy - will retry automatically</string>
+    <string name="err_range_rejected">The server rejected the resume position</string>
+    <string name="err_server_error">Server error (HTTP %1$d) - will retry automatically</string>
+    <string name="err_refused">The server refused the request (HTTP %1$d)</string>
+    <string name="err_cleartext">Plain HTTP is blocked on this device for that host</string>
+    <string name="err_closed_early">The server closed the connection early</string>
+    <string name="err_write_failed">Could not write the file to the destination</string>
+    <string name="err_failed">Download failed</string>
+
 </resources>

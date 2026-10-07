@@ -1,6 +1,55 @@
 package com.sohayb.n13download.domain.model
 
 /**
+ * The canonical, persisted status strings.
+ *
+ * Declared top-level (not inside the enum's companion) because an enum entry
+ * cannot read a companion `const` in its own constructor, and because Room's
+ * `@Query` annotations need real compile-time constants.  Keeping the SQL and
+ * the enum on one set of names is what stops a query from silently drifting
+ * away from the values the app writes — the bug class behind the History screen
+ * that never showed anything.
+ */
+object TaskStatusValues {
+    const val QUEUED = "Queued"
+    const val ANALYZING = "Analyzing"
+    const val STARTING = "Starting"
+    const val DOWNLOADING = "Downloading"
+    const val PAUSED = "Paused"
+    const val MERGING = "Merging"
+    const val VERIFYING = "Verifying"
+    const val COMPLETE = "Complete"
+    const val FAILED = "Failed"
+    const val CANCELLED = "Cancelled"
+    const val REMOVED = "Removed"
+
+    /** Completed, failed and cancelled: what the user sees in History. */
+    const val SQL_HISTORY = "'$COMPLETE','$FAILED','$CANCELLED'"
+
+    /** Terminal states, including the internal REMOVED marker. */
+    const val SQL_TERMINAL = "'$COMPLETE','$FAILED','$CANCELLED','$REMOVED'"
+
+    /** Live + waiting work: everything that is not terminal. */
+    const val SQL_ACTIVE = "'$QUEUED','$ANALYZING','$STARTING'," +
+        "'$DOWNLOADING','$PAUSED','$MERGING','$VERIFYING'"
+
+    /**
+     * Mid-transfer work a crash interrupted.  PAUSED is deliberately absent:
+     * that was a user decision and must survive a restart as PAUSED.
+     */
+    const val SQL_INTERRUPTED = "'$ANALYZING','$STARTING'," +
+        "'$DOWNLOADING','$MERGING','$VERIFYING'"
+
+    /** States where bytes are legitimately moving right now. */
+    const val SQL_RUNNING = "'$STARTING','$DOWNLOADING','$MERGING','$VERIFYING'"
+
+    // Single-value fragments, quoted and ready to splice into a query.
+    const val SQL_QUEUED = "'$QUEUED'"
+    const val SQL_STARTING = "'$STARTING'"
+    const val SQL_PAUSED = "'$PAUSED'"
+}
+
+/**
  * Canonical download lifecycle states.
  *
  * The stored values are the exact strings the Windows N13 product uses
@@ -8,17 +57,17 @@ package com.sohayb.n13download.domain.model
  * language.  Core state is never represented as an arbitrary string.
  */
 enum class TaskStatus(val value: String) {
-    QUEUED("Queued"),
-    ANALYZING("Analyzing"),
-    STARTING("Starting"),
-    DOWNLOADING("Downloading"),
-    PAUSED("Paused"),
-    MERGING("Merging"),
-    VERIFYING("Verifying"),
-    COMPLETED("Complete"),
-    FAILED("Failed"),
-    CANCELLED("Cancelled"),
-    REMOVED("Removed"),
+    QUEUED(TaskStatusValues.QUEUED),
+    ANALYZING(TaskStatusValues.ANALYZING),
+    STARTING(TaskStatusValues.STARTING),
+    DOWNLOADING(TaskStatusValues.DOWNLOADING),
+    PAUSED(TaskStatusValues.PAUSED),
+    MERGING(TaskStatusValues.MERGING),
+    VERIFYING(TaskStatusValues.VERIFYING),
+    COMPLETED(TaskStatusValues.COMPLETE),
+    FAILED(TaskStatusValues.FAILED),
+    CANCELLED(TaskStatusValues.CANCELLED),
+    REMOVED(TaskStatusValues.REMOVED),
     ;
 
     /** Still alive: counts against the simultaneous-download limit. */

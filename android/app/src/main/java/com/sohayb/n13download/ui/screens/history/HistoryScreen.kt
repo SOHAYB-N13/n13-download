@@ -23,9 +23,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sohayb.n13download.R
 import com.sohayb.n13download.core.N13Format
 import com.sohayb.n13download.domain.download.DownloadManager
 import com.sohayb.n13download.domain.model.DownloadTask
@@ -38,6 +41,7 @@ import com.sohayb.n13download.ui.components.N13EmptyState
 import com.sohayb.n13download.ui.components.N13IconButton
 import com.sohayb.n13download.ui.components.N13Icons
 import com.sohayb.n13download.ui.components.N13ListPadding
+import com.sohayb.n13download.ui.components.N13LtrText
 import com.sohayb.n13download.ui.components.N13PageHeader
 import com.sohayb.n13download.ui.components.N13Sheet
 import com.sohayb.n13download.ui.components.N13SheetItem
@@ -72,12 +76,12 @@ fun HistoryScreen(
 
     Column(modifier = modifier.fillMaxSize()) {
         N13PageHeader(
-            title = "History",
+            titleRes = R.string.history_title,
             trailing = {
                 if (state.entries.isNotEmpty()) {
                     N13IconButton(
                         icon = N13Icons.ClearAll,
-                        contentDescription = "Clear history",
+                        contentDescription = stringResource(R.string.history_clear),
                         onClick = { confirmClear = true },
                     )
                 }
@@ -93,17 +97,17 @@ fun HistoryScreen(
             when {
                 state.entries.isEmpty() -> N13EmptyState(
                     icon = N13Icons.History,
-                    title = "No history yet",
-                    message = "Completed and failed downloads are listed here.",
-                    primaryLabel = "Back to downloads",
+                    title = stringResource(R.string.history_empty_title),
+                    message = stringResource(R.string.history_empty_message),
+                    primaryLabel = stringResource(R.string.history_back_to_downloads),
                     onPrimary = onOpenDownloads,
                 )
 
                 state.visible.isEmpty() -> N13EmptyState(
                     icon = N13Icons.Filter,
-                    title = "Nothing matches",
-                    message = "Try a different filter.",
-                    primaryLabel = "Show all",
+                    title = stringResource(R.string.downloads_nothing_matches_title),
+                    message = stringResource(R.string.downloads_nothing_matches_message),
+                    primaryLabel = stringResource(R.string.action_show_all),
                     onPrimary = { viewModel.setFilter(HistoryFilter.ALL) },
                 )
 
@@ -134,55 +138,57 @@ fun HistoryScreen(
         N13Sheet(onDismiss = { moreTask = null }) {
             Column(modifier = Modifier.padding(bottom = 12.dp)) {
                 Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)) {
-                    Text(
+                    // Filename and URL are data and stay left-to-right.
+                    N13LtrText(
                         text = task.filename,
                         style = MaterialTheme.typography.titleMedium,
                         color = LocalN13Colors.current.text1,
                     )
-                    Text(
+                    N13LtrText(
                         text = task.url,
                         style = MaterialTheme.typography.bodySmall,
                         color = LocalN13Colors.current.text3,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 if (task.isOpenable) {
-                    N13SheetItem(N13Icons.External, "Open file", {
+                    N13SheetItem(N13Icons.External, stringResource(R.string.action_open_file), {
                         scope.launch { FileActions.open(context, manager, task) }
                         moreTask = null
                     })
-                    N13SheetItem(N13Icons.Link, "Share", {
+                    N13SheetItem(N13Icons.Link, stringResource(R.string.action_share), {
                         scope.launch { FileActions.share(context, manager, task) }
                         moreTask = null
                     })
-                    N13SheetItem(N13Icons.FolderOpen, "Open folder", {
+                    N13SheetItem(N13Icons.FolderOpen, stringResource(R.string.action_open_folder), {
                         scope.launch { FileActions.openFolder(context, manager, task) }
                         moreTask = null
                     })
-                    N13SheetItem(N13Icons.Copy, "Copy path", {
+                    N13SheetItem(N13Icons.Copy, stringResource(R.string.action_copy_path), {
                         scope.launch { FileActions.copyPath(context, manager, task) }
                         moreTask = null
                     })
                 }
-                N13SheetItem(N13Icons.Copy, "Copy URL", {
+                N13SheetItem(N13Icons.Copy, stringResource(R.string.action_copy_url), {
                     FileActions.copyUrl(context, task)
                     moreTask = null
                 })
-                N13SheetItem(N13Icons.Retry, "Redownload", {
+                N13SheetItem(N13Icons.Retry, stringResource(R.string.action_redownload), {
                     viewModel.retry(task.id)
                     moreTask = null
                 })
-                N13SheetItem(N13Icons.Info, "Properties", {
+                N13SheetItem(N13Icons.Info, stringResource(R.string.action_properties), {
                     moreTask = null
                     onOpenTask(task.id)
                 })
-                N13SheetItem(N13Icons.Trash, "Remove from list", {
+                N13SheetItem(N13Icons.Trash, stringResource(R.string.action_remove_from_list), {
                     deleteFileOnRemove = false
                     removeTarget = task
                     moreTask = null
                 })
                 if (task.isOpenable) {
-                    N13SheetItem(N13Icons.Alert, "Delete file", {
+                    N13SheetItem(N13Icons.Alert, stringResource(R.string.action_delete_file), {
                         deleteFileOnRemove = true
                         removeTarget = task
                         moreTask = null
@@ -194,9 +200,9 @@ fun HistoryScreen(
 
     if (confirmClear) {
         N13ConfirmDialog(
-            title = "Clear history",
-            message = "Remove all history entries? Downloaded files are not affected.",
-            confirmLabel = "Clear",
+            title = stringResource(R.string.history_clear_title),
+            message = stringResource(R.string.history_clear_message),
+            confirmLabel = stringResource(R.string.action_clear),
             onConfirm = {
                 viewModel.clearHistory()
                 confirmClear = false
@@ -207,13 +213,18 @@ fun HistoryScreen(
 
     removeTarget?.let { task ->
         N13ConfirmDialog(
-            title = if (deleteFileOnRemove) "Delete file" else "Remove download",
+            title = stringResource(
+                if (deleteFileOnRemove) R.string.confirm_delete_file_title
+                else R.string.confirm_remove_title,
+            ),
             message = if (deleteFileOnRemove) {
-                "Permanently delete \"${task.filename}\" from disk? This cannot be undone."
+                stringResource(R.string.confirm_delete_file_message, task.filename)
             } else {
-                "Remove this entry from the list? The file on disk is kept."
+                stringResource(R.string.confirm_remove_message)
             },
-            confirmLabel = if (deleteFileOnRemove) "Delete" else "Remove",
+            confirmLabel = stringResource(
+                if (deleteFileOnRemove) R.string.action_delete else R.string.action_remove,
+            ),
             onConfirm = {
                 viewModel.remove(task.id, deleteFileOnRemove)
                 removeTarget = null
@@ -231,27 +242,59 @@ private fun HistorySummary(state: HistoryUiState) {
     N13Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth()) {
-                SummaryStat("Downloads", state.entries.size.toString(), Modifier.weight(1f))
-                SummaryStat("Completed", state.completedCount.toString(), Modifier.weight(1f))
-                SummaryStat("Failed", state.failedCount.toString(), Modifier.weight(1f))
-                SummaryStat("Cancelled", state.cancelledCount.toString(), Modifier.weight(1f))
+                SummaryStat(
+                    stringResource(R.string.history_stat_downloads),
+                    state.entries.size.toString(),
+                    Modifier.weight(1f),
+                )
+                SummaryStat(
+                    stringResource(R.string.history_stat_completed),
+                    state.completedCount.toString(),
+                    Modifier.weight(1f),
+                )
+                SummaryStat(
+                    stringResource(R.string.history_stat_failed),
+                    state.failedCount.toString(),
+                    Modifier.weight(1f),
+                )
+                SummaryStat(
+                    stringResource(R.string.history_stat_cancelled),
+                    state.cancelledCount.toString(),
+                    Modifier.weight(1f),
+                )
             }
             Spacer(Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth()) {
-                SummaryStat("Data", N13Format.humanSize(state.totalBytes), Modifier.weight(1f))
                 SummaryStat(
-                    "Avg speed",
-                    if (state.averageSpeed > 1.0) N13Format.formatSpeed(state.averageSpeed) else N13Format.UNKNOWN,
+                    stringResource(R.string.history_stat_data),
+                    N13Format.humanSize(state.totalBytes),
                     Modifier.weight(1f),
                 )
                 SummaryStat(
-                    "Peak",
-                    if (state.peakSpeed > 1.0) N13Format.formatSpeed(state.peakSpeed) else N13Format.UNKNOWN,
+                    stringResource(R.string.history_stat_avg_speed),
+                    if (state.averageSpeed > 1.0) {
+                        N13Format.formatSpeed(state.averageSpeed)
+                    } else {
+                        N13Format.UNKNOWN
+                    },
                     Modifier.weight(1f),
                 )
                 SummaryStat(
-                    "Time",
-                    if (state.totalTimeSeconds > 0) N13Format.formatDuration(state.totalTimeSeconds) else N13Format.UNKNOWN,
+                    stringResource(R.string.history_stat_peak),
+                    if (state.peakSpeed > 1.0) {
+                        N13Format.formatSpeed(state.peakSpeed)
+                    } else {
+                        N13Format.UNKNOWN
+                    },
+                    Modifier.weight(1f),
+                )
+                SummaryStat(
+                    stringResource(R.string.history_stat_time),
+                    if (state.totalTimeSeconds > 0) {
+                        N13Format.formatDuration(state.totalTimeSeconds)
+                    } else {
+                        N13Format.UNKNOWN
+                    },
                     Modifier.weight(1f),
                 )
             }
@@ -263,7 +306,8 @@ private fun HistorySummary(state: HistoryUiState) {
 private fun SummaryStat(label: String, value: String, modifier: Modifier = Modifier) {
     val n13 = LocalN13Colors.current
     Column(modifier = modifier) {
-        Text(
+        // The number is a technical value: always left-to-right.
+        N13LtrText(
             text = value,
             style = MaterialTheme.typography.titleMedium,
             color = n13.text1,
@@ -287,7 +331,7 @@ private fun FilterRow(state: HistoryUiState, onFilter: (HistoryFilter) -> Unit) 
     ) {
         HistoryFilter.entries.forEach { filter ->
             N13Chip(
-                label = filter.label,
+                label = stringResource(filter.labelRes),
                 count = state.countFor(filter),
                 selected = state.filter == filter,
                 onClick = { onFilter(filter) },

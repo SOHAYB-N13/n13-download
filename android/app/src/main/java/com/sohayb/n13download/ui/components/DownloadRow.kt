@@ -18,13 +18,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.sohayb.n13download.R
 import com.sohayb.n13download.core.N13Format
 import com.sohayb.n13download.domain.model.DownloadTask
 import com.sohayb.n13download.domain.model.TaskStatus
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13Shapes
+import com.sohayb.n13download.ui.util.categoryLabel
+import com.sohayb.n13download.ui.util.errorLabel
 
 /** The inline actions available on a row, already resolved for its state. */
 data class DownloadRowActions(
@@ -44,6 +48,10 @@ data class DownloadRowActions(
  * percentage inside the bar, downloaded/total, speed, ETA, status badge) packed
  * onto a phone-width card, and the inline actions are the same state-dependent
  * set the Windows row exposes.
+ *
+ * The filename, byte counts, speeds and the error text are data, so they are
+ * pinned left-to-right and keep their own reading order in a right-to-left UI.
+ * The category beside the host is UI prose and follows the app direction.
  */
 @Composable
 fun DownloadRow(
@@ -78,7 +86,7 @@ fun DownloadRow(
                 Spacer(Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
+                    N13LtrText(
                         text = task.filename,
                         style = MaterialTheme.typography.titleSmall,
                         color = n13.text1,
@@ -115,8 +123,11 @@ fun DownloadRow(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = N13Format.progressSize(task.downloadedSize, task.totalSize.takeIf { it > 0 }),
+                    N13LtrText(
+                        text = N13Format.progressSize(
+                            task.downloadedSize,
+                            task.totalSize.takeIf { it > 0 },
+                        ),
                         style = MaterialTheme.typography.labelSmall,
                         color = n13.text2,
                         maxLines = 1,
@@ -150,7 +161,7 @@ fun DownloadRow(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = task.error,
+                        text = errorLabel(task.error),
                         style = MaterialTheme.typography.bodySmall,
                         color = n13.danger,
                         maxLines = 2,
@@ -165,9 +176,24 @@ fun DownloadRow(
     }
 }
 
+/** One inline action, with the danger flag resolved rather than inferred. */
+private data class RowActionItem(
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val onClick: () -> Unit,
+    val danger: Boolean = false,
+)
+
 @Composable
 private fun RowActions(task: DownloadTask, actions: DownloadRowActions) {
-    val n13 = LocalN13Colors.current
+    val pause = stringResource(R.string.action_pause)
+    val resume = stringResource(R.string.action_resume)
+    val cancel = stringResource(R.string.action_cancel)
+    val startNow = stringResource(R.string.action_start_now)
+    val retry = stringResource(R.string.action_retry)
+    val open = stringResource(R.string.action_open)
+    val share = stringResource(R.string.action_share)
+
     val items = buildList {
         when (task.status) {
             TaskStatus.DOWNLOADING,
@@ -176,32 +202,32 @@ private fun RowActions(task: DownloadTask, actions: DownloadRowActions) {
             TaskStatus.MERGING,
             TaskStatus.VERIFYING,
             -> {
-                add(Triple("Pause", N13Icons.Pause, actions.onPause))
-                add(Triple("Cancel", N13Icons.XCircle, actions.onCancel))
+                add(RowActionItem(pause, N13Icons.Pause, actions.onPause))
+                add(RowActionItem(cancel, N13Icons.XCircle, actions.onCancel, danger = true))
             }
 
             TaskStatus.PAUSED -> {
-                add(Triple("Resume", N13Icons.Play, actions.onResume))
-                add(Triple("Cancel", N13Icons.XCircle, actions.onCancel))
+                add(RowActionItem(resume, N13Icons.Play, actions.onResume))
+                add(RowActionItem(cancel, N13Icons.XCircle, actions.onCancel, danger = true))
             }
 
             TaskStatus.QUEUED -> {
-                add(Triple("Start now", N13Icons.Bolt, actions.onResume))
-                add(Triple("Cancel", N13Icons.XCircle, actions.onCancel))
+                add(RowActionItem(startNow, N13Icons.Bolt, actions.onResume))
+                add(RowActionItem(cancel, N13Icons.XCircle, actions.onCancel, danger = true))
             }
 
             TaskStatus.FAILED, TaskStatus.CANCELLED -> {
-                add(Triple("Retry", N13Icons.Retry, actions.onRetry))
+                add(RowActionItem(retry, N13Icons.Retry, actions.onRetry))
             }
 
             TaskStatus.COMPLETED -> {
-                add(Triple("Open", N13Icons.External, actions.onOpen))
-                add(Triple("Share", N13Icons.Link, actions.onShare))
+                add(RowActionItem(open, N13Icons.External, actions.onOpen))
+                add(RowActionItem(share, N13Icons.Link, actions.onShare))
             }
 
             TaskStatus.REMOVED -> Unit
         }
-        add(Triple("More", N13Icons.More, actions.onMore))
+        add(RowActionItem(stringResource(R.string.action_more), N13Icons.More, actions.onMore))
     }
 
     Row(
@@ -209,12 +235,12 @@ private fun RowActions(task: DownloadTask, actions: DownloadRowActions) {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        items.forEach { (label, icon, action) ->
+        items.forEach { item ->
             N13RowAction(
-                label = label,
-                icon = icon,
-                onClick = action,
-                danger = label == "Cancel",
+                label = item.label,
+                icon = item.icon,
+                onClick = item.onClick,
+                danger = item.danger,
                 modifier = Modifier.padding(start = 2.dp),
             )
         }
@@ -222,9 +248,11 @@ private fun RowActions(task: DownloadTask, actions: DownloadRowActions) {
 }
 
 /** `cdn.example.com · Archives` — the N13 row subtitle. */
+@Composable
 private fun secondaryLine(task: DownloadTask): String {
     val host = com.sohayb.n13download.core.FilenameResolver.hostOf(task.url)
-    return listOf(host, task.category).filter { it.isNotBlank() }.joinToString(" · ")
+    val category = categoryLabel(task.category)
+    return listOf(host, category).filter { it.isNotBlank() }.joinToString(" · ")
 }
 
 private fun showProgress(task: DownloadTask): Boolean = when (task.status) {
@@ -243,6 +271,7 @@ private fun progressColor(task: DownloadTask) = when (task.status) {
 }
 
 /** Speed / ETA / elapsed, depending on what the task is doing. */
+@Composable
 private fun rightMeta(task: DownloadTask): String = when (task.status) {
     TaskStatus.DOWNLOADING, TaskStatus.STARTING ->
         listOf(
@@ -250,17 +279,22 @@ private fun rightMeta(task: DownloadTask): String = when (task.status) {
             N13Format.formatEta(task.etaSeconds),
         ).filter { it != N13Format.UNKNOWN }.joinToString(" · ")
 
-    TaskStatus.PAUSED -> "Paused · " + N13Format.formatDuration(task.elapsedSeconds)
+    TaskStatus.PAUSED ->
+        stringResource(R.string.row_paused_elapsed, N13Format.formatDuration(task.elapsedSeconds))
+
     TaskStatus.COMPLETED -> N13Format.formatDuration(task.elapsedSeconds)
-    TaskStatus.FAILED -> "Stopped at ${task.percent.toInt()}%"
+    TaskStatus.FAILED -> stringResource(R.string.row_stopped_at, task.percent.toInt())
     else -> N13Format.formatEta(task.etaSeconds)
 }
 
+@Composable
 private fun plainMeta(task: DownloadTask): String {
     val parts = mutableListOf<String>()
     if (task.hasKnownSize) parts += N13Format.humanSize(task.totalSize)
     parts += relativeTime(task.completedAt ?: task.createdAt)
-    if (task.connections > 1) parts += "${task.connections} conn"
+    if (task.connections > 1) {
+        parts += stringResource(R.string.row_connections, task.connections)
+    }
     return parts.filter { it.isNotBlank() }.joinToString(" · ")
 }
 

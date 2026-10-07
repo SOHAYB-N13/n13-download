@@ -1,10 +1,12 @@
 package com.sohayb.n13download.ui.screens.history
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.sohayb.n13download.R
 import com.sohayb.n13download.domain.download.DownloadManager
 import com.sohayb.n13download.domain.model.DownloadTask
 import com.sohayb.n13download.domain.model.TaskStatus
@@ -16,11 +18,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** History filters, using the N13 `history.*` labels. */
-enum class HistoryFilter(val label: String) {
-    ALL("All"),
-    COMPLETED("Completed"),
-    FAILED("Failed"),
-    CANCELLED("Cancelled"),
+/** History filter chips; [labelRes] is resolved in the composable. */
+enum class HistoryFilter(@param:StringRes val labelRes: Int) {
+    ALL(R.string.filter_all),
+    COMPLETED(R.string.filter_completed),
+    FAILED(R.string.filter_failed),
+    CANCELLED(R.string.filter_cancelled),
 }
 
 data class HistoryUiState(

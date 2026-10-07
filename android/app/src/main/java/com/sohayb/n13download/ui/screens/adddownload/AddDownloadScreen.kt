@@ -37,12 +37,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sohayb.n13download.R
 import com.sohayb.n13download.core.CategoryDetector
 import com.sohayb.n13download.core.FilenameResolver
 import com.sohayb.n13download.core.N13Format
@@ -57,6 +59,7 @@ import com.sohayb.n13download.ui.components.N13ConfirmDialog
 import com.sohayb.n13download.ui.components.N13IconButton
 import com.sohayb.n13download.ui.components.N13Icons
 import com.sohayb.n13download.ui.components.N13InfoRow
+import com.sohayb.n13download.ui.components.N13LtrText
 import com.sohayb.n13download.ui.components.N13PrimaryButton
 import com.sohayb.n13download.ui.components.N13SectionLabel
 import com.sohayb.n13download.ui.components.N13SecondaryButton
@@ -66,6 +69,8 @@ import com.sohayb.n13download.ui.components.fileTypeVisual
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13PillShape
 import com.sohayb.n13download.ui.theme.N13Shapes
+import com.sohayb.n13download.ui.util.categoryLabel
+import com.sohayb.n13download.ui.util.errorLabel
 
 /**
  * Add Download.
@@ -114,18 +119,18 @@ fun AddDownloadScreen(
         ) {
             N13IconButton(
                 icon = N13Icons.ChevronLeft,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.action_back),
                 onClick = onCancel,
             )
             Spacer(Modifier.width(4.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "New download",
+                    text = stringResource(R.string.add_title),
                     style = MaterialTheme.typography.headlineSmall,
                     color = LocalN13Colors.current.text1,
                 )
                 Text(
-                    text = "Add a file by URL",
+                    text = stringResource(R.string.add_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = LocalN13Colors.current.text3,
                 )
@@ -145,8 +150,8 @@ fun AddDownloadScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester),
-                label = { Text("Link") },
-                placeholder = { Text("https://example.com/archive.zip") },
+                label = { Text(stringResource(R.string.add_link)) },
+                placeholder = { Text(stringResource(R.string.add_link_placeholder)) },
                 singleLine = true,
                 isError = state.error != null,
                 leadingIcon = {
@@ -160,7 +165,7 @@ fun AddDownloadScreen(
                     if (clipboardLink != null) {
                         N13IconButton(
                             icon = N13Icons.Paste,
-                            contentDescription = "Paste link from clipboard",
+                            contentDescription = stringResource(R.string.add_paste_link),
                             onClick = { viewModel.onUrlChange(clipboardLink) },
                             size = 36.dp,
                         )
@@ -186,7 +191,7 @@ fun AddDownloadScreen(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = state.error.orEmpty(),
+                        text = errorLabel(state.error.orEmpty()),
                         style = MaterialTheme.typography.bodySmall,
                         color = LocalN13Colors.current.danger,
                     )
@@ -201,12 +206,15 @@ fun AddDownloadScreen(
             Spacer(Modifier.height(18.dp))
 
             // ---- File name -------------------------------------------------
-            N13SectionLabel(text = "File name", modifier = Modifier.padding(bottom = 6.dp))
+            N13SectionLabel(
+                text = stringResource(R.string.add_file_name),
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
             OutlinedTextField(
                 value = state.filename,
                 onValueChange = viewModel::onFilenameChange,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Detected automatically") },
+                placeholder = { Text(stringResource(R.string.add_filename_placeholder)) },
                 singleLine = true,
                 shape = N13Shapes.small,
                 colors = n13TextFieldColors(),
@@ -215,11 +223,15 @@ fun AddDownloadScreen(
             Spacer(Modifier.height(18.dp))
 
             // ---- Category ---------------------------------------------------
-            N13SectionLabel(text = "Category", modifier = Modifier.padding(bottom = 8.dp))
+            N13SectionLabel(
+                text = stringResource(R.string.add_category),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CategoryDetector.ORDER.forEach { category ->
                     N13Chip(
-                        label = category,
+                        // The stored key stays English; only the label translates.
+                        label = categoryLabel(category),
                         icon = categoryIcon(category),
                         selected = state.category == category,
                         onClick = {
@@ -235,16 +247,20 @@ fun AddDownloadScreen(
             Spacer(Modifier.height(10.dp))
 
             // ---- Destination ------------------------------------------------
-            N13SectionLabel(text = "Save to", modifier = Modifier.padding(bottom = 8.dp))
+            N13SectionLabel(
+                text = stringResource(R.string.add_save_to),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
             N13Card {
                 N13InfoRow(
-                    label = "Destination",
+                    label = stringResource(R.string.add_destination),
                     value = destinationLabel(state.settings.destinationKind, state.settings.destinationFolder),
                     icon = N13Icons.Folder,
                     mono = true,
+                    ltr = true,
                 )
                 Text(
-                    text = "Change the download folder in Settings.",
+                    text = stringResource(R.string.add_change_folder),
                     style = MaterialTheme.typography.bodySmall,
                     color = LocalN13Colors.current.text3,
                     modifier = Modifier.padding(start = 42.dp, end = 14.dp, bottom = 12.dp),
@@ -255,7 +271,10 @@ fun AddDownloadScreen(
 
             // ---- Advanced ---------------------------------------------------
             N13TextAction(
-                label = if (state.advancedExpanded) "Hide advanced options" else "Advanced options",
+                label = stringResource(
+                    if (state.advancedExpanded) R.string.add_advanced_hide
+                    else R.string.add_advanced,
+                ),
                 onClick = viewModel::toggleAdvanced,
                 color = LocalN13Colors.current.text2,
                 modifier = Modifier.padding(horizontal = 0.dp),
@@ -267,8 +286,8 @@ fun AddDownloadScreen(
                     value = state.checksum,
                     onValueChange = viewModel::onChecksumChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Checksum") },
-                    placeholder = { Text("MD5 or SHA-256, optional") },
+                    label = { Text(stringResource(R.string.add_checksum)) },
+                    placeholder = { Text(stringResource(R.string.add_checksum_placeholder)) },
                     singleLine = true,
                     isError = state.checksum.isNotBlank() && !isValidChecksum(state.checksum),
                     shape = N13Shapes.small,
@@ -277,7 +296,7 @@ fun AddDownloadScreen(
                 if (state.checksum.isNotBlank() && !isValidChecksum(state.checksum)) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = "A checksum must be 32 (MD5) or 64 (SHA-256) hex characters",
+                        text = stringResource(R.string.add_checksum_invalid),
                         style = MaterialTheme.typography.bodySmall,
                         color = LocalN13Colors.current.danger,
                     )
@@ -301,10 +320,19 @@ fun AddDownloadScreen(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            N13SecondaryButton(label = "Cancel", onClick = onCancel)
+            N13SecondaryButton(
+                label = stringResource(R.string.action_cancel),
+                onClick = onCancel,
+            )
             Spacer(Modifier.width(10.dp))
             N13PrimaryButton(
-                label = if (state.adding) "Adding…" else if (state.startNow) "Download now" else "Add to queue",
+                label = stringResource(
+                    when {
+                        state.adding -> R.string.add_adding
+                        state.startNow -> R.string.add_download_now
+                        else -> R.string.add_to_queue
+                    },
+                ),
                 onClick = { viewModel.submit() },
                 icon = N13Icons.Download,
                 enabled = state.canSubmit,
@@ -354,7 +382,7 @@ private fun DetectionCard(state: AddDownloadUiState) {
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = "Inspecting link…",
+                    text = stringResource(R.string.add_inspecting),
                     style = MaterialTheme.typography.bodyMedium,
                     color = n13.text2,
                 )
@@ -370,7 +398,7 @@ private fun DetectionCard(state: AddDownloadUiState) {
                 )
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    text = "Could not inspect this link",
+                    text = stringResource(R.string.add_cannot_inspect),
                     style = MaterialTheme.typography.bodyMedium,
                     color = n13.text2,
                 )
@@ -396,7 +424,8 @@ private fun DetectionCard(state: AddDownloadUiState) {
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
+                // Resolved filename is data: keep it left-to-right.
+                N13LtrText(
                     text = state.filename.ifBlank { analysis.filename },
                     style = MaterialTheme.typography.titleSmall,
                     color = n13.text1,
@@ -405,7 +434,7 @@ private fun DetectionCard(state: AddDownloadUiState) {
                 )
                 Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
+                    N13LtrText(
                         text = analysisMeta(analysis),
                         style = MaterialTheme.typography.bodySmall,
                         color = n13.text3,
@@ -421,7 +450,7 @@ private fun DetectionCard(state: AddDownloadUiState) {
                                 .padding(horizontal = 7.dp, vertical = 2.dp),
                         ) {
                             Text(
-                                text = "Resumable",
+                                text = stringResource(R.string.add_resumable),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = n13.success,
                             )
@@ -454,16 +483,15 @@ private fun StartImmediatelyToggle(checked: Boolean, onCheckedChange: (Boolean) 
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Start immediately",
+                text = stringResource(R.string.add_start_immediately),
                 style = MaterialTheme.typography.bodyMedium,
                 color = n13.text1,
             )
             Text(
-                text = if (checked) {
-                    "Begins as soon as a queue slot is free"
-                } else {
-                    "Off — added to the queue without starting"
-                },
+                text = stringResource(
+                    if (checked) R.string.add_start_immediately_hint
+                    else R.string.add_start_later_hint,
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = n13.text3,
             )
@@ -506,7 +534,10 @@ private fun DuplicateConflictDialog(
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = if (isActive) "Already downloading" else "Duplicate detected",
+                        text = stringResource(
+                            if (isActive) R.string.duplicate_active_title
+                            else R.string.duplicate_title,
+                        ),
                         style = MaterialTheme.typography.titleMedium,
                         color = n13.text1,
                     )
@@ -516,9 +547,9 @@ private fun DuplicateConflictDialog(
 
                 Text(
                     text = if (isActive) {
-                        "This URL is already in your download queue."
+                        stringResource(R.string.duplicate_active_message)
                     } else {
-                        "A file named \"${conflict.filename}\" already exists in the destination."
+                        stringResource(R.string.duplicate_exists_message, conflict.filename)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = n13.text2,
@@ -529,34 +560,34 @@ private fun DuplicateConflictDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (isActive) {
                         N13PrimaryButton(
-                            label = "Open existing",
+                            label = stringResource(R.string.duplicate_open_existing),
                             onClick = { onChoice(DuplicateChoice.OPEN_EXISTING) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         N13SecondaryButton(
-                            label = "Download anyway",
+                            label = stringResource(R.string.duplicate_download_anyway),
                             onClick = { onChoice(DuplicateChoice.DOWNLOAD_ANYWAY) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     } else {
                         N13PrimaryButton(
-                            label = "Rename automatically",
+                            label = stringResource(R.string.duplicate_rename),
                             onClick = { onChoice(DuplicateChoice.RENAME) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         N13SecondaryButton(
-                            label = "Download anyway",
+                            label = stringResource(R.string.duplicate_download_anyway),
                             onClick = { onChoice(DuplicateChoice.DOWNLOAD_ANYWAY) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         N13SecondaryButton(
-                            label = "Replace existing",
+                            label = stringResource(R.string.duplicate_replace),
                             onClick = { onChoice(DuplicateChoice.REPLACE) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
                     N13SecondaryButton(
-                        label = "Cancel",
+                        label = stringResource(R.string.action_cancel),
                         onClick = onDismiss,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -580,20 +611,24 @@ private fun n13TextFieldColors() = TextFieldDefaults.colors(
     cursorColor = LocalN13Colors.current.accent,
 )
 
+@Composable
 private fun analysisMeta(analysis: DownloadAnalysis): String {
-    val size = if (analysis.hasKnownSize) N13Format.humanSize(analysis.totalSize) else "Unknown size"
+    val size = if (analysis.hasKnownSize) {
+        N13Format.humanSize(analysis.totalSize)
+    } else {
+        stringResource(R.string.add_unknown_size)
+    }
     val host = FilenameResolver.hostOf(analysis.finalUrl.ifBlank { analysis.url })
     return listOf(size, host).filter { it.isNotBlank() }.joinToString(" · ")
 }
 
-private fun destinationLabel(kind: DestinationKind, folder: String): String {
-    val base = when (kind) {
-        DestinationKind.APP -> "App storage"
-        DestinationKind.MEDIA_STORE -> "Downloads"
-        DestinationKind.TREE -> "Chosen folder"
-    }
-    return if (folder.isBlank()) base else "$base/$folder"
-}
+@Composable
+private fun destinationLabel(kind: DestinationKind, folder: String): String =
+    com.sohayb.n13download.ui.util.DestinationLabels.pathLabel(
+        context = LocalContext.current,
+        kind = kind,
+        folder = folder,
+    )
 
 private fun isValidChecksum(value: String): Boolean {
     val clean = value.trim()

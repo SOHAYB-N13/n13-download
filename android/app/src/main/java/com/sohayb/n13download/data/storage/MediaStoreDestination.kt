@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.annotation.RequiresApi
 import com.sohayb.n13download.domain.download.DownloadDestination
@@ -46,7 +47,19 @@ class MediaStoreDestination(
         }
 
     override val displayPath: String
-        get() = if (safeFolder.isEmpty()) "Downloads" else "Downloads/$safeFolder"
+        get() = if (safeFolder.isEmpty()) {
+            "Downloads"
+        } else {
+            "Downloads/$safeFolder"
+        }
+
+    /** The path a user would type in a file manager, e.g. `Downloads/N13-Download/`. */
+    override val friendlyPath: String
+        get() = if (safeFolder.isEmpty()) {
+            "Downloads/"
+        } else {
+            "Downloads/$safeFolder/"
+        }
 
     override val reference: String get() = safeFolder
 
@@ -133,6 +146,24 @@ class MediaStoreDestination(
     override fun contentUri(name: String): Uri =
         pending[name] ?: resolveUri(name) ?: collection()
 
+    /**
+     * The folder as an external-storage document, so "Open Folder" can reveal
+     * `Downloads/N13-Download/` instead of the file.
+     *
+     * MediaStore has no URI for a folder, so the document is addressed through
+     * the external-storage provider using the same relative path this destination
+     * writes to.  Returns null when the folder name is empty (the whole
+     * Downloads folder), because addressing the volume root as a document is
+     * provider-specific and the caller's path fallback is more reliable there.
+     */
+    override fun folderUri(name: String): Uri? {
+        if (safeFolder.isEmpty()) return null
+        val relative = relativePath.trimEnd('/')
+        return runCatching {
+            DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, "primary:$relative")
+        }.getOrNull()
+    }
+
     override fun filePath(name: String): String? = null
 
     private fun resolveUri(name: String): Uri? {
@@ -153,5 +184,7 @@ class MediaStoreDestination(
 
     private companion object {
         const val BUFFER_SIZE = 1 shl 16
+        /** Provider that serves the shared external volume as documents. */
+        const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     }
 }

@@ -28,9 +28,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sohayb.n13download.R
 import com.sohayb.n13download.core.N13Format
 import com.sohayb.n13download.domain.download.DownloadManager
 import com.sohayb.n13download.domain.model.DownloadTask
@@ -44,6 +47,7 @@ import com.sohayb.n13download.ui.components.N13EmptyState
 import com.sohayb.n13download.ui.components.N13IconButton
 import com.sohayb.n13download.ui.components.N13Icons
 import com.sohayb.n13download.ui.components.N13ListPadding
+import com.sohayb.n13download.ui.components.N13LtrText
 import com.sohayb.n13download.ui.components.N13PageHeader
 import com.sohayb.n13download.ui.components.N13PrimaryButton
 import com.sohayb.n13download.ui.components.N13Sheet
@@ -52,6 +56,8 @@ import com.sohayb.n13download.ui.components.N13TextAction
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13Shapes
 import com.sohayb.n13download.ui.util.FileActions
+import com.sohayb.n13download.ui.util.localizedLabel
+import com.sohayb.n13download.ui.util.priorityChipLabel
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 
@@ -83,25 +89,25 @@ fun DownloadsScreen(
 
     Column(modifier = modifier.fillMaxSize()) {
         N13PageHeader(
-            title = "Downloads",
+            titleRes = R.string.downloads_title,
             trailing = {
                 if (state.queuePaused) {
                     N13IconButton(
                         icon = N13Icons.Play,
-                        contentDescription = "Resume the queue",
+                        contentDescription = stringResource(R.string.downloads_resume_queue),
                         onClick = viewModel::resumeAll,
                         tint = LocalN13Colors.current.success,
                     )
                 } else {
                     N13IconButton(
                         icon = N13Icons.Pause,
-                        contentDescription = "Pause the queue",
+                        contentDescription = stringResource(R.string.downloads_pause_queue),
                         onClick = viewModel::pauseAll,
                     )
                 }
                 N13IconButton(
                     icon = N13Icons.Plus,
-                    contentDescription = "New download",
+                    contentDescription = stringResource(R.string.downloads_new),
                     onClick = onAddDownload,
                     tint = LocalN13Colors.current.accent,
                 )
@@ -109,7 +115,7 @@ fun DownloadsScreen(
         )
 
         // ---- Queue summary strip ------------------------------------------
-        if (state.tasks.isNotEmpty()) {
+        if (state.allTasks.isNotEmpty()) {
             QueueSummaryStrip(
                 state = state,
                 onToggleQueue = {
@@ -123,27 +129,27 @@ fun DownloadsScreen(
         }
 
         // ---- Filters -------------------------------------------------------
-        if (state.tasks.isNotEmpty()) {
+        if (state.allTasks.isNotEmpty()) {
             FilterRow(state = state, onFilter = viewModel::setFilter)
         }
 
         Box(modifier = Modifier.weight(1f)) {
             when {
-                state.tasks.isEmpty() -> N13EmptyState(
+                state.allTasks.isEmpty() -> N13EmptyState(
                     icon = N13Icons.Download,
-                    title = "No downloads yet",
-                    message = "Paste a link or share one to N13 and it will show up here.",
-                    primaryLabel = "New download",
+                    title = stringResource(R.string.downloads_empty_title),
+                    message = stringResource(R.string.downloads_empty_message),
+                    primaryLabel = stringResource(R.string.downloads_new),
                     onPrimary = onAddDownload,
-                    secondaryLabel = "Open history",
+                    secondaryLabel = stringResource(R.string.downloads_open_history),
                     onSecondary = onOpenHistory,
                 )
 
                 state.visible.isEmpty() -> N13EmptyState(
                     icon = N13Icons.Filter,
-                    title = "Nothing matches",
-                    message = "Try a different filter.",
-                    primaryLabel = "Show all downloads",
+                    title = stringResource(R.string.downloads_nothing_matches_title),
+                    message = stringResource(R.string.downloads_nothing_matches_message),
+                    primaryLabel = stringResource(R.string.downloads_show_all),
                     onPrimary = { viewModel.setFilter(QueueFilter.ALL) },
                 )
 
@@ -197,13 +203,18 @@ fun DownloadsScreen(
 
     confirmTask?.let { task ->
         N13ConfirmDialog(
-            title = if (deleteFileOnRemove) "Delete file" else "Remove download",
+            title = stringResource(
+                if (deleteFileOnRemove) R.string.confirm_delete_file_title
+                else R.string.confirm_remove_title,
+            ),
             message = if (deleteFileOnRemove) {
-                "Permanently delete \"${task.filename}\" from disk? This cannot be undone."
+                stringResource(R.string.confirm_delete_file_message, task.filename)
             } else {
-                "Remove this entry from the list? The file on disk is kept."
+                stringResource(R.string.confirm_remove_message)
             },
-            confirmLabel = if (deleteFileOnRemove) "Delete" else "Remove",
+            confirmLabel = stringResource(
+                if (deleteFileOnRemove) R.string.action_delete else R.string.action_remove,
+            ),
             onConfirm = {
                 viewModel.remove(task.id, deleteFileOnRemove)
                 confirmTask = null
@@ -222,7 +233,7 @@ private fun QueueSummaryStrip(
 ) {
     val n13 = LocalN13Colors.current
     val slots = state.settings.maxConcurrent
-    val waiting = state.tasks.count { it.status == com.sohayb.n13download.domain.model.TaskStatus.QUEUED }
+    val waiting = state.allTasks.count { it.status == com.sohayb.n13download.domain.model.TaskStatus.QUEUED }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
         if (state.queuePaused) {
@@ -242,12 +253,16 @@ private fun QueueSummaryStrip(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Queue paused — waiting downloads will not start",
+                    text = stringResource(R.string.downloads_queue_paused),
                     style = MaterialTheme.typography.bodySmall,
                     color = n13.warning,
                     modifier = Modifier.weight(1f),
                 )
-                N13TextAction(label = "Resume", onClick = onToggleQueue, color = n13.warning)
+                N13TextAction(
+                    label = stringResource(R.string.action_resume),
+                    onClick = onToggleQueue,
+                    color = n13.warning,
+                )
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -259,17 +274,21 @@ private fun QueueSummaryStrip(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     StatBlock(
-                        label = "Active",
-                        value = "${state.activeCount} of $slots",
+                        label = stringResource(R.string.downloads_stat_active),
+                        value = stringResource(R.string.downloads_active_of, state.activeCount, slots),
                         modifier = Modifier.weight(1f),
                     )
                     StatBlock(
-                        label = "Waiting",
-                        value = if (waiting == 0) "none" else waiting.toString(),
+                        label = stringResource(R.string.downloads_stat_waiting),
+                        value = if (waiting == 0) {
+                            stringResource(R.string.downloads_waiting_none)
+                        } else {
+                            waiting.toString()
+                        },
                         modifier = Modifier.weight(1f),
                     )
                     StatBlock(
-                        label = "Bandwidth",
+                        label = stringResource(R.string.downloads_stat_bandwidth),
                         value = if (state.totalSpeed > 1.0) {
                             N13Format.formatSpeed(state.totalSpeed)
                         } else {
@@ -283,7 +302,7 @@ private fun QueueSummaryStrip(
                 if (state.failedCount > 0) {
                     Spacer(Modifier.height(6.dp))
                     N13TextAction(
-                        label = "Retry failed (${state.failedCount})",
+                        label = stringResource(R.string.downloads_retry_failed, state.failedCount),
                         onClick = onRetryFailed,
                         modifier = Modifier.padding(start = 8.dp),
                     )
@@ -326,7 +345,7 @@ private fun FilterRow(state: DownloadsUiState, onFilter: (QueueFilter) -> Unit) 
     ) {
         QueueFilter.entries.forEach { filter ->
             N13Chip(
-                label = filter.label,
+                label = stringResource(filter.labelRes),
                 count = state.countFor(filter),
                 selected = state.filter == filter,
                 onClick = { onFilter(filter) },
@@ -359,16 +378,19 @@ private fun DownloadActionsSheet(
     N13Sheet(onDismiss = onDismiss) {
         Column(modifier = Modifier.padding(bottom = 12.dp)) {
             Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)) {
-                Text(
+                // Filename and URL are data: they keep their own left-to-right
+                // reading order whatever the UI language is.
+                N13LtrText(
                     text = task.filename,
                     style = MaterialTheme.typography.titleMedium,
                     color = n13.text1,
                 )
-                Text(
+                N13LtrText(
                     text = task.url,
                     style = MaterialTheme.typography.bodySmall,
                     color = n13.text3,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 
@@ -382,35 +404,40 @@ private fun DownloadActionsSheet(
             }
 
             if (task.isOpenable) {
-                N13SheetItem(N13Icons.External, "Open file", onOpen)
-                N13SheetItem(N13Icons.Link, "Share", onShare)
-                N13SheetItem(N13Icons.FolderOpen, "Open folder", onOpenFolder)
-                N13SheetItem(N13Icons.Copy, "Copy path", onCopyPath)
+                N13SheetItem(N13Icons.External, stringResource(R.string.action_open_file), onOpen)
+                N13SheetItem(N13Icons.Link, stringResource(R.string.action_share), onShare)
+                N13SheetItem(N13Icons.FolderOpen, stringResource(R.string.action_open_folder), onOpenFolder)
+                N13SheetItem(N13Icons.Copy, stringResource(R.string.action_copy_path), onCopyPath)
             }
-            N13SheetItem(N13Icons.Copy, "Copy URL", onCopyLink)
+            N13SheetItem(N13Icons.Copy, stringResource(R.string.action_copy_url), onCopyLink)
             if (task.isRetryable) {
-                N13SheetItem(N13Icons.Retry, "Redownload", onRetry)
+                N13SheetItem(N13Icons.Retry, stringResource(R.string.action_redownload), onRetry)
             }
             N13SheetItem(
                 N13Icons.Flag,
-                "Priority",
+                stringResource(R.string.priority_title),
                 { showPriority = true },
-                trailingText = task.priority.label,
+                trailingText = task.priority.localizedLabel(),
             )
             N13SheetItem(
                 N13Icons.Gauge,
-                "Speed limit",
+                stringResource(R.string.field_speed_limit),
                 { showSpeed = true },
                 trailingText = if (task.speedLimitBps > 0L) {
                     N13Format.formatSpeed(task.speedLimitBps.toDouble())
                 } else {
-                    "Unlimited"
+                    stringResource(R.string.settings_unlimited)
                 },
             )
-            N13SheetItem(N13Icons.Info, "Properties", onProperties)
-            N13SheetItem(N13Icons.Trash, "Remove from list", onRemove)
+            N13SheetItem(N13Icons.Info, stringResource(R.string.action_properties), onProperties)
+            N13SheetItem(N13Icons.Trash, stringResource(R.string.action_remove_from_list), onRemove)
             if (task.isOpenable) {
-                N13SheetItem(N13Icons.Alert, "Delete file", onDeleteFile, danger = true)
+                N13SheetItem(
+                    N13Icons.Alert,
+                    stringResource(R.string.action_delete_file),
+                    onDeleteFile,
+                    danger = true,
+                )
             }
         }
     }
@@ -421,13 +448,13 @@ private fun PriorityPicker(current: DownloadPriority, onPick: (DownloadPriority)
     val n13 = LocalN13Colors.current
     Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
         Text(
-            text = "Priority",
+            text = stringResource(R.string.priority_title),
             style = MaterialTheme.typography.titleMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "When a queue slot frees up, higher priority downloads start first.",
+            text = stringResource(R.string.priority_hint),
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
         )
@@ -437,9 +464,9 @@ private fun PriorityPicker(current: DownloadPriority, onPick: (DownloadPriority)
                 DownloadPriority.HIGH to DownloadPriority.HIGH_PRESET,
                 DownloadPriority.NORMAL to DownloadPriority.NORMAL_PRESET,
                 DownloadPriority.LOW to DownloadPriority.LOW_PRESET,
-            ).forEach { (label, preset) ->
+            ).forEach { (priority, preset) ->
                 N13Chip(
-                    label = "$label priority",
+                    label = priorityChipLabel(priority),
                     selected = current.value == preset,
                     onClick = { onPick(DownloadPriority.of(preset)) },
                 )
@@ -451,8 +478,9 @@ private fun PriorityPicker(current: DownloadPriority, onPick: (DownloadPriority)
 @Composable
 private fun SpeedLimitPicker(current: Long, onPick: (Long) -> Unit) {
     val n13 = LocalN13Colors.current
+    val unlimited = stringResource(R.string.settings_unlimited)
     val presets = listOf(
-        "Unlimited" to 0L,
+        unlimited to 0L,
         "256 KB/s" to 256L * 1024,
         "512 KB/s" to 512L * 1024,
         "1 MB/s" to 1024L * 1024,
@@ -462,13 +490,13 @@ private fun SpeedLimitPicker(current: Long, onPick: (Long) -> Unit) {
 
     Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
         Text(
-            text = "Speed limit",
+            text = stringResource(R.string.field_speed_limit),
             style = MaterialTheme.typography.titleMedium,
             color = n13.text1,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "Caps the real transfer rate for this download only.",
+            text = stringResource(R.string.speed_limit_picker_hint),
             style = MaterialTheme.typography.bodySmall,
             color = n13.text3,
         )
@@ -476,6 +504,7 @@ private fun SpeedLimitPicker(current: Long, onPick: (Long) -> Unit) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             presets.forEach { (label, value) ->
                 N13Chip(
+                    // The rate itself is a technical value and stays LTR.
                     label = label,
                     selected = current == value,
                     onClick = { onPick(value) },

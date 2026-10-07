@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.sohayb.n13download.domain.download.DownloadManager
+import com.sohayb.n13download.domain.model.AppLanguage
 import com.sohayb.n13download.domain.model.ConnectionMode
 import com.sohayb.n13download.domain.model.DestinationKind
 import com.sohayb.n13download.domain.model.DownloadSettings
@@ -89,6 +90,16 @@ class SettingsViewModel(
     fun setThemeMode(mode: ThemeMode) = update { it.copy(themeMode = mode) }
 
     fun setAccentColor(argb: Long) = update { it.copy(accentColor = argb) }
+
+    /**
+     * Persists the chosen interface language.
+     *
+     * Applying it — and rebuilding the UI — is the caller's job, because that
+     * needs the Activity. Splitting it this way keeps the ViewModel free of
+     * Android UI types and keeps the persistence path the same as every other
+     * setting.
+     */
+    fun setLanguage(language: AppLanguage) = update { it.copy(language = language) }
 
     fun resetUserAgent() = update {
         it.copy(userAgent = com.sohayb.n13download.core.BrowserHeaders.DEFAULT_USER_AGENT)

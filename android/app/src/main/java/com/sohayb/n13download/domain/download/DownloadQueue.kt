@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -182,7 +181,7 @@ class DownloadQueue(
     }
 
     suspend fun retryAllFailed() {
-        val candidates = repository.observeAll().first()
+        val candidates = repository.allNow()
             .filter { it.status == TaskStatus.FAILED || it.status == TaskStatus.CANCELLED }
         candidates.forEach { retry(it.id) }
     }
@@ -217,7 +216,7 @@ class DownloadQueue(
 
     suspend fun pauseAll() {
         _queuePaused.value = true
-        repository.observeAll().first()
+        repository.allNow()
             .filter { it.status == TaskStatus.QUEUED }
             .forEach { repository.updateStatus(it.id, TaskStatus.PAUSED) }
         updateActiveCount()
@@ -225,7 +224,7 @@ class DownloadQueue(
 
     suspend fun resumeAll() {
         _queuePaused.value = false
-        repository.observeAll().first()
+        repository.allNow()
             .filter { it.status == TaskStatus.PAUSED }
             .forEach { repository.update(it.copy(status = TaskStatus.QUEUED, autostart = true)) }
         pump()
@@ -260,8 +259,11 @@ class DownloadQueue(
         val settings = settingsProvider.current()
         val limit = settings.maxConcurrent.coerceAtLeast(1)
 
-        // Read the candidate list outside the lock; it is a database call.
-        val pending = repository.observeAll().first()
+        // Read the candidate list outside the lock, straight from the database.
+        // This must not be the shared UI stream: a one-shot read of that can be
+        // answered from its replay buffer and miss the row the caller just
+        // inserted, leaving a freshly added download queued at 0% forever.
+        val pending = repository.allNow()
             .filter { it.status == TaskStatus.QUEUED && it.autostart }
             .sortedWith(QUEUE_ORDER)
 

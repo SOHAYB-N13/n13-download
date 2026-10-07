@@ -2,6 +2,8 @@ package com.sohayb.n13download.data.storage
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import com.sohayb.n13download.domain.download.DownloadDestination
 import com.sohayb.n13download.domain.model.DestinationKind
@@ -37,6 +39,9 @@ class FileDirectoryDestination(
 
     override val displayPath: String
         get() = if (folder.isBlank()) labelPrefix else "$labelPrefix/$folder"
+
+    override val friendlyPath: String
+        get() = if (folder.isBlank()) "$labelPrefix/" else "$labelPrefix/$folder/"
 
     override val reference: String get() = folder
 
@@ -94,11 +99,34 @@ class FileDirectoryDestination(
 
     override fun filePath(name: String): String? = SafePath.resolve(directory, name)?.absolutePath
 
+    /**
+     * A document URI for [directory] when it is reachable as one.
+     *
+     * The public Downloads folder is exposed by the external-storage provider
+     * from API 29; app storage has no document provider at all, so there the
+     * caller uses the on-disk path.  Deliberately never throws: resolving is
+     * best-effort and a failure just means "use the path fallback".
+     */
+    override fun folderUri(name: String): Uri? {
+        if (kind != DestinationKind.MEDIA_STORE) return null
+        return runCatching {
+            val externalRoot = Environment.getExternalStorageDirectory().absolutePath
+            val relative = directory.absolutePath
+                .removePrefix(externalRoot)
+                .trimStart('/')
+            // The provider identifies storage by a volume label, not a mount path.
+            val documentId = "primary:" + relative.trimEnd('/')
+            DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, documentId)
+        }.getOrNull()
+    }
+
     private fun stagingFile(name: String): File =
         File(directory, "$name$TEMP_SUFFIX")
 
     private companion object {
         const val BUFFER_SIZE = 1 shl 16
         const val TEMP_SUFFIX = ".n13part"
+        /** Provider that serves the shared external volume as documents. */
+        const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
     }
 }
