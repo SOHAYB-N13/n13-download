@@ -3,6 +3,32 @@
 ``probe_url`` keeps the original 5-field return contract.  ``probe_with_headers``
 extends it with the raw response headers so the analyzer can extract
 ``ETag`` / ``Last-Modified`` / ``Server`` / ``Content-Type`` for the task model.
+
+What the probe guarantees
+=========================
+A probe is *metadata discovery*, and the transfer plan is built from its
+answer, so a wrong answer is expensive: claiming range support a server does
+not have makes every part fetch the whole file, and claiming a size the server
+does not serve produces a truncated "complete" download.
+
+The strategy is therefore "cheapest reliable answer, never a guess":
+
+1. ``HEAD`` — one round trip, no body.
+2. If HEAD did not advertise ``Accept-Ranges: bytes`` but the file is large
+   enough for the answer to matter, spend **one extra byte** on
+   ``Range: bytes=0-0`` to find out whether ranges work anyway.  Plenty of CDNs
+   support them without advertising, and this is the only way to tell.  Small
+   files skip it: they download as a single stream either way, so the answer
+   cannot change the plan.
+3. If HEAD was unusable (405/403/blocked/slow), fall back to the ranged GET and
+   then to a plain GET.
+
+A ``206`` is only believed when it carries a ``Content-Range`` whose start
+matches the byte that was asked for, and its total is treated as authoritative
+(it corrects a ``Content-Length`` that HEAD got wrong).  A ``200`` answer to a
+ranged request means ranges are *not* honoured — the ``Accept-Ranges`` header
+is ignored in that case, because a server that ignores ranges while advertising
+them is exactly the case that turns one download into N full-file downloads.
 """
 
 from __future__ import annotations
@@ -12,6 +38,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from core.errors import BlockedURLError
 from core.security import validate_download_url
 from core.utils import (
     build_browser_headers,
@@ -23,19 +50,30 @@ if TYPE_CHECKING:
     from config.settings import AppConfig
     from core.session import SessionManager
 
+# Below this size the range answer cannot change the plan (the downloader uses
+# a single stream anyway), so the extra byte is not spent.
+RANGE_PROBE_MIN_SIZE = 1 * 1024 * 1024
 
-def _parse_total_from_response(r: requests.Response) -> Tuple[int, bool]:
-    """Return (total_size, supports_range) extracted from a response."""
-    supports_range = r.status_code == 206
+# Content encodings that make byte ranges meaningless: the server is free to
+# re-compress each response, so offsets in the compressed stream do not line up
+# with offsets in the file.
+_IDENTITY_ENCODINGS = frozenset({"", "identity", "none"})
+
+
+def _metadata_from_headers(r: requests.Response) -> Tuple[int, bool]:
+    """Return ``(total_size, advertises_ranges)`` for a HEAD/200 response.
+
+    ``advertises_ranges`` is only the *claim* (``Accept-Ranges: bytes`` or a
+    ``206`` with a usable ``Content-Range``); proving it takes a ranged request.
+    """
     total_size = 0
+    supports_range = False
 
-    if supports_range:
-        cr = r.headers.get("Content-Range", "")
-        if cr.startswith("bytes"):
-            try:
-                total_size = int(cr.split("/")[1])
-            except (IndexError, ValueError):
-                pass
+    if r.status_code == 206:
+        size, honoured = _range_info(r, requested_start=None)
+        if honoured:
+            total_size = size
+            supports_range = True
 
     if total_size == 0:
         cl = r.headers.get("Content-Length")
@@ -56,6 +94,77 @@ def _parse_total_from_response(r: requests.Response) -> Tuple[int, bool]:
                 break
 
     return total_size, supports_range
+
+
+def _range_info(
+    r: requests.Response, requested_start: Optional[int]
+) -> Tuple[int, bool]:
+    """Return ``(total_size, range_honoured)`` for a *real* ranged response.
+
+    Believed only when the status is ``206``, the body is not re-encoded, and
+    ``Content-Range`` parses and starts where we asked it to.  ``requested_start
+    =None`` skips the start check (used when reading HEAD metadata).
+    """
+    if r.status_code != 206:
+        return 0, False
+    encoding = (r.headers.get("Content-Encoding") or "").strip().lower()
+    if encoding not in _IDENTITY_ENCODINGS:
+        # A compressed body cannot be reassembled from byte ranges.
+        return 0, False
+
+    content_range = r.headers.get("Content-Range", "")
+    if not content_range:
+        return 0, False
+    try:
+        unit, _, rest = content_range.partition(" ")
+        rng, _, total = rest.partition("/")
+        start_text, _, _end_text = rng.partition("-")
+        start = int(start_text)
+        total_size = int(total)
+    except (ValueError, AttributeError):
+        return 0, False
+
+    if unit.strip().lower() != "bytes":
+        return 0, False
+    if requested_start is not None and start != requested_start:
+        # The server answered a different range than the one requested —
+        # resuming against this response would write the wrong bytes.
+        return 0, False
+    if total_size <= 0:
+        return 0, False
+    return total_size, True
+
+
+def _verify_range_support(
+    session: requests.Session,
+    url: str,
+    config: "AppConfig",
+    timeout_tuple: Tuple[float, float],
+) -> Optional[int]:
+    """Spend one byte to learn whether ranges work.  ``None`` = they do not.
+
+    Returns the authoritative total size from ``Content-Range`` when the server
+    answers with a usable ``206``; ``None`` for anything else (including a
+    ``200``, which means the Range header was ignored).
+    """
+    try:
+        r = session.get(
+            url,
+            headers=build_browser_headers(
+                url, config.user_agent, range_header="bytes=0-0", accept="*/*"
+            ),
+            stream=True,
+            timeout=timeout_tuple,
+            allow_redirects=True,
+            verify=config.verify_ssl,
+        )
+    except Exception:
+        return None
+    try:
+        total_size, honoured = _range_info(r, requested_start=0)
+        return total_size if honoured else None
+    finally:
+        r.close()
 
 
 def _probe_impl(
@@ -87,22 +196,23 @@ def _probe_impl(
     timeout_tuple = (connect, read)
 
     # ---- Strategy A: HEAD request ---------------------------------------
+    head: Optional[requests.Response] = None
     try:
-        head = session.head(
+        candidate = session.head(
             url,
             headers=build_browser_headers(url, config.user_agent, accept="*/*"),
             allow_redirects=True,
             timeout=timeout_tuple,
             verify=config.verify_ssl,
         )
-        if head.status_code < 400 and head.status_code != 405:
-            total_size, supports_range = _parse_total_from_response(head)
-            filename = get_filename_from_response(dict(head.headers), url, head.url)
-            ct = head.headers.get("Content-Type", "")
-            if is_html_error_response(ct, urlparse(head.url).path):
-                head = None
-            else:
-                return True, total_size, supports_range, filename, "", dict(head.headers), head.url
+        if candidate.status_code < 400 and candidate.status_code != 405:
+            ct = candidate.headers.get("Content-Type", "")
+            # An HTML interstitial is not the file; fall through to the ranged
+            # GET, which is a better position to diagnose it from.
+            if not is_html_error_response(ct, urlparse(candidate.url).path):
+                head = candidate
+    except BlockedURLError as exc:
+        return False, 0, False, "", f"Blocked by security policy: {exc.reason}", {}, ""
     except requests.exceptions.SSLError:
         return False, 0, False, "", "SSL certificate verification failed", {}, ""
     except requests.exceptions.TooManyRedirects:
@@ -113,6 +223,20 @@ def _probe_impl(
         head = None
     except Exception:
         head = None
+
+    if head is not None:
+        total_size, advertises = _metadata_from_headers(head)
+        filename = get_filename_from_response(dict(head.headers), url, head.url)
+        headers = dict(head.headers)
+
+        if not advertises and total_size >= RANGE_PROBE_MIN_SIZE:
+            proven_size = _verify_range_support(session, url, config, timeout_tuple)
+            if proven_size:
+                # The 206 Content-Range is authoritative and also repairs a
+                # Content-Length that HEAD reported incorrectly.
+                return True, proven_size, True, filename, "", headers, head.url
+
+        return True, total_size, advertises, filename, "", headers, head.url
 
     # ---- Strategy B: ranged GET (1 byte) --------------------------------
     try:
@@ -130,7 +254,7 @@ def _probe_impl(
         if r.status_code >= 400:
             r.close()
             try:
-                r2 = session.get(
+                r = session.get(
                     url,
                     headers=build_browser_headers(url, config.user_agent, accept="*/*"),
                     stream=True,
@@ -138,14 +262,14 @@ def _probe_impl(
                     allow_redirects=True,
                     verify=config.verify_ssl,
                 )
-                r = r2
             except Exception:
                 return False, 0, False, "", f"HTTP {r.status_code} - {getattr(r, 'reason', '')}", {}, ""
 
         if r.status_code >= 400:
             reason = getattr(r, "reason", "") or ""
+            status = r.status_code
             r.close()
-            return False, 0, False, "", f"HTTP {r.status_code} - {reason}", {}, ""
+            return False, 0, False, "", f"HTTP {status} - {reason}", {}, ""
 
         ct = r.headers.get("Content-Type", "")
         if is_html_error_response(ct, urlparse(r.url).path):
@@ -162,12 +286,24 @@ def _probe_impl(
                 "",
             )
 
-        total_size, supports_range = _parse_total_from_response(r)
+        # A 206 here *proves* range support and its Content-Range total is the
+        # authoritative size.  A 200 means ranges were ignored, so the
+        # Accept-Ranges header must not be trusted.
+        proven_size, honoured = _range_info(r, requested_start=0)
+        if honoured:
+            total_size, supports_range = proven_size, True
+        else:
+            total_size, _advertises = _metadata_from_headers(r)
+            supports_range = False
+
         filename = get_filename_from_response(dict(r.headers), url, r.url)
         headers = dict(r.headers)
+        final_url = r.url
         r.close()
-        return True, total_size, supports_range, filename, "", headers, r.url
+        return True, total_size, supports_range, filename, "", headers, final_url
 
+    except BlockedURLError as exc:
+        return False, 0, False, "", f"Blocked by security policy: {exc.reason}", {}, ""
     except requests.exceptions.SSLError:
         return False, 0, False, "", "SSL certificate verification failed", {}, ""
     except requests.exceptions.Timeout:

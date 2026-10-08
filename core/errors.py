@@ -13,9 +13,75 @@ checks must come before the bare ``OSError`` branch.
 from __future__ import annotations
 
 import errno
+import re
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+# Any absolute URL inside a log/diagnostic string.
+_URL_IN_TEXT = re.compile(r"""https?://[^\s'"<>]+""", re.I)
+# ``requests``/urllib3 also quote *relative* URLs (``... url: /f.zip?token=…``),
+# which carry exactly the same secret and are the more common shape.
+_REFERENCE_AFTER_LABEL = re.compile(r"""(?i)(\burl:\s*)([^\s'"<>]+)""")
+
+
+def _scrub_reference(raw: str) -> str:
+    """Drop the query string and any embedded userinfo from one URL."""
+    try:
+        parts = urlsplit(raw)
+    except (ValueError, TypeError):
+        return raw
+    if not parts.query and "@" not in parts.netloc:
+        return raw
+    netloc = parts.netloc.rsplit("@", 1)[-1]  # drop user:pass@
+    query = "<redacted>" if parts.query else ""
+    return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
+
+
+def redact_secrets(text: str) -> str:
+    """Strip credentials and query strings out of URLs inside *text*.
+
+    Exception messages from ``requests`` embed the request URL, and a signed
+    download link carries its authorisation **in the query string**.  Logging
+    the exception verbatim therefore writes a working credential to disk.  This
+    keeps the host and path (which is what a diagnosis needs) and replaces the
+    query and any embedded userinfo with ``<redacted>``.
+
+    Both absolute URLs and the relative ones urllib3 quotes after ``url:`` are
+    handled.  A string containing neither is returned unchanged, so this is
+    safe to apply to every log line.
+    """
+    if not text:
+        return text
+
+    def _scrub(match: "re.Match[str]") -> str:
+        raw = match.group(0)
+        if not urlsplit(raw).netloc:
+            return raw
+        return _scrub_reference(raw)
+
+    text = _URL_IN_TEXT.sub(_scrub, text)
+    return _REFERENCE_AFTER_LABEL.sub(
+        lambda m: m.group(1) + _scrub_reference(m.group(2)), text
+    )
+
+
+class BlockedURLError(requests.RequestException):
+    """A request was refused by the URL security policy.
+
+    Raised by the transport when a *redirect* points at a target the SSRF
+    policy forbids (a private/loopback address, a non-http scheme, an embedded
+    credential).  It is a ``requests`` exception on purpose so every existing
+    ``except requests.RequestException`` handler still catches it, but it is
+    classified as **non-retryable**: retrying a policy decision can never
+    succeed and would only delay the honest error.
+    """
+
+    def __init__(self, reason: str, url: str = "") -> None:
+        super().__init__(reason)
+        self.reason = reason or "Blocked by URL security policy"
+        self.url = url
 
 
 def _os_error_reason(exc: OSError) -> Optional[str]:
@@ -30,6 +96,8 @@ def _os_error_reason(exc: OSError) -> Optional[str]:
 
 def friendly_error_message(exc: BaseException, status: Optional[int] = None) -> str:
     """Return a clean user-facing message for *exc* (and optional HTTP status)."""
+    if isinstance(exc, BlockedURLError):
+        return f"Blocked by security policy: {exc.reason}"
     if isinstance(exc, requests.Timeout):
         return "Connection timed out - the server did not respond"
     if isinstance(exc, requests.ConnectionError):

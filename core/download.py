@@ -53,7 +53,8 @@ from core.session import SessionManager
 from core.speed import SpeedTracker
 from core.state import DownloadState
 from core.throttle import BandwidthLimiter, get_global_limiter, sync_limiter_from_config
-from core.errors import friendly_error_message
+from core.errors import BlockedURLError, friendly_error_message, redact_secrets
+from core.urls import looks_like_filename, url_filename
 from core.utils import (
     build_browser_headers,
     calculate_checksum,
@@ -110,6 +111,10 @@ _RETRYABLE_STATUS = frozenset(
 # Status codes that mean "do not bother retrying" (client-side/permanent).
 _FATAL_STATUS = frozenset(range(400, 500)) - _RETRYABLE_STATUS
 
+# A server-supplied ``Retry-After`` is honoured, but never beyond this, so a
+# broken or hostile value cannot park a download (and its queue slot) for hours.
+_RETRY_AFTER_CAP = 60.0
+
 # Write-buffer flush threshold: accumulate chunks in memory and flush to disk
 # in larger blocks to reduce syscall overhead on every part download.
 
@@ -126,13 +131,48 @@ _STARTUP_RETRY_CAP = 2.0
 _DOWNLOAD_TIMEOUT = (30, 120)
 
 
+def _retry_after_seconds(exc: BaseException) -> Optional[float]:
+    """The server's ``Retry-After`` instruction, in seconds, if it gave one.
+
+    Accepts both forms the RFC allows: a delay in seconds and an HTTP-date.
+    Returns ``None`` when the header is absent or unparseable — an absent
+    instruction is not the same as "retry immediately".
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    raw = (getattr(response, "headers", {}) or {}).get("Retry-After")
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if raw.isdigit():
+        return float(raw)
+    try:
+        from email.utils import parsedate_to_datetime
+
+        target = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if target is None:
+        return None
+    try:
+        now = datetime.now(target.tzinfo) if target.tzinfo else datetime.now()
+    except Exception:
+        return None
+    return max(0.0, (target - now).total_seconds())
+
+
 def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None,
-                 started: bool = False) -> float:
+                 started: bool = False, retry_after: Optional[float] = None) -> float:
     """Compute the next backoff delay, capped and jittered.
 
     ``started=False`` (no byte received yet) uses a fast bounded schedule —
     the startup must never be gated by a long sleep chain.  ``started=True``
     keeps the configured exponential backoff for in-transfer retries.
+
+    ``retry_after`` (from a ``429``/``503`` response) raises the delay to what
+    the server asked for, capped by :data:`_RETRY_AFTER_CAP` so it can never
+    stall the transfer indefinitely.
     """
     if not started:
         base = min(_STARTUP_RETRY_BASE, config.retry_delay)
@@ -147,7 +187,10 @@ def _retry_delay(attempt: int, config: AppConfig, status: Optional[int] = None,
     # Decorrelated jitter in [delay*(1-j), delay*(1+j)].
     jitter = config.retry_jitter
     delay *= 1.0 - jitter + random.random() * (2 * jitter)
-    return max(0.0, delay)
+    delay = max(0.0, delay)
+    if retry_after is not None:
+        delay = max(delay, min(retry_after, _RETRY_AFTER_CAP))
+    return delay
 
 
 def _interruptible_sleep(seconds: float, control=None) -> bool:
@@ -174,9 +217,26 @@ def _is_retryable_exception(exc: BaseException) -> tuple[bool, Optional[int]]:
     """Classify an exception as (retryable, status_code).
 
     Connection/timeout errors are transient.  HTTP errors are retryable only
-    for server-side or explicit-retry status codes.
+    for server-side or explicit-retry status codes.  A refusal by the URL
+    security policy, a redirect loop, and a malformed URL are all permanent:
+    retrying them can never change the outcome, so they must not consume the
+    retry budget (which used to mean 15 pointless attempts and a long stall
+    before the honest error surfaced).
     """
     status: Optional[int] = None
+    if isinstance(exc, BlockedURLError):
+        return False, None
+    if isinstance(
+        exc,
+        (
+            requests.TooManyRedirects,
+            requests.exceptions.URLRequired,
+            requests.exceptions.MissingSchema,
+            requests.exceptions.InvalidSchema,
+            requests.exceptions.InvalidURL,
+        ),
+    ):
+        return False, None
     if isinstance(exc, requests.HTTPError):
         resp = getattr(exc, "response", None)
         status = resp.status_code if resp is not None else None
@@ -196,6 +256,60 @@ def _is_retryable_exception(exc: BaseException) -> tuple[bool, Optional[int]]:
     return False, status
 
 
+class _RangeState:
+    """Shared verdict on whether the parallel byte-range plan is usable.
+
+    Set by the first worker that learns the server will not honour the plan —
+    either it answered a ranged request with ``200`` (ranges ignored) or its
+    ``Content-Range`` reports a different total than the one the plan was built
+    from (metadata changed between the probe and the transfer).  Every other
+    worker then stops immediately instead of each fetching the whole file, and
+    the orchestrator re-runs the transfer as a single stream.
+
+    A plain ``threading.Event`` is enough: the state only ever goes one way, and
+    ``is_set()`` is lock-free on the hot path.
+    """
+
+    __slots__ = ("_event",)
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def mark_unusable(self) -> None:
+        self._event.set()
+
+    @property
+    def unusable(self) -> bool:
+        return self._event.is_set()
+
+
+def _content_range_total(header: str) -> int:
+    """The total entity size from a ``Content-Range`` header (``0`` if absent).
+
+    ``"bytes 0-99/1000"`` → ``1000``.  An unknown total (``"bytes 0-99/*"``)
+    and a malformed header both yield ``0``, meaning "no information" — never a
+    fabricated size.
+    """
+    try:
+        _, _, total = (header or "").partition("/")
+        return int(total)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _content_range_start(header: str) -> Optional[int]:
+    """The first byte offset reported by a ``Content-Range`` header."""
+    try:
+        unit, _, rest = (header or "").partition(" ")
+        if unit.strip().lower() != "bytes":
+            return None
+        rng, _, _total = rest.partition("/")
+        start_text, _, _end_text = rng.partition("-")
+        return int(start_text)
+    except (ValueError, TypeError):
+        return None
+
+
 def _parts_within_directory(parts: List[DownloadPart], directory: Path) -> bool:
     """Reject resume state whose part files escape the download directory."""
     try:
@@ -208,16 +322,17 @@ def _parts_within_directory(parts: List[DownloadPart], directory: Path) -> bool:
 
 
 def _fallback_filename(url: str) -> str:
-    """Best-effort file name from a URL when the probe supplied none."""
-    from urllib.parse import unquote, urlparse
+    """Best-effort file name from a URL when the probe supplied none.
 
-    try:
-        name = unquote(urlparse(url).path or "").rstrip("/").split("/")[-1]
-        if name and name != "/":
-            return name
-    except Exception:
-        pass
-    return "download"
+    One implementation, shared with the UI's display name and the engine's
+    header-based resolver (see :func:`core.urls.url_filename`), so a URL whose
+    filename lives in the query string cannot be named three different things
+    in three places.  Only a *filename-shaped* answer is accepted here —
+    ``url_filename`` falls back to the host, and a file called ``example.com``
+    is less useful than the generic name.
+    """
+    name = url_filename(url)
+    return name if name and looks_like_filename(name) else "download"
 
 
 class DownloadController:
@@ -402,6 +517,7 @@ class DownloadController:
         shared_progress: Optional[dict] = None,
         control=None,
         optimizer=None,
+        range_state: Optional["_RangeState"] = None,
     ) -> bool:
         """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
 
@@ -417,6 +533,12 @@ class DownloadController:
         *   **Redundant Content-Type check** — reserved for the *first* attempt
             only; subsequent retries skip it because the probe already validated
             the response type.
+
+        When *range_state* is supplied and the server turns out not to honour
+        the requested range, the part aborts **before** reading a single body
+        byte and records that on the shared state.  Silently consuming a
+        full-body ``200`` here is what used to make an N-part download transfer
+        the whole file N times over.
         """
         max_retries = max(1, self.config.max_retries)
         chunk_size = self.config.chunk_size
@@ -430,6 +552,11 @@ class DownloadController:
 
         for attempt in range(1, max_retries + 1):
             if cancel_event.is_set() or self._ctl_cancelled(control):
+                return False
+            if range_state is not None and range_state.unusable:
+                # Another part already proved the byte-range plan unusable.
+                # Stop before spending a request (and a full-body response)
+                # confirming it.
                 return False
             if not self._ctl_wait(control):
                 return False
@@ -480,29 +607,37 @@ class DownloadController:
                             )
 
                     bytes_remaining = part.end - range_start + 1
-                    skip_bytes = 0
 
-                    # The server ignored our Range header and returned the whole
-                    # body starting at byte 0 (a 200 to a ranged request).
-                    # Reset any partial data and recompute the skip AFTER all
-                    # state is finalised so every part lands on its own range.
-                    if response.status_code == 200 and existing > 0:
-                        part.path.unlink(missing_ok=True)
-                        with progress_lock:
-                            if shared_progress is not None:
-                                shared_progress["completed"] = max(
-                                    0, shared_progress["completed"] - existing
-                                )
-                        existing = 0
-                        range_start = part.start
-                        bytes_remaining = part.size
-                        skip_bytes = 0
+                    # ---- Range honesty ------------------------------------
+                    # A request counts as "ranged" unless it asks for the whole
+                    # entity, so a single-part plan against a server without
+                    # range support is not flagged here.
+                    ranged_request = range_start > 0 or part.end < total_size - 1
 
-                    if response.status_code == 200 and range_start > 0:
-                        # Skip the leading prefix of the full-body response so
-                        # this part writes exactly [range_start, end).
-                        skip_bytes = range_start
-                        bytes_remaining = part.size
+                    if ranged_request and response.status_code == 200:
+                        # The server ignored Range and is sending the whole body
+                        # from byte 0.  Writing it here would land the wrong
+                        # bytes at the wrong offset, and the old skip-and-trim
+                        # fallback made EVERY part pull the entire file — an
+                        # N-part download cost N× the bandwidth.  Record the
+                        # verdict so the orchestrator can restart this transfer
+                        # as a single stream, and stop before reading a byte.
+                        if range_state is not None:
+                            range_state.mark_unusable()
+                        return False
+
+                    if ranged_request and response.status_code == 206:
+                        cr_total = _content_range_total(
+                            response.headers.get("Content-Range", "")
+                        )
+                        if cr_total and cr_total != total_size:
+                            # The entity changed size between the probe and the
+                            # transfer, so the planned offsets no longer
+                            # describe it.  Rebuilding the plan is the only safe
+                            # answer.
+                            if range_state is not None:
+                                range_state.mark_unusable()
+                            return False
 
                     mode = "wb" if existing == 0 and range_start == part.start else "ab"
 
@@ -533,14 +668,9 @@ class DownloadController:
                             if not raw_chunk:
                                 continue
 
-                            # --- skip / trim (handled inline to avoid copies) ---
-                            if skip_bytes > 0:
-                                if len(raw_chunk) <= skip_bytes:
-                                    skip_bytes -= len(raw_chunk)
-                                    continue
-                                raw_chunk = memoryview(raw_chunk)[skip_bytes:]
-                                skip_bytes = 0
-
+                            # A server may overshoot the end of the requested
+                            # range (it is allowed to send up to the end of the
+                            # entity); trim so the part holds exactly its range.
                             if len(raw_chunk) > bytes_remaining:
                                 raw_chunk = memoryview(raw_chunk)[:bytes_remaining]
 
@@ -621,13 +751,24 @@ class DownloadController:
                 ):
                     detail = f" (HTTP {status})" if status else ""
                     self.last_error = friendly_error_message(exc, status)
+                    # Diagnostics name the exact range and the attempt budget,
+                    # so a failure report is actionable rather than "part
+                    # failed".  URL query strings are redacted: a signed link's
+                    # authorisation lives there and must not reach the log.
                     self._print(
-                        f"[red]Part {part.index} failed after {attempt} "
-                        f"attempt(s){detail}: {exc}"
+                        f"[red]Part {part.index} "
+                        f"(bytes {range_start}-{part.end}, "
+                        f"attempt {attempt}/{max_retries}){detail} failed: "
+                        f"{redact_secrets(str(exc))}"
                     )
                     return False
-                delay = _retry_delay(attempt, self.config, status,
-                                     started=first_byte_seen)
+                delay = _retry_delay(
+                    attempt,
+                    self.config,
+                    status,
+                    started=first_byte_seen,
+                    retry_after=_retry_after_seconds(exc),
+                )
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -693,6 +834,23 @@ class DownloadController:
                     if response.status_code == 200 and resume_from > 0:
                         tmp_path.unlink(missing_ok=True)
                         resume_from = 0
+
+                    if response.status_code == 206 and resume_from > 0:
+                        cr_start = _content_range_start(
+                            response.headers.get("Content-Range", "")
+                        )
+                        if cr_start is not None and cr_start != resume_from:
+                            # The server resumed at a different offset than the
+                            # one requested.  Appending would interleave two
+                            # different byte ranges into one file, so start this
+                            # attempt over from zero instead.
+                            self._print(
+                                f"[yellow]⚠ Server returned range starting at "
+                                f"{cr_start} instead of {resume_from}; "
+                                "restarting this attempt.[/yellow]"
+                            )
+                            tmp_path.unlink(missing_ok=True)
+                            resume_from = 0
 
                     total = int(response.headers.get("Content-Length", 0))
                     if response.status_code == 206:
@@ -796,12 +954,19 @@ class DownloadController:
                     not first_byte_seen and attempt >= startup_attempts
                 ):
                     self.last_error = friendly_error_message(exc, status)
+                    detail = f" (HTTP {status})" if status else ""
                     self._print(
-                        f"[red]Download failed after {attempt} attempt(s): {exc}"
+                        f"[red]Download failed (attempt {attempt}/{max_retries})"
+                        f"{detail}: {redact_secrets(str(exc))}"
                     )
                     return False
-                delay = _retry_delay(attempt, self.config, status,
-                                     started=first_byte_seen)
+                delay = _retry_delay(
+                    attempt,
+                    self.config,
+                    status,
+                    started=first_byte_seen,
+                    retry_after=_retry_after_seconds(exc),
+                )
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -928,7 +1093,7 @@ class DownloadController:
             )
             if sec_ok and resolved.startswith(("http://", "https://")):
                 transfer_url = resolved
-                self._print(f"[dim]Using resolved URL: {resolved}[/dim]")
+                self._print(f"[dim]Using resolved URL: {redact_secrets(resolved)}[/dim]")
             else:
                 self._print(
                     f"[dim]Resolved URL rejected by security checks; "
@@ -1099,6 +1264,7 @@ class DownloadController:
 
                     failed_parts: List[DownloadPart] = []
                     pool = _get_shared_pool(max(len(pending_parts), self.config.num_threads))
+                    range_state = _RangeState()
 
                     def _run_part(part: DownloadPart) -> bool:
                         if governor is not None:
@@ -1116,6 +1282,7 @@ class DownloadController:
                                 shared_progress,
                                 control,
                                 optimizer=optimizer,
+                                range_state=range_state,
                             )
                         finally:
                             if governor is not None:
@@ -1147,6 +1314,26 @@ class DownloadController:
                         "[yellow]Download cancelled. State saved for resume.[/yellow]"
                     )
                     return False
+
+                if range_state.unusable:
+                    # The byte-range plan does not describe what the server is
+                    # actually serving.  Everything derived from it — part
+                    # offsets, part files, resume state — is now meaningless, so
+                    # discard it and fetch the entity as one stream, which reads
+                    # the authoritative size straight from the response.
+                    self._print(
+                        "[yellow]⚠ Server does not honour byte ranges for this "
+                        "file — switching to a single stream.[/yellow]"
+                    )
+                    for stale in parts:
+                        stale.path.unlink(missing_ok=True)
+                    state_mgr.delete()
+                    try:
+                        return self.single_thread_download(
+                            transfer_url, file_path, progress_callback, control=control
+                        )
+                    finally:
+                        DownloadContext.clear()
 
                 if failed_parts:
                     state_mgr.save(url, total_size, parts, effective_threads)

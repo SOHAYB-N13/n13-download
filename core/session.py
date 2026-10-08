@@ -14,6 +14,10 @@ Two transports exist:
 
 A short-TTL DNS cache (60 s) avoids re-resolving the same host for every new
 connection while never pinning changing CDN addresses for long.
+
+Both transports are :class:`_GuardedSession` instances, which re-check the
+SSRF policy on **every redirect hop** rather than only on the URL the user
+supplied — see that class for why the initial URL is exempt.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ from requests.auth import HTTPBasicAuth
 
 from config.settings import AppConfig
 from core.cookies import cookie_header_from_config, resolve_cookie_jar
+from core.errors import BlockedURLError
+from core.security import check_redirect_target
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -120,6 +126,45 @@ class _OptimisedAdapter(requests.adapters.HTTPAdapter):
         return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 
+class _GuardedSession(requests.Session):
+    """A session that re-checks the SSRF policy on every redirect hop.
+
+    ``requests`` follows redirects internally, so validating only the URL the
+    user supplied leaves the classic bypass wide open: a public link that
+    302s to ``http://127.0.0.1:6868/…`` or ``http://169.254.169.254/`` would be
+    fetched without any further inspection.
+
+    The guard hooks :meth:`send`, which ``requests`` also uses for each hop
+    inside :meth:`resolve_redirects` — so a single override covers the whole
+    chain.  The URL the *caller* asked for is deliberately exempt (the probe
+    and the transfer layer already validate it, and re-resolving it per part
+    would add a DNS lookup to the hot path); only a hop that moves the request
+    somewhere else is checked.
+    """
+
+    def __init__(self, block_private: bool = True, **kwargs) -> None:
+        self._block_private = bool(block_private)
+        # Per-thread, because concurrent downloads redirect independently.
+        self._entry_url = threading.local()
+        super().__init__(**kwargs)
+
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        token = getattr(self._entry_url, "value", None)
+        self._entry_url.value = str(url)
+        try:
+            return super().request(method, url, **kwargs)
+        finally:
+            self._entry_url.value = token
+
+    def send(self, request, **kwargs):  # type: ignore[override]
+        entry = getattr(self._entry_url, "value", None)
+        if self._block_private and request.url != entry:
+            allowed, reason = check_redirect_target(request.url, block_private=True)
+            if not allowed:
+                raise BlockedURLError(reason, request.url)
+        return super().send(request, **kwargs)
+
+
 class SessionManager:
     """Lazy, reconfigurable wrapper around :class:`requests.Session`."""
 
@@ -160,7 +205,13 @@ class SessionManager:
 
     def _build_session(self, retry: Optional[object] = None) -> requests.Session:
         config = self._config
-        session = requests.Session()
+        # A guarded session (not a plain requests.Session) so every redirect
+        # hop is re-checked against the SSRF policy.  See _GuardedSession.
+        session = _GuardedSession(
+            block_private=bool(getattr(config, "block_private_urls", True))
+            if config is not None
+            else True
+        )
 
         # Realistic browser-like defaults.
         # NOTE: Accept-Encoding is intentionally NOT set here so urllib3

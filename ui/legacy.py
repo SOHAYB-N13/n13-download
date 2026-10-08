@@ -69,9 +69,14 @@ class LegacyDownloadRunner:
             if time.time() - float(analysis.probed_at) > _HANDOFF_TTL:
                 return False
             from core.security import validate_download_url
-            from core.utils import normalize_url
+            from core.urls import same_resource
 
-            if normalize_url(analysis.url) != normalize_url(url):
+            # Resource identity, not string equality: the same link with a
+            # different host casing, a redundant default port or a trailing
+            # fragment is the same resource and may reuse this result.  The
+            # path and query must still match byte-for-byte, so a handed-off
+            # result can never be applied to a different file.
+            if not same_resource(analysis.url, url):
                 return False
             ok, _ = validate_download_url(
                 url, block_private=self._config.block_private_urls

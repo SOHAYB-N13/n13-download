@@ -1,4 +1,10 @@
-"""Shared utilities."""
+"""Shared utilities.
+
+URL *knowledge* (detection, normalisation, identity, filename hygiene) lives
+in :mod:`core.urls`; the names that historically lived here are re-exported so
+existing ``from core.utils import ...`` callers keep working.  What stays here
+is response-header handling and the generic formatters.
+"""
 
 from __future__ import annotations
 
@@ -8,99 +14,33 @@ import shutil
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-
-# Extension lookup for common MIME types — used as a last-resort hint when the
-# server gives no filename (common with dynamic / download.php?id=... links).
-MIME_TO_EXT = {
-    "application/zip": ".zip",
-    "application/x-zip-compressed": ".zip",
-    "application/x-rar-compressed": ".rar",
-    "application/vnd.rar": ".rar",
-    "application/x-7z-compressed": ".7z",
-    "application/x-tar": ".tar",
-    "application/gzip": ".gz",
-    "application/x-gzip": ".gz",
-    "application/x-bzip2": ".bz2",
-    "application/x-xz": ".xz",
-    "application/pdf": ".pdf",
-    "application/msword": ".doc",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-    "application/vnd.ms-excel": ".xls",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-    "application/vnd.ms-powerpoint": ".ppt",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-    "application/octet-stream": "",
-    "application/x-msdownload": ".exe",
-    "application/x-msi": ".msi",
-    "application/vnd.android.package-archive": ".apk",
-    "application/x-iso9660-image": ".iso",
-    "application/x-shockwave-flash": ".swf",
-    "application/java-archive": ".jar",
-    "application/x-tfont": ".ttf",
-    "font/ttf": ".ttf",
-    "font/otf": ".otf",
-    "application/x-rpm": ".rpm",
-    "application/x-debian-package": ".deb",
-    "application/x-dmg": ".dmg",
-    "application/x-apple-diskimage": ".dmg",
-    "text/plain": ".txt",
-    "text/html": ".html",
-    "text/csv": ".csv",
-    "text/xml": ".xml",
-    "application/json": ".json",
-    "application/xml": ".xml",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
-    "image/svg+xml": ".svg",
-    "image/bmp": ".bmp",
-    "image/x-icon": ".ico",
-    "audio/mpeg": ".mp3",
-    "audio/mp4": ".m4a",
-    "audio/x-wav": ".wav",
-    "audio/ogg": ".ogg",
-    "audio/flac": ".flac",
-    "audio/aac": ".aac",
-    "video/mp4": ".mp4",
-    "video/x-msvideo": ".avi",
-    "video/x-matroska": ".mkv",
-    "video/quicktime": ".mov",
-    "video/webm": ".webm",
-    "video/x-flv": ".flv",
-    "video/mpeg": ".mpeg",
-    "video/3gpp": ".3gp",
-}
-
-
-def sanitize_filename(name: str) -> str:
-    return INVALID_CHARS.sub("_", name).strip(". ") or "downloaded_file"
-
-
-def _looks_like_filename(name: str) -> bool:
-    """A token counts as a usable filename only if it has an extension."""
-    name = name.strip()
-    if not name or name in {".", ".."}:
-        return False
-    # must contain a dot that is not leading/trailing and is followed by alnum
-    stem, dot, ext = name.rpartition(".")
-    if not dot:
-        return False
-    return bool(stem) and bool(ext) and re.fullmatch(r"[A-Za-z0-9]+", ext) is not None
-
-
-def _ext_from_content_type(content_type: str) -> str:
-    ct = (content_type or "").split(";")[0].strip().lower()
-    return MIME_TO_EXT.get(ct, "")
+from core.urls import (  # noqa: F401  (re-exported for backwards compatibility)
+    INVALID_CHARS,
+    MIME_TO_EXT,
+    ext_for_content_type as _ext_from_content_type,
+    looks_like_filename as _looks_like_filename,
+    normalize_url,
+    sanitize_filename,
+    url_filename,
+)
 
 
 def get_filename_from_response(headers: dict, url: str, final_url: str | None = None) -> str:
-    resolved = final_url or url
+    """Resolve a filename from response headers, then the URL.
 
-    # 1) Content-Disposition (RFC 5987 extended) — strongest signal
+    Priority: ``Content-Disposition`` (the server's explicit answer) → the
+    final URL after redirects → the original URL → a Content-Type extension →
+    a safe generated name.  The URL half of the decision is delegated to
+    :func:`core.urls.url_filename`, so the frontend's display name and the
+    engine's saved filename come from one implementation.
+    """
+    resolved = final_url or url
+    ct = headers.get("content-type", "") or headers.get("Content-Type", "")
+    ext_hint = _ext_from_content_type(ct)
+
+    # 1) Content-Disposition — strongest signal.  RFC 5987 extended form first.
     cd = headers.get("content-disposition", "") or headers.get("Content-Disposition", "")
-    match = re.search(r"filename\*\s*=\s*UTF-8''([^\s;]+)", cd, re.I)
+    match = re.search(r"filename\*\s*=\s*(?:UTF-8|utf-8)''([^\s;]+)", cd, re.I)
     if match:
         name = sanitize_filename(unquote(match.group(1)))
         if _looks_like_filename(name):
@@ -111,53 +51,23 @@ def get_filename_from_response(headers: dict, url: str, final_url: str | None = 
         if _looks_like_filename(name):
             return name
 
-    # 2) Last path segment of the final URL (after redirects)
-    candidates = [resolved, url]
-    ct = headers.get("content-type", "") or headers.get("Content-Type", "")
-    ext_hint = _ext_from_content_type(ct)
-    for cand in candidates:
-        path = urlparse(cand).path
-        raw = path.split("/")[-1]
-        if raw:
-            name = sanitize_filename(unquote(raw))
-            if _looks_like_filename(name):
-                return name
+    # 2) The URL itself (final URL after redirects wins over the original).
+    for cand in (resolved, url):
+        name = url_filename(cand)
+        if not name:
+            continue
+        if _looks_like_filename(name):
+            return name
+        # 3) A path segment with no extension — append the Content-Type hint
+        # so the file is still openable.
+        if ext_hint and name not in {"downloaded_file"}:
+            return name + ext_hint
 
-    # 3) Path had a name but no extension — append Content-Type extension
-    for cand in candidates:
-        path = urlparse(cand).path
-        raw = path.split("/")[-1]
-        if raw:
-            name = sanitize_filename(unquote(raw))
-            if name and name not in {"downloaded_file"} and ext_hint:
-                return name + ext_hint
-
-    # 4) Generic fallback — use Content-Type extension so the file is at least usable
+    # 4) Generic fallback — use the Content-Type extension when we have one.
     if ext_hint:
         return "download" + ext_hint
 
     return "downloaded_file"
-
-
-def normalize_url(url: str) -> str:
-    """Trim surrounding whitespace/quotes that come from copy-paste.
-
-    Also auto-prefix https:// when a user pastes a bare domain such as
-    "example.com/file.zip" or "www.example.com/x".
-    """
-    cleaned = (url or "").strip().strip("\"'`").strip()
-    if not cleaned:
-        return ""
-    lower = cleaned.lower()
-    if lower.startswith(("http://", "https://", "ftp://")):
-        return cleaned
-    # scheme-relative
-    if cleaned.startswith("//"):
-        return "https:" + cleaned
-    # bare domain / path
-    if re.match(r"^[a-z0-9.\-]+\.[a-z]{2,}(/|$)", lower) or lower.startswith("www."):
-        return "https://" + cleaned
-    return cleaned
 
 
 def validate_url(url: str) -> bool:
@@ -318,14 +228,21 @@ def is_html_error_response(content_type: str, url_path: str, content_disposition
 
     Used to reject the classic "Download Not Complete" / landing-page pages
     that protected CDNs return when they don't like the request headers.
+
+    A ``text/html`` body is treated as an interstitial **unless the server
+    explicitly named an HTML document** — via ``Content-Disposition`` or a
+    ``.html`` / ``.htm`` / ``.xhtml`` URL path.  Those are real downloads the
+    user asked for, and refusing them made it impossible to fetch a web page.
     """
     ct = (content_type or "").split(";")[0].strip().lower()
-    # A real file almost never arrives with an explicit text/html type.
-    if ct in ("text/html", "application/xhtml+xml"):
-        # ...unless the server explicitly named a .html file via disposition,
-        # in which case we trust the user's URL intent.
-        return True
-    return False
+    if ct not in ("text/html", "application/xhtml+xml"):
+        return False
+    if re.search(r"\.html?['\"]?\s*$", (content_disposition or "").strip(), re.I):
+        return False
+    path = (url_path or "").split("?")[0].split("#")[0].lower()
+    if path.endswith((".html", ".htm", ".xhtml")):
+        return False
+    return True
 
 
 def build_browser_headers(

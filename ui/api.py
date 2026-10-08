@@ -17,6 +17,7 @@ from config.loader import config_dir, save_config
 from config.settings import AppConfig
 from core.session import SessionManager
 from core.updater import UpdateController
+from core.urls import canonical_url
 from core.utils import normalize_url, validate_url
 from ui.common import (
     DownloadRequest,
@@ -515,7 +516,7 @@ class Api(ProjectsApiMixin):
         # so the queue's ANALYZING step does not probe it again.  The runner
         # still validates it (URL match, freshness, SSRF) before reuse.
         probe_analysis = None
-        entry = self._probe_cache.get(normalize_url(url))
+        entry = self._probe_cache.get(self._probe_key(url))
         if entry is not None and (time.time() - entry[0]) <= _PROBE_CACHE_TTL:
             probe_analysis = entry[1]
         request = DownloadRequest(
@@ -854,6 +855,18 @@ class Api(ProjectsApiMixin):
 
     # ── URL validation ────────────────────────────────────────────
 
+    @staticmethod
+    def _probe_key(url: str) -> str:
+        """Cache key for a probe result: the resource identity of *url*.
+
+        Keyed by :func:`core.urls.canonical_url` (not the raw string) so the
+        same link pasted with different host casing, a redundant default port,
+        or a trailing ``#fragment`` reuses the probe instead of re-probing —
+        the fragment is never sent to the server, so it cannot change what the
+        probe would find.
+        """
+        return canonical_url(normalize_url(url or ""))
+
     def validate_url(self, url: str) -> Dict[str, Any]:
         url = normalize_url(url)
         valid = validate_url(url)
@@ -874,7 +887,7 @@ class Api(ProjectsApiMixin):
         try:
             a = _analyze(url, self._config, self._session)
             if a.ok:
-                self._probe_cache[url] = (time.time(), a)
+                self._probe_cache[self._probe_key(url)] = (time.time(), a)
         except Exception as exc:  # never leak a traceback into the UI
             return {"ok": False, "error": str(exc), "normalized": url}
         return {
@@ -896,7 +909,7 @@ class Api(ProjectsApiMixin):
         try:
             a = _analyze(url, self._config, self._session)
             if a.ok:
-                self._probe_cache[url] = (time.time(), a)
+                self._probe_cache[self._probe_key(url)] = (time.time(), a)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         result = a.to_dict()

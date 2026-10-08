@@ -32,6 +32,8 @@ from config.settings import AppConfig
 from core.download import DownloadController
 from core.security import validate_download_url
 from core.session import SessionManager
+from core.urls import canonical_url
+from core.utils import normalize_url
 
 console = Console()
 
@@ -250,17 +252,30 @@ class LiveServer:
     def _validate_and_queue(self, urls, autostart: bool = False) -> tuple:
         """Validate + queue a list of URLs.
 
-        Returns ``(accepted_count, rejected_count)``.  Invalid URLs are counted
-        as rejected and skipped; SSRF validation runs on every URL.
+        Returns ``(accepted_count, rejected_count)``, which always add up to the
+        number of entries submitted — the caller (the browser extension) shows
+        the user those two numbers, and a URL that vanished from both would be
+        reported as "partial" for no reason.
+
+        Each URL is normalised first (the payload may come from a raw clipboard
+        paste as well as from the extension), and duplicates are detected by
+        :func:`core.urls.canonical_url` so the same link sent twice with
+        different host casing, a redundant default port or a trailing fragment
+        is queued once — and counted as accepted, because it *is* in the queue.
         """
         accepted = 0
         rejected = 0
         seen = set()
         for raw in urls:
-            url = str(raw or "").strip()
-            if not url or url in seen:
+            url = normalize_url(str(raw or "").strip())
+            if not url:
+                rejected += 1
                 continue
-            seen.add(url)
+            key = canonical_url(url)
+            if key in seen:
+                accepted += 1
+                continue
+            seen.add(key)
             ok, err = validate_download_url(
                 url, block_private=self.config.block_private_urls
             )

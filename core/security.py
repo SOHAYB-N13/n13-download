@@ -7,7 +7,7 @@ rejects schemes other than HTTP/HTTPS.
 
 from __future__ import annotations
 
-__all__ = ["validate_download_url", "resolve_host"]
+__all__ = ["validate_download_url", "resolve_host", "check_redirect_target"]
 
 import ipaddress
 import socket
@@ -126,3 +126,33 @@ def validate_download_url(url: str, block_private: bool = True) -> Tuple[bool, s
     if not hostname:
         return False, "URL missing host"
     return resolve_host(hostname)
+
+
+# Reasons that mean "we could not tell", not "the policy forbids it".  A
+# transient DNS failure must never be reported as a security block: the
+# transfer layer has to be allowed to surface it as the retryable network
+# error it actually is.
+_DNS_FAILURE_REASONS = frozenset(
+    {
+        "Cannot resolve hostname",
+        "Hostname did not resolve to any address",
+    }
+)
+
+
+def check_redirect_target(url: str, block_private: bool = True) -> Tuple[bool, str]:
+    """Whether a redirect hop may be followed: ``(allowed, reason)``.
+
+    Redirects are the classic SSRF bypass — the user-supplied URL looks
+    harmless and the *second* hop points at ``169.254.169.254`` or
+    ``127.0.0.1``.  Every hop therefore has to pass the same policy as the
+    original link.  Unlike :func:`validate_download_url`, a DNS failure here
+    is allowed through (with an empty reason) so it is not misreported as a
+    permanent block.
+    """
+    ok, reason = validate_download_url(url, block_private=block_private)
+    if ok:
+        return True, ""
+    if reason in _DNS_FAILURE_REASONS:
+        return True, ""
+    return False, reason

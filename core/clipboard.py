@@ -12,21 +12,37 @@ a transient "no new content" and never raises.
 
 from __future__ import annotations
 
+import re
 import threading
 import tkinter
 from typing import Callable, Optional
 
+from core.urls import is_http_url, normalize_url, trim_url
+
 _POLL_INTERVAL = 3.0
+
+# A whole line must *be* the link — nothing but the URL may surround it.
+_WHOLE_LINE_URL = re.compile(r"""(?i)^https?://\S+$""")
 
 
 def extract_url(value: Optional[str]) -> Optional[str]:
-    """Return the first ``http(s)`` URL found in *value*, else ``None``."""
+    """Return the first ``http(s)`` URL when *value* is (essentially) just a URL.
+
+    Deliberately stricter than :func:`core.urls.extract_urls`: the clipboard
+    monitor fires automatically, so a sentence that merely *mentions* a link
+    must never start a download.  What *is* accepted is a link wrapped in the
+    characters copy-paste adds — quotes, angle brackets, square brackets, a
+    trailing full stop — which the old implementation returned verbatim and
+    then failed to fetch.
+    """
     if not value:
         return None
-    for token in str(value).replace("\r", "\n").split("\n"):
-        token = token.strip()
-        if token.lower().startswith(("http://", "https://")):
-            return token
+    for line in str(value).replace("\r", "\n").split("\n"):
+        candidate = trim_url(line.strip().strip("\"'`<>").lstrip("([{").strip())
+        if _WHOLE_LINE_URL.match(candidate):
+            url = normalize_url(candidate)
+            if is_http_url(url):
+                return url
     return None
 
 

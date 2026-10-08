@@ -12,6 +12,7 @@ from config.settings import AppConfig
 from core.probe import probe_url
 from core.security import validate_download_url
 from core.session import SessionManager
+from core.urls import canonical_url, extract_urls
 from core.utils import format_size, is_valid_directory, normalize_url, validate_url
 
 console = Console()
@@ -191,19 +192,29 @@ def read_multiline_urls() -> List[str]:
         if not raw:
             break
 
-        url = normalize_url(raw)
-        if not validate_url(url):
+        # A pasted block often arrives as prose with several links in it, so
+        # extract every link on the line rather than demanding that the line
+        # start with a scheme.  A bare domain typed on its own is still
+        # accepted — a single-field input carries no ambiguity.
+        found = extract_urls(raw)
+        if not found:
+            candidate = normalize_url(raw)
+            if validate_url(candidate):
+                found = [candidate]
+
+        if not found:
             _err(f"Invalid URL skipped: {raw}")
             continue
 
-        if url in seen:
-            _warn(f"Duplicate skipped: {url}")
-            continue
-
-        urls.append(url)
-        seen.add(url)
-        _ok(f"[dim]{url}[/dim]")
-        index += 1
+        for url in found:
+            key = canonical_url(url)
+            if key in seen:
+                _warn(f"Duplicate skipped: {url}")
+                continue
+            urls.append(url)
+            seen.add(key)
+            _ok(f"[dim]{url}[/dim]")
+            index += 1
 
     console.print()
     if urls:

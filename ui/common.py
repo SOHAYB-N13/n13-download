@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set
-from urllib.parse import unquote, urlparse
 
 from rich.console import Console
 
@@ -48,6 +47,8 @@ from core.task import (
     is_terminal,
     normalize_status,
 )
+from core.urls import same_resource as _same_resource
+from core.urls import url_filename
 # Policy only — never the service.  The queue must be able to decide whether a
 # project lets a task start without importing SQLite, and without a cycle back
 # into this module.  See docs/PROJECTS.md §2.
@@ -132,18 +133,16 @@ def _as_int(value: object, default: int = 0) -> int:
 
 
 def name_from_url(url: str, label: str = "") -> str:
-    """Best-effort file name from a URL (used when no server filename yet)."""
+    """Best-effort file name from a URL (used when no server filename yet).
+
+    Delegates to :func:`core.urls.url_filename` so the name shown in the UI and
+    the name the engine saves are produced by one implementation — including
+    the ``download.php?file=setup.exe`` shape, where the filename only exists
+    in the query string.
+    """
     if label:
         return label
-    try:
-        path = unquote(urlparse(url).path or "")
-        name = Path(path).name
-        if name:
-            return name
-    except Exception:
-        pass
-    netloc = urlparse(url).netloc
-    return netloc if netloc else url
+    return url_filename(url) or (url or "")
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +677,7 @@ class TaskManager(ProjectAdmissionMixin):
                     rec = self._tasks.get(tid)
                     if (
                         rec is not None
-                        and rec.task.url == request.url
+                        and _same_resource(rec.task.url, request.url)
                         and rec.task.directory == request.directory
                         and not is_terminal(rec.task.status)
                     ):
@@ -723,9 +722,14 @@ class TaskManager(ProjectAdmissionMixin):
         """Detect a potential duplicate for a download about to be added.
 
         Detection levels (cheap, metadata-first — never downloads a file):
-        1. Same normalized URL already queued/downloading/paused in this session.
+        1. Same URL already queued/downloading/paused in this session.
         2. Same URL present in History.
         3. A file already exists at the destination path.
+
+        URL comparison is by :func:`core.urls.same_resource`, which folds away
+        only what cannot change the bytes served (scheme/host case, the default
+        port, the fragment).  Query strings are compared verbatim, so two
+        different signed links are never reported as the same download.
 
         Returns a plain dict consumed by the UI.  ``reason`` is ``""`` when no
         conflict is found.
@@ -749,7 +753,7 @@ class TaskManager(ProjectAdmissionMixin):
                 rec = self._tasks.get(tid)
                 if (
                     rec is not None
-                    and rec.task.url == url
+                    and _same_resource(rec.task.url, url)
                     and not is_terminal(rec.task.status)
                 ):
                     result["has_active"] = True
@@ -759,7 +763,7 @@ class TaskManager(ProjectAdmissionMixin):
 
         # Level 2 — same URL in history.
         for h in self.history:
-            if h.get("url") == url:
+            if _same_resource(h.get("url") or "", url):
                 result["in_history"] = True
                 result["history_count"] += 1
                 result["reason"] = result["reason"] or "in_history"
