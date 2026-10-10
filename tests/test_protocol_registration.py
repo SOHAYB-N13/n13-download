@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import os
 import re
+import shutil
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -624,6 +627,179 @@ class InstallerSourceTest(unittest.TestCase):
     def test_uninstall_cleans_the_protocol_registration(self):
         self.assertIn("uninsdeletekey", self.iss)
         self.assertIn("RemoveProtocolRegistration", self.iss)
+
+
+class LauncherConsoleTest(unittest.TestCase):
+    """The extension's launch helper must not show a console window.
+
+    Background (the bug these tests lock down): ``browser/dldm_handler.py``
+    started ``cmd /c <temp>.bat`` with ``CREATE_NEW_CONSOLE``, which allocates a
+    *visible* console window for cmd.exe and everything it inherits — so
+    clicking Download in the browser extension flashed a console window before
+    the GUI appeared.  Measured on the real launch chain: with
+    CREATE_NEW_CONSOLE the launched child reports ``GetConsoleWindow() != NULL``
+    and ``IsWindowVisible() == True``; with ``CREATE_NO_WINDOW`` it reports NULL.
+
+    The contract pinned here:
+      * the CMD process and the generated ``.bat`` still run, with all of their
+        work (``chcp``, launching the GUI, temp-file cleanup);
+      * the console is created **without a window**, so nothing can flash;
+      * ``CREATE_NEW_CONSOLE`` is never requested again.
+    """
+
+    STUB_D = r"""
+import ctypes, json, os, sys, time
+k = ctypes.windll.kernel32          # GetConsoleWindow lives in kernel32
+u = ctypes.windll.user32
+hwnd = k.GetConsoleWindow()
+json.dump({
+    "pid": os.getpid(),
+    "argv": sys.argv[1:],
+    "console_hwnd": int(hwnd) if hwnd else 0,
+    "console_window_visible": (bool(u.IsWindowVisible(hwnd)) if hwnd else None),
+}, open(sys.argv[0] + ".json", "w"))
+time.sleep(0.8)
+"""
+
+    @staticmethod
+    def _load_handler():
+        spec = importlib.util.spec_from_file_location(
+            "dldm_handler_under_test", ROOT / "browser" / "dldm_handler.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _capture_launch(self, module, root, url_file=None):
+        """Run the real _launch_n13, capturing its command and the .bat content.
+
+        Waits for the launched CMD process to exit before returning, so the
+        caller can remove the temporary project root safely.
+        """
+        captured = {}
+        real_popen = module.subprocess.Popen
+
+        def spy(command, **kwargs):
+            captured["command"] = list(command)
+            captured["flags"] = kwargs.get("creationflags", 0)
+            captured["cwd"] = kwargs.get("cwd")
+            bat = Path(command[-1])
+            captured["bat_path"] = bat
+            captured["bat"] = bat.read_text(encoding="utf-8")
+            proc = real_popen(command, **kwargs)
+            captured["proc"] = proc
+            return proc
+
+        module.subprocess.Popen = spy
+        try:
+            module._launch_n13(root, sys.executable, url_file)
+            report = root / "d.py.json"
+            deadline = time.time() + 20
+            while time.time() < deadline and not report.exists():
+                time.sleep(0.02)
+        finally:
+            module.subprocess.Popen = real_popen
+            # Let the launcher chain finish: CMD waits for the GUI process, so
+            # this also guarantees the temp directory is no longer held open.
+            proc = captured.get("proc")
+            if proc is not None:
+                try:
+                    proc.wait(timeout=30)
+                except Exception:
+                    pass
+
+        captured["child"] = (json.loads(report.read_text(encoding="utf-8"))
+                             if report.exists() else {})
+        return captured
+
+    @staticmethod
+    def _stub_root() -> Path:
+        """A throwaway project root whose d.py reports its own console state."""
+        root = Path(tempfile.mkdtemp(prefix="n13-launcher-test-"))
+        (root / "d.py").write_text(LauncherConsoleTest.STUB_D, encoding="utf-8")
+        return root
+
+    def test_no_visible_console_on_the_real_launch_path(self):
+        """The real chain (launcher -> CMD -> python) gets no console window."""
+        if sys.platform != "win32":
+            self.skipTest("Windows console semantics")
+        module = self._load_handler()
+        root = self._stub_root()
+        try:
+            captured = self._capture_launch(module, root)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        child = captured["child"]
+        self.assertTrue(child, "the launched GUI process never ran")
+        self.assertEqual(child["argv"], ["--gui"])
+        self.assertEqual(
+            child["console_hwnd"], 0,
+            "the launched process was given a console WINDOW "
+            f"(hwnd={child['console_hwnd']}, "
+            f"visible={child['console_window_visible']}) — this is the flash",
+        )
+        self.assertIsNone(child["console_window_visible"])
+
+    def test_cmd_process_and_its_work_are_preserved(self):
+        """Hiding the console must not remove the CMD process or its work."""
+        if sys.platform != "win32":
+            self.skipTest("Windows-only launch path")
+        module = self._load_handler()
+        root = self._stub_root()
+        try:
+            captured = self._capture_launch(module, root)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        self.assertEqual(captured["command"][:2], ["cmd", "/c"])
+        self.assertTrue(str(captured["bat_path"]).lower().endswith(".bat"))
+        self.assertEqual(captured["cwd"], str(root))
+        bat = captured["bat"]
+        self.assertIn("@echo off", bat)
+        self.assertIn("chcp 65001", bat)                 # UTF-8 console setup kept
+        self.assertIn("d.py", bat)
+        self.assertIn("--gui", bat)                      # the GUI is still launched
+        self.assertIn('del "%~f0"', bat)                 # self-cleanup kept
+
+        flags = captured["flags"]
+        self.assertTrue(flags & module.subprocess.CREATE_NO_WINDOW,
+                        "CREATE_NO_WINDOW is required so the console has no window")
+        self.assertFalse(flags & module.subprocess.CREATE_NEW_CONSOLE,
+                         "CREATE_NEW_CONSOLE allocates a visible console window")
+
+    def test_download_request_data_still_reaches_the_gui(self):
+        """A URL handed to the launcher must still be passed through and cleaned up."""
+        if sys.platform != "win32":
+            self.skipTest("Windows-only launch path")
+        module = self._load_handler()
+        root = self._stub_root()
+        url_file = root / "dldm_url_test.txt"
+        url_file.write_text("https://example.com/file.zip?a=1&b=2", encoding="utf-8")
+        try:
+            captured = self._capture_launch(module, root, url_file=url_file)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+        bat = captured["bat"]
+        self.assertIn(f'--url-file "{url_file}"', bat)
+        self.assertIn(f'del "{url_file}"', bat)
+        self.assertEqual(captured["child"]["argv"],
+                         ["--gui", "--url-file", str(url_file)])
+
+    def test_launch_source_never_requests_a_visible_console(self):
+        """Source-level guard, so the flag cannot come back unnoticed.
+
+        Comments are stripped first: the fix's explanatory comment deliberately
+        names ``CREATE_NEW_CONSOLE`` as the thing that must not be used.
+        """
+        source = inspect.getsource(self._load_handler()._launch_n13)
+        code = "\n".join(line for line in source.splitlines()
+                         if not line.strip().startswith("#"))
+        self.assertNotIn("CREATE_NEW_CONSOLE", code)
+        self.assertIn("CREATE_NO_WINDOW", code)
+        self.assertIn("/c", code)
+        # The non-Windows branch must stay untouched (no creation flags there).
+        self.assertIn("subprocess.Popen(args", code)
 
 
 if __name__ == "__main__":

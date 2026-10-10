@@ -79,9 +79,24 @@ def _launch_n13(project_root: Path, python_exe: str, url_file: Optional[Path] = 
         bat_lines.append('del "%~f0" 2>nul')
         bat_content = "\n".join(bat_lines) + "\n"
         bat_path.write_text(bat_content, encoding="utf-8")
+        # CREATE_NO_WINDOW, never CREATE_NEW_CONSOLE.
+        #
+        # CREATE_NEW_CONSOLE allocates a *visible* console window for this
+        # cmd.exe, and every process it starts inherits that console — so
+        # clicking Download in the browser extension flashed a CMD window on
+        # screen before the GUI appeared.  Measured: with CREATE_NEW_CONSOLE the
+        # launched child reports GetConsoleWindow() != NULL and
+        # IsWindowVisible() == True; with CREATE_NO_WINDOW it reports NULL.
+        #
+        # The command, the .bat and all of its work (chcp, launching the GUI,
+        # removing the temp URL file, self-delete) are unchanged — the console
+        # is simply created without a window, so there is nothing to flash.
+        # Nothing is hidden after the fact and no output channel is removed:
+        # cmd.exe still owns a console, it just has no window.
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.Popen(
             ["cmd", "/c", str(bat_path)],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            creationflags=creationflags,
             cwd=str(project_root),
         )
     else:

@@ -6,7 +6,7 @@
 
 **A multi-threaded download manager for Windows and Android — start, queue, schedule, organize, see through and verify your downloads.**
 
-<img alt="Windows 1.4.2" src="https://img.shields.io/badge/Windows-1.4.2-2563eb">
+<img alt="Windows 1.4.3" src="https://img.shields.io/badge/Windows-1.4.3-2563eb">
 <img alt="Android 1.1.2" src="https://img.shields.io/badge/Android-1.1.2-16a34a">
 <img alt="Python 3.10+" src="https://img.shields.io/badge/Python-3.10%2B-f59e0b">
 <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-lightgrey">
@@ -36,7 +36,7 @@ The value is simple: **copy a link → hand it to N13 → N13 handles the rest**
 
 | | Windows desktop | Android |
 |---|---|---|
-| Version | **1.4.2** | **1.1.2** (versionCode 4) |
+| Version | **1.4.3** | **1.1.2** (versionCode 4) |
 | Interface | WebView GUI + terminal UI | Jetpack Compose UI |
 | Minimum OS | Windows 10/11 (x64) | Android 8.0 (API 26) |
 | Engine | Python (`core/`) | Kotlin + OkHttp (`data/engine/`) |
@@ -493,13 +493,14 @@ The version is set in `android/app/build.gradle.kts` (`versionCode` / `versionNa
 
 | Track | State |
 |---|---|
-| Windows desktop | **Stable** — v1.4.2; latest work hardened the download engine (redirect security, range handling, resume integrity) |
+| Windows desktop | **Stable** — v1.4.3; the browser-extension launch no longer flashes a console window, and the download engine was hardened (startup latency, honest progress) |
 | Android | **Early / active** — v1.1.2; the first two published APKs (1.1.0, 1.1.1) were unsigned and could not be installed, and the release pipeline now refuses to produce an unsigned artifact |
 
 Recent desktop releases:
 
 | Version | Theme |
 |---|---|
+| **1.4.3** | No console flash when the extension launches N13, plus engine hardening: bounded startup, honest byte-range probing, smooth monotonic progress |
 | **1.4.2** | Download-engine hardening: SSRF-safe redirects, honest byte-range probing, single-stream fallback for servers that ignore ranges, exact-length part merge, `Retry-After` support |
 | **1.4.1** | Consistent categories across dialog/engine/history, History table fits its window, empty states, keyboard and screen-reader fixes |
 | **1.4.0** | Download groups, versioned database migrations |
