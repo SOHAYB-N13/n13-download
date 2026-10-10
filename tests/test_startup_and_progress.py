@@ -48,6 +48,7 @@ class BehaviourHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     mode = "ok"
     head_delay = 30.0      # longer than any probe timeout
+    slow_delay = 0.0       # "working but slow": delay every response
     body_piece = 128 * 1024
     body_pause = 0.01
     payload = DATA
@@ -67,6 +68,12 @@ class BehaviourHandler(BaseHTTPRequestHandler):
             return
         if self.mode == "head_hang":
             time.sleep(self.head_delay)
+            return
+        if self.mode == "slow":
+            # A healthy host that simply takes its time — the shape that was
+            # reported "cannot reach server" by the old 3 s HEAD deadline.
+            time.sleep(self.slow_delay)
+            self._send_headers(200, len(self.payload))
             return
         if self.mode == "head_405":
             self.send_response(405)
@@ -88,6 +95,8 @@ class BehaviourHandler(BaseHTTPRequestHandler):
         if self.mode in ("silent", "all_silent"):
             time.sleep(self.head_delay)      # accept, then say nothing at all
             return
+        if self.mode == "slow":
+            time.sleep(self.slow_delay)
         rng = self.headers.get("Range")
         start = 0
         if rng:
@@ -208,15 +217,52 @@ class StartupLatencyTest(unittest.TestCase):
         # Guard against a regression to the old 6 x 15 s ladder (~98 s measured).
         self.assertLessEqual(dl._STARTUP_TOTAL_BUDGET, 25.0)
         self.assertLessEqual(dl._STARTUP_MAX_ATTEMPTS, 6)
-        self.assertLessEqual(probe_mod.PROBE_HEAD_READ_TIMEOUT, 5.0)
-        self.assertLessEqual(probe_mod.PROBE_TOTAL_BUDGET, 10.0)
+        # The probe budget is derived from the read-timeout setting, so it must
+        # stay a bounded, sane multiple of it rather than a hard-coded ceiling
+        # that silently overrides the setting.
+        cfg = _cfg()
+        probe_budget = probe_mod.probe_budget(cfg)
+        self.assertLessEqual(probe_budget, 60.0)
+        self.assertGreaterEqual(probe_budget, float(cfg.probe_read_timeout))
         # The budget must never be *shorter* than one read timeout, or the first
         # attempt would be cut off before a slow server could legitimately
         # answer and the retry would restart the wait from zero.
-        cfg = _cfg()
         budget = DownloadController(cfg, SessionManager(cfg), show_progress=False)._startup_budget()
         self.assertGreaterEqual(budget, float(cfg.startup_read_timeout))
         self.assertLessEqual(budget, 30.0)
+
+    def test_probe_budget_grows_with_the_read_timeout_setting(self):
+        """The probe must honour the user's own read timeout.
+
+        A fixed ceiling shorter than the configured read timeout is
+        self-defeating: it cuts the request off before a slow-but-healthy server
+        can answer and then reports "cannot reach server" for a reachable host.
+        """
+        slow = _cfg(probe_read_timeout=40.0)
+        fast = _cfg(probe_read_timeout=8.0)
+        self.assertGreater(probe_mod.probe_budget(slow), probe_mod.probe_budget(fast))
+        self.assertGreaterEqual(probe_mod.probe_budget(fast), float(fast.probe_read_timeout))
+
+    def test_a_slow_but_healthy_server_is_still_probed(self):
+        """A host that answers in 4 s must not be reported unreachable.
+
+        Regression: the probe used a hard-coded 3 s HEAD read timeout inside a
+        6 s budget, so a working, range-capable server that needed 4-6 s was
+        reported "Connection error: cannot reach server".  The download then ran
+        blind — no size, no byte ranges, no resume — and failed.  The delay here
+        is inside the configured ``probe_read_timeout`` (8 s), so the probe must
+        succeed and report both the size and range support.
+        """
+        with _Server("slow", slow_delay=4.0) as srv:
+            cfg = _cfg()
+            t0 = time.monotonic()
+            analysis = analyze_url(srv.url, cfg, SessionManager(cfg))
+            elapsed = time.monotonic() - t0
+        self.assertTrue(analysis.ok,
+                        f"a healthy 4 s server was reported unreachable: {analysis.error!r}")
+        self.assertEqual(analysis.total_size, len(DATA))
+        self.assertTrue(analysis.supports_range)
+        self.assertLess(elapsed, 12.0, f"probe took {elapsed:.1f}s for a 4 s server")
 
     def test_budget_grows_with_the_read_timeout_setting(self):
         """Raising the user-visible timeout must actually tolerate a slower
@@ -257,7 +303,7 @@ class StartupLatencyTest(unittest.TestCase):
             elapsed = time.monotonic() - t0
         self.assertTrue(ok, "a working GET must still be downloaded")
         self.assertTrue(_verify(self.dir / "file.bin"))
-        self.assertLess(elapsed, probe_mod.PROBE_HEAD_READ_TIMEOUT + 6.0,
+        self.assertLess(elapsed, probe_mod.probe_budget(_cfg()) + 6.0,
                         f"HEAD stall cost {elapsed:.1f}s before the transfer")
 
     def test_probe_is_bounded_when_every_request_hangs(self):
@@ -266,7 +312,7 @@ class StartupLatencyTest(unittest.TestCase):
             t0 = time.monotonic()
             analysis = analyze_url(srv.url, cfg, SessionManager(cfg))
             elapsed = time.monotonic() - t0
-        self.assertLess(elapsed, probe_mod.PROBE_TOTAL_BUDGET + 3.0,
+        self.assertLess(elapsed, probe_mod.probe_budget(cfg) + 3.0,
                         f"probe took {elapsed:.1f}s; it is supposed to be bounded")
         self.assertFalse(analysis.ok)      # nothing to report, and it said so
 
@@ -557,18 +603,22 @@ class ConcurrencyAndCleanupTest(unittest.TestCase):
 
     def test_unreachable_port_fails_fast(self):
         # A closed port is the cheapest possible failure; it must not be retried
-        # for the whole budget.
+        # for the whole budget.  Two bounded phases are involved — the ANALYZING
+        # probe and the pre-first-byte phase — so the honest bound is the sum of
+        # their budgets.  (On this machine a local proxy intercepts refused
+        # connections, which is why each attempt is not instantaneous.)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         url = f"http://127.0.0.1:{port}/file.bin"
         cfg = _cfg()
+        limit = probe_mod.probe_budget(cfg) + dl._STARTUP_TOTAL_BUDGET + 5.0
         t0 = time.monotonic()
         ok, ctrl, _events, _statuses = _run(url, cfg, self.dir)
         elapsed = time.monotonic() - t0
         self.assertFalse(ok)
-        self.assertLess(elapsed, dl._STARTUP_TOTAL_BUDGET + 5.0,
-                        f"a closed port took {elapsed:.1f}s to fail")
+        self.assertLess(elapsed, limit,
+                        f"a closed port took {elapsed:.1f}s to fail (limit {limit:.1f}s)")
         self.assertTrue(ctrl.last_error.strip())
 
 

@@ -396,7 +396,12 @@ const DownloadsView = {
   },
 
   updateRow(app, task) {
-    if (app.state.page !== "downloads") return;
+    // A row is updated whenever it exists, whatever page is on screen.  The
+    // list is rendered into the document even while its section is hidden, so
+    // gating this on `state.page` did not avoid work — it dropped every state
+    // and progress update for the visible list whenever `state.page` and the
+    // active section disagreed, which left rows frozen on a stale label (see
+    // `App._initialPage`).
     const row = Utils.$q(`#downloadList [data-id="${task.id}"]`);
     if (row) Components.updateRow(row, task, app._elapsedFor(task));
   },

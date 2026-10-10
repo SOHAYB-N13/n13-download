@@ -85,6 +85,16 @@ class BlockedURLError(requests.RequestException):
 
 
 def _os_error_reason(exc: OSError) -> Optional[str]:
+    # A destination that cannot be created (a drive letter that is not mounted,
+    # a removed share) fails on the very first mkdir with WinError 3 / ENOENT.
+    # "The system cannot find the path specified" names the symptom but not the
+    # cure, and it is the one failure the user can fix without touching the
+    # download itself.
+    if exc.errno == errno.ENOENT or getattr(exc, "winerror", None) in (2, 3):
+        return (
+            "Destination folder is not available - check the download folder "
+            "in Settings"
+        )
     if exc.errno == errno.ENOSPC:
         return "Disk is full - free some space and try again"
     if exc.errno in (errno.EACCES, errno.EPERM):

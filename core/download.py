@@ -496,14 +496,37 @@ class DownloadController:
             except Exception:
                 pass
 
+    #: Outcomes that mean the download did not finish — the reason is part of
+    #: the message for these, because "failed in 2.48s" without a reason leaves
+    #: the user (and the next diagnosis) with nothing to act on.
+    _FAILURE_OUTCOMES = frozenset({
+        "failed", "blocked", "merge-failed", "checksum-mismatch",
+    })
+
     def _log_timeline(self, url: str, outcome: str) -> None:
         """Emit one INFO line describing where this download spent its time.
 
         Deliberately one line per download: enough to tell a slow server from a
         slow engine, cheap enough to leave on in production.  The URL is
         redacted — a signed link keeps its authorisation in the query string.
+
+        Failures also carry :attr:`last_error`.  A link delivered by the browser
+        extension is added and run without any dialog, so this line is the only
+        place its failure can be explained; without the reason the log showed a
+        duration with no cause and a delivery could only be diagnosed by
+        reproducing it by hand.
         """
         if self._timeline is None:
+            return
+        reason = (self.last_error or "").strip()
+        if outcome in self._FAILURE_OUTCOMES and reason:
+            log.info(
+                "download %s %s reason=%s (%s)",
+                outcome,
+                self._timeline.summary(),
+                redact_secrets(reason),
+                redact_secrets(url),
+            )
             return
         log.info(
             "download %s %s (%s)",

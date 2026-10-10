@@ -35,6 +35,56 @@ def _default_download_dir() -> str:
     return str(Path.home())
 
 
+def directory_anchor_exists(path: str) -> bool:
+    """Whether *path* is a destination that can still be created.
+
+    The part of a path that cannot be created on demand is its anchor — the
+    drive (``E:\\``) or the filesystem root.  Everything below it is created by
+    the download engine with ``mkdir(parents=True)``; the anchor itself is not,
+    and cannot be.  A destination whose anchor is gone is therefore not a slow
+    download, it is an impossible one: the very first ``mkdir`` fails with
+    ``WinError 3`` and the task dies before a single byte is fetched.
+
+    Relative paths resolve against the working directory and are always
+    considered creatable.  Any error while checking is treated as "exists", so
+    a transient failure can never silently reroute a download.
+    """
+    raw = (path or "").strip()
+    if not raw:
+        return True
+    try:
+        anchor = Path(os.path.expandvars(os.path.expanduser(raw))).anchor
+        if not anchor:
+            return True
+        return Path(anchor).is_dir()
+    except (OSError, ValueError):
+        return True
+
+
+def _warn_once_unusable(category: str, path: str) -> None:
+    """Log a rejected override once per (category, path) pair."""
+    key = (category, path)
+    if key in _WARNED_UNUSABLE_DIRS:
+        return
+    _WARNED_UNUSABLE_DIRS.add(key)
+    try:
+        import logging
+
+        logging.getLogger("n13").warning(
+            "Category folder %r for %r is not available; using the download "
+            "folder instead. Fix the category folder in Settings.",
+            path,
+            category,
+        )
+    except Exception:
+        pass
+
+
+# Overrides already reported by :func:`_warn_once_unusable`.  Resolution runs on
+# every add, so this keeps the log from repeating the same warning per download.
+_WARNED_UNUSABLE_DIRS: set = set()
+
+
 def _safe_category_dirname(category: str) -> Optional[str]:
     """Return *category* as a single safe directory name, or None.
 
@@ -354,8 +404,19 @@ class AppConfig:
         cat = (category or "").strip()
         overrides = self.category_dirs or {}
         if cat and cat != "General":
-            if overrides.get(cat):
-                return overrides[cat]
+            override = (overrides.get(cat) or "").strip()
+            if override:
+                # An override only wins while it can actually be used.  A stale
+                # one (a drive letter that is no longer mounted, a folder on a
+                # disconnected share) used to be handed straight to the engine,
+                # which failed the download instead of downloading it.  Every
+                # entry point resolves through here, so rejecting it restores
+                # the automatic routing below for all of them — and an
+                # extension-submitted link then lands where a link submitted
+                # through the dialog already did.
+                if directory_anchor_exists(override):
+                    return override
+                _warn_once_unusable(cat, override)
             name = _safe_category_dirname(cat)
             if name and base_dir:
                 return os.path.join(base_dir, name)

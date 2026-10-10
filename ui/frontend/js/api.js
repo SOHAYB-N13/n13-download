@@ -41,6 +41,9 @@ const API = {
   async addDownload(url, directory, label, checksum, autostart, category, allowDuplicate, resolveConflict, size, contentType, projectId) {
     return this._call("add_download", url, directory || "", label || "", checksum || "", autostart !== false, category || "", !!allowDuplicate, resolveConflict || "", Math.max(0, Math.round(size || 0)), contentType || "", projectId || "");
   },
+  async resolveDestination(baseDir, category) {
+    return this._call("resolve_destination", baseDir || "", category || "");
+  },
   async checkDuplicate(url, directory, filename) {
     return this._call("check_duplicate", url, directory || "", filename || "");
   },

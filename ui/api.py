@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from config.loader import config_dir, save_config
 from config.settings import AppConfig
+from core.errors import friendly_error_message, redact_secrets
 from core.session import SessionManager
 from core.updater import UpdateController
 from core.urls import canonical_url
@@ -466,6 +467,26 @@ class Api(ProjectsApiMixin):
         base = self._config.download_dir
         cat = category or self._category_for_hint(hint)
         return self._config.resolve_category_dir(cat, base) or base
+
+    def resolve_destination(self, base_dir: str = "", category: str = "") -> Dict[str, Any]:
+        """The folder a download for *category* would be saved into.
+
+        A single, backend-owned answer for every entry point.  The New Download
+        dialog used to compute ``<download_dir>\\<Category>`` itself while a
+        browser-extension delivery let the backend resolve it through
+        ``category_dirs`` — so the same URL could be saved in two different
+        places, and a stale ``category_dirs`` entry made only the
+        extension-triggered copy fail.  Asking here keeps one rule for all
+        callers, including the unavailable-override fallback.
+
+        Pure: it only computes the path, it never creates anything.
+        """
+        base = (base_dir or "").strip() or self._config.download_dir
+        cat = (category or "").strip() or "General"
+        return {
+            "directory": self._config.resolve_category_dir(cat, base) or base,
+            "category": cat,
+        }
 
     def check_duplicate(self, url: str, directory: str = "", filename: str = "") -> Dict[str, Any]:
         """Duplicate-detection check for a download about to be added."""
@@ -1430,17 +1451,72 @@ class Api(ProjectsApiMixin):
         return unregister_protocol()
 
     def _browser_callback(self, url: str, autostart: bool = False) -> bool:
+        """Queue one link delivered by the browser extension's Live Server.
+
+        This is the extension's only way into the application, and it is
+        headless: there is no dialog and no console, so every outcome is
+        logged and anything the user must know is raised as a toast.  A link
+        that arrives here is queued through exactly the same pipeline as one
+        added from the New Download dialog — the rules, the category routing and
+        the duplicate policy are applied by :meth:`add_download`, so both entry
+        points agree on the destination and on what counts as a duplicate.
+
+        Returning ``True`` means "handled".  The Live Server reads ``False`` or
+        an exception as "not handled" and downloads the URL itself, outside the
+        queue, bypassing rules/duplicates — so a delivery that cannot be queued
+        is reported and still counted as handled, never quietly replaced by a
+        queue-less second copy.
+        """
         url = normalize_url(url)
-        if validate_url(url):
-            if autostart:
-                # Single-instance forwarding: add directly to the queue.
-                allow, resolve = self._duplicate_policy_args(url, "", "")
-                self.add_download(url, allow_duplicate=allow, resolve_conflict=resolve)
-                self._event_queue.put_nowait({"type": "toast",
-                                              "title": self._tray_labels().get("toast.download_added", "Download added"),
-                                              "message": url[:80]})
-            else:
-                self._event_queue.put_nowait({"type": "browser_url", "url": url})
+        if not validate_url(url):
+            log.warning("[browser] Extension link rejected (not a usable URL): %s",
+                        redact_secrets(url))
+            self._event_queue.put_nowait({
+                "type": "toast", "kind": "error",
+                "title": self._tray_labels().get("toast.rejected", "Link rejected"),
+                "message": "That link is not a valid http(s) URL",
+            })
+            return True
+        if not autostart:
+            # Cool delivery: let the running UI offer the link in its dialog.
+            self._event_queue.put_nowait({"type": "browser_url", "url": url})
+            log.info("[browser] Extension link offered to the UI: %s",
+                     redact_secrets(url))
+            return True
+        # Single-instance forwarding / autostart: add directly to the queue.
+        try:
+            allow, resolve = self._duplicate_policy_args(url, "", "")
+            # ``add`` returns the existing task id for a duplicate that is still
+            # active, so comparing against the queue is what tells the two apart
+            # — and a duplicate that looks like a new download is exactly the
+            # kind of delivery the user cannot otherwise explain.
+            before = {s.id for s in self._manager.snapshots()}
+            task_id = self.add_download(url, allow_duplicate=allow,
+                                        resolve_conflict=resolve)
+        except Exception as exc:  # a delivery must never vanish silently
+            reason = friendly_error_message(exc)
+            log.error("[browser] Extension link could not be queued (%s): %s",
+                      reason, redact_secrets(url))
+            self._event_queue.put_nowait({
+                "type": "toast", "kind": "error",
+                "title": self._tray_labels().get("toast.add_failed", "Could not add download"),
+                "message": reason,
+            })
+            return True
+        if task_id in before:
+            log.info("[browser] Extension link already in the queue as task %s: %s",
+                     task_id, redact_secrets(url))
+            self._event_queue.put_nowait({
+                "type": "toast",
+                "title": self._tray_labels().get("toast.already_queued", "Already in the queue"),
+                "message": url[:80],
+            })
+            return True
+        log.info("[browser] Extension link queued as task %s: %s",
+                 task_id, redact_secrets(url))
+        self._event_queue.put_nowait({"type": "toast",
+                                      "title": self._tray_labels().get("toast.download_added", "Download added"),
+                                      "message": url[:80]})
         return True
 
     def _drain_startup_urls(self) -> None:

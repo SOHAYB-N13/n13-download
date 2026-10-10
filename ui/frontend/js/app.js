@@ -4,6 +4,9 @@
 
 const App = {
   state: {
+    // The landing page.  `App._initialPage()` overwrites this at boot with the
+    // section the document actually marks `active`, so this default is only a
+    // fallback for a document with no active section at all.
     page: "dashboard",
     downloads: {},
     history: [],
@@ -70,6 +73,11 @@ const App = {
 
   async init() {
     this._loadLocalPrefs();
+    // The page the document is really showing, before anything else reads
+    // `state.page`.  Every page-gated render (the row updater, the dashboard
+    // panels, the log view) decides whether to paint from this value, so it has
+    // to agree with the markup from the very first frame.
+    this.state.page = this._initialPage();
     this.rowCallbacks = DownloadsActions.rowCallbacks(this);
     this._applyTheme();
     Components.initRipple();
@@ -112,6 +120,25 @@ const App = {
       window.addEventListener("_pywebviewready", onReady);
       setTimeout(async () => { if (!this.state.booted) await start(); }, 2500);
     }
+  },
+
+  /**
+   * The landing page: the section the markup marks `active`.
+   *
+   * `index.html` and `App.state` used to be two independent sources of truth
+   * for which page is open, and they disagreed: the document activated
+   * `#page-downloads` while the state said `"dashboard"`.  The visible
+   * Downloads list was therefore treated as "not the current page": its rows
+   * were rendered once and then never updated (the updater is page-gated), so a
+   * live download stayed frozen on whatever label it had at first paint —
+   * typically "Analyzing" — until a navigation repainted the list.  Deriving the
+   * value from the document removes the second source of truth instead of
+   * keeping the two in sync by hand.
+   */
+  _initialPage() {
+    const active = Utils.$q(".page.active");
+    const id = active && active.id ? String(active.id).replace(/^page-/, "") : "";
+    return this.pages[id] ? id : this.state.page;
   },
 
   async _initBackend() {

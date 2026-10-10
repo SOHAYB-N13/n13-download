@@ -150,12 +150,33 @@ const AddDownload = {
         el.url.classList.toggle("invalid", !ok && !!msg);
       };
 
+      // The folder field is seeded from the backend's own resolution so this
+      // dialog, a browser-extension delivery and a batch add can never disagree
+      // about where the file goes.  The backend also knows whether a configured
+      // per-category folder is actually available, so it is the only place that
+      // can answer honestly.  A folder the user typed or browsed to still wins,
+      // and a stale reply can never overwrite a newer one.
+      let dirTicket = 0;
+      const syncDir = async () => {
+        if (model.dirTouched) return;
+        const ticket = ++dirTicket;
+        const cat = model.category;
+        // Paint the local rule first (identical to the backend's automatic
+        // routing) so the field is never blank and a submit can never race an
+        // empty value.
+        el.dir.value = cat === "General"
+          ? model.baseDir
+          : model.baseDir.replace(/[\\/]+$/, "") + "\\" + cat;
+        let res = null;
+        try { res = await API.resolveDestination(model.baseDir, cat); } catch { /* keep the local value */ }
+        if (ticket !== dirTicket || model.dirTouched) return;
+        if (res && res.directory) el.dir.value = res.directory;
+      };
+
       const applyCategory = (cat) => {
         model.category = cat;
         Utils.$qa(".cat-chip", el.cats).forEach((c) => c.classList.toggle("active", c.dataset.cat === cat));
-        if (!model.dirTouched) {
-          el.dir.value = cat === "General" ? model.baseDir : model.baseDir.replace(/[\\/]+$/, "") + "\\" + cat;
-        }
+        syncDir();
       };
 
       const probe = Utils.debounce(async () => {

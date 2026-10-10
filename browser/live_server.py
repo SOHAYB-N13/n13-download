@@ -17,6 +17,7 @@ Security notes
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import secrets
 import threading
@@ -30,12 +31,14 @@ from rich.console import Console
 
 from config.settings import AppConfig
 from core.download import DownloadController
+from core.errors import redact_secrets
 from core.security import validate_download_url
 from core.session import SessionManager
 from core.urls import canonical_url
 from core.utils import normalize_url
 
 console = Console()
+log = logging.getLogger("n13")
 
 # Origins allowed to issue cross-origin requests to the server.  The extension
 # runs from a chrome-extension://<id> origin, but we also accept localhost so
@@ -269,6 +272,8 @@ class LiveServer:
         for raw in urls:
             url = normalize_url(str(raw or "").strip())
             if not url:
+                log.warning("[browser] Link rejected (empty after normalisation): %r",
+                            str(raw)[:120])
                 rejected += 1
                 continue
             key = canonical_url(url)
@@ -280,8 +285,15 @@ class LiveServer:
                 url, block_private=self.config.block_private_urls
             )
             if not ok:
+                log.warning("[browser] Link rejected (%s): %s",
+                            err or "invalid", redact_secrets(url))
                 rejected += 1
                 continue
+            # The extension delivery is headless, so this line is the record of
+            # what arrived and when; without it a link the browser sent and the
+            # application never queued left no trace anywhere.
+            log.info("[browser] Link accepted (autostart=%s): %s",
+                     bool(autostart), redact_secrets(url))
             self.download_queue.put((url, autostart))
             self._inc_stat("queued")
             accepted += 1
@@ -322,12 +334,22 @@ class LiveServer:
                     delegated = bool(self.download_callback(url, autostart=autostart))
                 except Exception as exc:  # callback must not break the worker
                     console.print(f"[red]Download callback error: {exc}[/red]")
+                    log.exception("[browser] Link callback failed: %s",
+                                  redact_secrets(url))
                     delegated = False
                 if delegated:
                     self._inc_stat("delegated")
                     self.download_queue.task_done()
                     console.print("[cyan]Handed to the desktop queue.[/cyan]")
                     continue
+                # Not delegated: this worker downloads the link itself, into the
+                # plain download folder — no queue, no rules, no duplicate
+                # policy.  Log it, because the outcome (a second copy of a file
+                # the queue already had) is otherwise unaccountable.
+                log.warning(
+                    "[browser] Link not handled by the UI; downloading it here "
+                    "instead (no queue entry): %s", redact_secrets(url),
+                )
 
             # Fresh controller per download: no state bleed between jobs.
             controller = DownloadController(self.config, self.session, console.print)

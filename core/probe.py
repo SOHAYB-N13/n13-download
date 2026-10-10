@@ -59,17 +59,40 @@ RANGE_PROBE_MIN_SIZE = 1 * 1024 * 1024
 # Probe budgets.
 #
 # Metadata discovery must never be the reason a download "takes 40 seconds to
-# start".  A HEAD that has not answered within this many seconds tells us
-# nothing useful — the server either ignores HEAD or is slow — and waiting the
-# full generic read timeout before trying the request we actually need (a
-# ranged GET) delayed working downloads by 8 s and dead ones by far more.
+# start", so the probe runs inside a wall-clock budget and never multiplies a
+# generic read timeout by the number of fallbacks.
+#
+# The budget must not be SHORTER than the user's own read timeout, though: that
+# is self-defeating.  The request is then cut off before a slow-but-healthy
+# server could legitimately answer, the fallback restarts the wait from zero,
+# and the probe reports "cannot reach server" for a host that was merely slow.
+#
+# Measured against a controlled server that answers every request after 4 s (a
+# working, range-capable host): the old fixed 3 s HEAD deadline inside a 6 s
+# budget failed the probe outright, and the download that followed ran blind —
+# no size, no byte ranges, no resume — and then failed.  The same shape appears
+# with real hosts whose redirect chain alone takes ~5.5 s.
 # ---------------------------------------------------------------------------
-PROBE_HEAD_READ_TIMEOUT = 3.0
-PROBE_HEAD_CONNECT_TIMEOUT = 3.0
-# Wall-clock cap for the whole probe, including every fallback request.  When
-# it expires the probe reports what it has and lets the transfer start: the
-# first real response is a better source of metadata than a longer probe.
-PROBE_TOTAL_BUDGET = 6.0
+PROBE_BUDGET_MIN = 15.0      # floor for the whole probe (seconds)
+PROBE_BUDGET_MARGIN = 5.0    # added to the configured read timeout
+PROBE_BUDGET_MAX = 45.0      # ceiling: a pathological host cannot stall ANALYZING forever
+
+
+def probe_budget(config: "AppConfig") -> float:
+    """Wall-clock cap for one probe, derived from ``probe_read_timeout``.
+
+    Derived rather than fixed so that raising the user-visible setting really
+    does tolerate a slower server — the same rule
+    :meth:`core.download.DownloadController._startup_budget` follows for the
+    transfer.  Always at least one full read timeout plus a margin, so both the
+    HEAD attempt and the ranged-GET fallback get a real chance.
+    """
+    try:
+        read = float(getattr(config, "probe_read_timeout", 0) or 0)
+    except (TypeError, ValueError):
+        read = 0.0
+    return max(PROBE_BUDGET_MIN, min(PROBE_BUDGET_MAX, read + PROBE_BUDGET_MARGIN))
+
 
 # Statuses for which a HEAD failure says nothing about GET: the method may be
 # blocked (405/501), the endpoint may want different headers (403), or it may be
@@ -206,12 +229,16 @@ def _probe_impl(
     redirect chain again when the transfer starts.
 
     The probe is metadata discovery and must never gate the download start for
-    long: it runs inside a wall-clock budget (:data:`PROBE_TOTAL_BUDGET`) and
-    gives HEAD its own short deadline (:data:`PROBE_HEAD_READ_TIMEOUT`), so a
-    server that ignores or stalls HEAD costs a few seconds rather than the full
-    generic read timeout.  When the budget expires the probe returns what it
-    has — the transfer's first real response is a better metadata source than a
-    longer probe.
+    long: it runs inside a wall-clock budget derived from the user's own
+    ``probe_read_timeout`` (:func:`probe_budget`), and every request inside it is
+    clamped to what is left of that budget.  When the budget expires the probe
+    reports what it has — the transfer's first real response is a better
+    metadata source than a longer probe.
+
+    No request uses a *shorter invented* interval than the configured read
+    timeout: that is what cut off slow-but-healthy servers, made the probe
+    report "cannot reach server" for a reachable host, and left the download
+    running blind (no size, no ranges, no resume).
     """
     ok, err = validate_download_url(url, block_private=config.block_private_urls)
     if not ok:
@@ -222,7 +249,7 @@ def _probe_impl(
     read = read_timeout if read_timeout is not None else config.probe_read_timeout
     timeout_tuple = (connect, read)
 
-    deadline = time.monotonic() + PROBE_TOTAL_BUDGET
+    deadline = time.monotonic() + probe_budget(config)
 
     def _budgeted(connect_t: float, read_t: float) -> Optional[Tuple[float, float]]:
         """Clamp a timeout pair to what is left of the probe budget."""
@@ -233,7 +260,11 @@ def _probe_impl(
 
     # ---- Strategy A: HEAD request ---------------------------------------
     head: Optional[requests.Response] = None
-    head_timeout = _budgeted(PROBE_HEAD_CONNECT_TIMEOUT, PROBE_HEAD_READ_TIMEOUT)
+    # The HEAD attempt gets the same configured timeout as everything else,
+    # clamped by the remaining budget.  It used to be a hard-coded 3 s — shorter
+    # than the default 8 s setting — so a server that needed 4 s to answer a
+    # HEAD was declared unreachable even though it was working perfectly.
+    head_timeout = _budgeted(connect, read)
     try:
         if head_timeout is None:
             raise requests.exceptions.Timeout("probe budget exhausted")
