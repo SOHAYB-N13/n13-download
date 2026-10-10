@@ -144,7 +144,16 @@ class ShutdownStressTest(unittest.TestCase):
 
     def test_shutdown_during_retry(self):
         """Engine stuck retrying a 500 on GET (probe/HEAD succeeds); shutdown
-        must stop it promptly and restore the task, never FAILED."""
+        must stop it promptly and restore the task, never FAILED.
+
+        The task stays in STARTING for the whole retry loop, and that is
+        deliberate: the server never sends a body byte, so announcing
+        DOWNLOADING would be exactly the misleading status this engine must not
+        show.  The test therefore waits for the task to be *working* (it has
+        left the queue and is no longer Queued) rather than for one particular
+        label, and still asserts the thing that matters — shutdown must not
+        leave it FAILED, and a restart must restore it to Queued.
+        """
         from tests.helpers import RangeHandler as RH
 
         class Get500(RH):
@@ -161,16 +170,28 @@ class ShutdownStressTest(unittest.TestCase):
         with TestServer(Get500) as srv:
             cfg = _cfg(num_threads=2, speed=0)
             cfg.max_retries = 20
+            # A realistic backoff, so the retry loop is genuinely still running
+            # when the shutdown arrives.  The default 0.01 s delay finishes the
+            # whole pre-first-byte phase in well under a tenth of a second,
+            # which made this test a race rather than a shutdown-during-retry
+            # test.  (The engine bounds that phase to a few attempts now, so the
+            # delay is what decides how long the window is.)
+            cfg.retry_delay = 1.0
+            cfg.retry_max_delay = 1.0
             tmp = Path(tempfile.mkdtemp())
             m = TaskManager(LegacyDownloadRunner(cfg, SessionManager(cfg), log=lambda *a, **k: None),
                             tmp, max_concurrent=1, config=cfg)
             tid = m.add(DownloadRequest(url=srv.url, directory=str(tmp)), autostart=True)
             # Let it get stuck retrying the 500s (part backoff), then shut down.
-            self.assertTrue(_wait_for(lambda: m.get(tid).state.value == "Downloading"))
+            self.assertTrue(
+                _wait_for(lambda: m.get(tid).state.value in ("Starting", "Downloading")),
+                "the task never left the queue",
+            )
             time.sleep(0.3)
             m.prepare_for_exit()
             snap = m.get(tid)
-            self.assertIn(snap.state.value, ("Downloading", "Paused", "Queued"),
+            self.assertIn(snap.state.value,
+                          ("Starting", "Downloading", "Paused", "Queued"),
                           f"became {snap.state.value}")
             m.close()
             m2 = TaskManager(LegacyDownloadRunner(cfg, SessionManager(cfg), log=lambda *a, **k: None),

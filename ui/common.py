@@ -58,6 +58,14 @@ from ui.queue_projects import ProjectAdmissionMixin
 # Re-export for callers that reference the legacy name (ui.api etc.).
 TaskState = TaskStatus
 
+# Engine-reported phases that are *not* task states.  The download engine
+# announces CONNECTING before it has a body byte and DOWNLOADING on the first
+# byte; the queue keeps the task in STARTING for the former, so a server that
+# accepts the connection and then says nothing cannot look like a running
+# transfer.  Listing them here keeps that intent explicit instead of relying on
+# a transition that fails and is silently swallowed.
+_ENGINE_PHASE_STATUSES = frozenset({"CONNECTING", "PROBING", "WAITING"})
+
 
 # ---------------------------------------------------------------------------
 # Console helpers
@@ -1801,6 +1809,14 @@ class TaskManager(ProjectAdmissionMixin):
 
     def _task_status_cb(self, task_id: str) -> Callable[[str], None]:
         def _cb(name: str) -> None:
+            # Informational phases from the engine that are deliberately NOT
+            # TaskStatus values.  The task stays in STARTING until the first
+            # body byte arrives, so "connecting" must not be coerced into a
+            # bogus transition (normalize_status would map it to QUEUED, whose
+            # transition fails and gets swallowed — this makes it explicit).
+            if str(name).strip().upper() in _ENGINE_PHASE_STATUSES:
+                self._logger.debug("task %s phase: %s", task_id, name)
+                return
             status = normalize_status(name)
             if status not in TaskStatus:
                 return

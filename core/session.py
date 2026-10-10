@@ -172,10 +172,52 @@ class SessionManager:
         self._config = config
         self._session: Optional[requests.Session] = None
         self._probe_session: Optional[requests.Session] = None
+        self._fingerprint: Optional[tuple] = None
+
+    @staticmethod
+    def _fingerprint_of(config: Optional[AppConfig]) -> tuple:
+        """The configuration that actually shapes a built session.
+
+        Anything not in here (timeouts, retries, thread counts, scheduling) is
+        applied per request and must **not** force a pool rebuild.  Cookies are
+        fingerprinted by their *sources* — the resolved ``CookieJar`` is built
+        from these fields, and resolving it reads files, which is far too
+        expensive to do on every download.
+        """
+        if config is None:
+            return ()
+        proxy = config.get_proxy_dict() or {}
+        return (
+            getattr(config, "user_agent", ""),
+            getattr(config, "pool_connections", 0),
+            getattr(config, "pool_maxsize", 0),
+            getattr(config, "socket_buffer_size", 0),
+            tuple(sorted(proxy.items())),
+            getattr(config, "http_bearer_token", ""),
+            getattr(config, "http_username", ""),
+            getattr(config, "http_password", ""),
+            getattr(config, "cookie_file", ""),
+            getattr(config, "browser_cookies", ""),
+            getattr(config, "cookies", ""),
+            bool(getattr(config, "block_private_urls", True)),
+        )
 
     def configure(self, config: AppConfig) -> None:
-        """Bind (or rebind) a configuration; the next access rebuilds the pool."""
+        """Bind (or rebind) a configuration.
+
+        The connection pool is rebuilt **only when a setting that shapes the
+        session actually changed**.  It used to be torn down unconditionally,
+        which meant every download — and every task starting while another was
+        mid-transfer — discarded a warm pool and paid a fresh TCP + TLS
+        handshake for its first request.
+        """
+        fingerprint = self._fingerprint_of(config)
         self._config = config
+        if fingerprint == self._fingerprint and (
+            self._session is not None or self._probe_session is not None
+        ):
+            return
+        self._fingerprint = fingerprint
         self.close()
 
     @property

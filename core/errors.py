@@ -94,14 +94,32 @@ def _os_error_reason(exc: OSError) -> Optional[str]:
     return None
 
 
-def friendly_error_message(exc: BaseException, status: Optional[int] = None) -> str:
-    """Return a clean user-facing message for *exc* (and optional HTTP status)."""
+def friendly_error_message(
+    exc: BaseException, status: Optional[int] = None, will_retry: bool = True
+) -> str:
+    """Return a clean user-facing message for *exc* (and optional HTTP status).
+
+    ``will_retry`` tells the truth about what happens next.  Several transient
+    conditions are described as "will retry automatically" while a retry really
+    is pending; once the attempt budget is exhausted the same wording is a
+    promise the engine cannot keep, so the caller passes ``will_retry=False``
+    and the message becomes a final, actionable statement instead.
+    """
+    def _transient(retrying: str, exhausted: str) -> str:
+        return retrying if will_retry else exhausted
+
     if isinstance(exc, BlockedURLError):
         return f"Blocked by security policy: {exc.reason}"
     if isinstance(exc, requests.Timeout):
-        return "Connection timed out - the server did not respond"
+        return _transient(
+            "Connection timed out - the server did not respond",
+            "Connection timed out - the server never responded",
+        )
     if isinstance(exc, requests.ConnectionError):
-        return "Network connection lost - will retry automatically"
+        return _transient(
+            "Network connection lost - will retry automatically",
+            "Network connection lost - retries exhausted",
+        )
     if isinstance(exc, requests.TooManyRedirects):
         return "Too many redirects"
     if isinstance(exc, requests.exceptions.SSLError):
@@ -116,9 +134,15 @@ def friendly_error_message(exc: BaseException, status: Optional[int] = None) -> 
         if status == 404:
             return "Server returned 404 - the file was not found"
         if status == 408 or status == 429:
-            return "Server is busy - will retry automatically"
+            return _transient(
+                "Server is busy - will retry automatically",
+                "Server is busy - retries exhausted",
+            )
         if status >= 500:
-            return f"Server error (HTTP {status}) - will retry automatically"
+            return _transient(
+                f"Server error (HTTP {status}) - will retry automatically",
+                f"Server error (HTTP {status}) - retries exhausted",
+            )
 
     if isinstance(exc, requests.RequestException):
         return f"Request failed: {exc.__class__.__name__}"
@@ -130,7 +154,10 @@ def friendly_error_message(exc: BaseException, status: Optional[int] = None) -> 
         if exc.errno in (errno.ECONNRESET, errno.ECONNABORTED, errno.ENETRESET, errno.EPIPE):
             return "Network connection was lost"
         if exc.errno in (errno.ETIMEDOUT, errno.EHOSTUNREACH, errno.ENETUNREACH):
-            return "Network connection lost - will retry automatically"
+            return _transient(
+                "Network connection lost - will retry automatically",
+                "Network connection lost - retries exhausted",
+            )
         return f"File system error: {exc}"
 
     return str(exc) or "Download failed"

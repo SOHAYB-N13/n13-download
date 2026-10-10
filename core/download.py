@@ -32,6 +32,7 @@ Optimisation notes
 
 from __future__ import annotations
 
+import logging
 import random
 import threading
 import time
@@ -81,6 +82,91 @@ _PROGRESS_FLUSH_THRESHOLD = 256 * 1024
 
 # Max progress callback frequency (Hz).  20 Hz = every 50 ms.
 _CALLBACK_INTERVAL = 0.05
+
+# Longest a byte counter may go unflushed.  Without a time bound the UI only
+# learned about data when the byte threshold was crossed, which on a slow link
+# meant the bar sat still for tens of seconds and then jumped.
+_PROGRESS_FLUSH_INTERVAL = 0.10
+
+# ---------------------------------------------------------------------------
+# Read slice and the pre-first-byte budget.
+#
+# ``iter_content(n)`` blocks until n bytes are buffered, so the read size IS the
+# progress granularity.  With the 4 MB default chunk a 200 KB/s link delivered
+# its first progress update only after ~20 s — the bar sat still and then jumped
+# by a whole chunk, which is exactly the "progress jumps forward" report.  Reads
+# are therefore sliced; the file write stays buffered, so throughput is
+# unaffected while accounting becomes smooth and resume granularity finer.
+# ---------------------------------------------------------------------------
+_READ_SLICE = 512 * 1024
+
+# Wall-clock cap for "connected but no body byte yet".  Without it, six startup
+# attempts at a 15 s read timeout left a dead-but-accepting server frozen for
+# ~98 s before the user saw an error.
+#
+# This is a *floor*: the real budget is derived from the user-visible
+# ``startup_read_timeout`` (see _startup_budget), so raising that setting
+# actually helps a slow server instead of being silently defeated by a fixed
+# ceiling.
+_STARTUP_TOTAL_BUDGET = 20.0
+# How much longer than a single read the whole phase may take (room for a
+# retry after a fast failure).
+_STARTUP_BUDGET_MARGIN = 5.0
+# Attempts allowed before the first byte.  The generic retry budget (15) is far
+# too many when every attempt is a cheap failure: a refused port spent 26 s
+# cycling them.  Four is enough to ride out a restart and short enough that a
+# dead host is reported quickly.
+_STARTUP_MAX_ATTEMPTS = 4
+# Pre-first-byte backoff cap.  These attempts are cheap, so the exponential
+# ladder's long tails (8 s, 16 s) only delay the honest error; the total budget
+# is what bounds the phase.
+_STARTUP_MAX_BACKOFF = 1.0
+
+log = logging.getLogger("n13")
+
+
+class DownloadTimeline:
+    """Phase timestamps for one download, for diagnostics that explain delays.
+
+    The point is to separate *genuine* server/network delay from engine delay.
+    ``metadata=0.02s headers=0.05s first_byte=12.40s`` says the server took
+    twelve seconds to produce a body byte; ``metadata=7.90s`` says our own
+    metadata step did.  A single INFO summary is logged per download and each
+    mark is also emitted at DEBUG, so verbose detail is opt-in and cheap.
+
+    Thread-safe: parts of one download mark concurrently.
+    """
+
+    __slots__ = ("_t0", "_order", "_at", "_lock")
+
+    def __init__(self) -> None:
+        self._t0 = time.monotonic()
+        self._order: List[str] = []
+        self._at: dict = {}
+        self._lock = threading.Lock()
+
+    def mark(self, name: str) -> float:
+        """Record *name* once (later calls are ignored) and return its offset."""
+        now = time.monotonic() - self._t0
+        with self._lock:
+            if name in self._at:
+                return self._at[name]
+            self._order.append(name)
+            self._at[name] = now
+        log.debug("TIMELINE %-12s %.3fs", name, now)
+        return now
+
+    def get(self, name: str) -> Optional[float]:
+        with self._lock:
+            return self._at.get(name)
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self._t0
+
+    def summary(self) -> str:
+        with self._lock:
+            return " ".join(f"{n}={self._at[n]:.2f}s" for n in self._order)
 
 
 def _get_shared_pool(max_workers: int) -> ThreadPoolExecutor:
@@ -379,6 +465,119 @@ class DownloadController:
         # the CLI/TUI and every existing download path are byte-for-byte
         # unaffected.
         self._task_limiter: Optional[BandwidthLimiter] = None
+        # Per-download diagnostics + the "first body byte arrived" signal.
+        # Reset at the start of every download_file() call, because one
+        # controller instance may serve several downloads (CLI, tests).
+        self._timeline: Optional[DownloadTimeline] = None
+        self._first_byte = threading.Event()
+        self._first_byte_hook: Optional[Callable[[], None]] = None
+
+    # ------------------------------------------------------------------ #
+    # Per-download phase reporting
+    # ------------------------------------------------------------------ #
+
+    def _fire_first_byte(self) -> None:
+        """Announce the first body byte exactly once per download.
+
+        The UI must be able to tell "still connecting" from "transferring": the
+        task stays in STARTING until this fires, and only then becomes
+        DOWNLOADING.  Reporting DOWNLOADING before the first byte is what made a
+        dead server look like a running download for a minute and a half.
+        """
+        if self._first_byte.is_set():
+            return
+        self._first_byte.set()
+        if self._timeline is not None:
+            self._timeline.mark("first_byte")
+        hook = self._first_byte_hook
+        if hook is not None:
+            try:
+                hook()
+            except Exception:
+                pass
+
+    def _log_timeline(self, url: str, outcome: str) -> None:
+        """Emit one INFO line describing where this download spent its time.
+
+        Deliberately one line per download: enough to tell a slow server from a
+        slow engine, cheap enough to leave on in production.  The URL is
+        redacted — a signed link keeps its authorisation in the query string.
+        """
+        if self._timeline is None:
+            return
+        log.info(
+            "download %s %s (%s)",
+            outcome,
+            self._timeline.summary(),
+            redact_secrets(url),
+        )
+
+    def _save_resume_state(self, state_mgr, url: str, total_size: int,
+                           parts: List[DownloadPart], threads: int) -> bool:
+        """Persist resume state, never letting a sidecar failure abort a transfer.
+
+        ``DownloadState.save`` deliberately raises so callers *can* notice, but
+        resume state is auxiliary metadata: a disk-full or permission error while
+        writing ``*.dlstate`` must not kill a download that is otherwise fine.
+        It is logged as a warning (resume would restart from scratch) and the
+        transfer continues — the real destination write will report ENOSPC on
+        its own if the disk is genuinely full.
+        """
+        try:
+            state_mgr.save(url, total_size, parts, threads)
+            return True
+        except Exception as exc:  # noqa: BLE001 — auxiliary metadata only
+            log.warning(
+                "Could not persist resume state for %s (%s); "
+                "an interrupted download will restart from scratch",
+                redact_secrets(url), exc,
+            )
+            return False
+
+    def _startup_budget(self) -> float:
+        """Wall-clock cap for the whole pre-first-byte phase.
+
+        Derived from the user-visible ``startup_read_timeout`` so that raising
+        that setting genuinely tolerates a slower server.  A fixed ceiling would
+        silently override it — and a budget shorter than one read timeout is
+        self-defeating: the first attempt would be cut off before the server
+        could legitimately answer, and the retry would restart the wait from
+        zero, failing a healthy server that was about to respond.
+        """
+        try:
+            read = float(getattr(self.config, "startup_read_timeout", 0) or 0)
+        except (TypeError, ValueError):
+            read = 0.0
+        return max(_STARTUP_TOTAL_BUDGET, read + _STARTUP_BUDGET_MARGIN)
+
+    def _startup_timeouts(self, first_byte_seen: bool,
+                          deadline: Optional[float]) -> Optional[tuple]:
+        """``(connect, read)`` for this attempt, or ``None`` when out of budget.
+
+        The whole pre-first-byte phase is bounded by ``deadline``, and the first
+        attempt is allowed to wait out whatever is left of it: a server that
+        needs 15 s for its first byte should simply take 15 s, not be cut off at
+        some invented shorter interval and then retried from scratch.
+
+        The bounds cover *every* way the phase can go wrong — a server that says
+        nothing, and one that answers 5xx forever — because in both cases not a
+        single body byte has arrived and the task would otherwise sit in
+        STARTING indefinitely.  Retries still matter for failures that are
+        *fast* (a refused connection, an immediate 5xx, a reset), which is
+        exactly where the remaining attempts and the 1 s backoff are spent.
+        """
+        if first_byte_seen:
+            return _DOWNLOAD_TIMEOUT
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0.5:
+            return None
+        try:
+            connect_timeout = float(self.config.startup_connect_timeout)
+        except (TypeError, ValueError):
+            connect_timeout = 10.0
+        if remaining is None:
+            return (connect_timeout, _DOWNLOAD_TIMEOUT[1])
+        return (max(1.0, min(connect_timeout, remaining)), max(1.0, remaining))
 
     def set_task_speed_limit(self, max_bytes_per_second: int) -> None:
         """Apply a per-download bandwidth cap (0 disables it).
@@ -541,13 +740,17 @@ class DownloadController:
         the whole file N times over.
         """
         max_retries = max(1, self.config.max_retries)
-        chunk_size = self.config.chunk_size
+        # Read in bounded slices: the read size *is* the progress granularity
+        # (iter_content blocks until it has n bytes), so a 4 MB chunk made a
+        # slow link report nothing for tens of seconds and then jump.
+        chunk_size = min(self.config.chunk_size, _READ_SLICE)
         cancel_event = DownloadContext._cancel_event
-        startup_attempts = max(1, min(max_retries, self.config.startup_max_attempts))
-        startup_timeout = (
-            self.config.startup_connect_timeout,
-            self.config.startup_read_timeout,
+        startup_attempts = max(
+            1,
+            min(max_retries, self.config.startup_max_attempts, _STARTUP_MAX_ATTEMPTS),
         )
+        # Wall-clock cap for the whole pre-first-byte phase (all attempts).
+        startup_deadline = time.monotonic() + self._startup_budget()
         first_byte_seen = False
 
         for attempt in range(1, max_retries + 1):
@@ -564,6 +767,22 @@ class DownloadController:
             if part.is_complete:
                 part.done = True
                 return True
+
+            # Budget the pre-first-byte phase before spending a request.
+            timeouts = self._startup_timeouts(first_byte_seen, startup_deadline)
+            if timeouts is None:
+                self.last_error = (
+                    "Server accepted the connection but sent no data within "
+                    f"{self._startup_budget():.0f}s. It may be down, rate-limiting, "
+                    "or waiting for a browser session."
+                )
+                self._print(f"[red]{self.last_error}[/red]")
+                log.warning(
+                    "TIMELINE %s gave up waiting for a first byte (%s)",
+                    self._timeline.summary() if self._timeline else "",
+                    redact_secrets(url),
+                )
+                return False
 
             existing = part.downloaded_size
             range_start = part.start + existing
@@ -583,12 +802,17 @@ class DownloadController:
             headers.pop("Sec-Fetch-User", None)
             headers.pop("Upgrade-Insecure-Requests", None)
 
+            # Bound before the request so the handler below can always flush
+            # whatever this attempt managed to write.
+            local_bytes = 0
+
             try:
                 with self.smart_request(url, headers=headers, stream=True,
-                                        timeout=startup_timeout if not first_byte_seen
-                                        else _DOWNLOAD_TIMEOUT,
+                                        timeout=timeouts,
                                         session=self.session.probe_session
                                         if not first_byte_seen else None) as response:
+                    if self._timeline is not None and not first_byte_seen:
+                        self._timeline.mark("headers")
                     if response.status_code not in (200, 206):
                         raise requests.HTTPError(
                             f"HTTP {response.status_code}",
@@ -646,6 +870,7 @@ class DownloadController:
                         # by batching small writes into larger flushes.
                         local_bytes = 0
                         last_cb_time = 0.0
+                        last_flush_time = 0.0
 
                         for raw_chunk in response.iter_content(chunk_size):
                             if cancel_event.is_set() or self._ctl_cancelled(control):
@@ -692,11 +917,16 @@ class DownloadController:
                             dest.write(raw_chunk)
                             if not first_byte_seen:
                                 first_byte_seen = True
+                                self._fire_first_byte()
                             bytes_remaining -= chunk_len
                             local_bytes += chunk_len
 
-                            # Flush local state to shared counters periodically.
-                            if local_bytes >= _PROGRESS_FLUSH_THRESHOLD:
+                            # Flush local state to shared counters on a byte OR
+                            # time basis: bytes bound the lock traffic, time
+                            # bounds how stale the UI can get.
+                            now = time.monotonic()
+                            if (local_bytes >= _PROGRESS_FLUSH_THRESHOLD
+                                    or now - last_flush_time >= _PROGRESS_FLUSH_INTERVAL):
                                 with progress_lock:
                                     if progress is not None and task_id is not None:
                                         progress.update(task_id, advance=local_bytes)
@@ -705,10 +935,10 @@ class DownloadController:
                                         completed_val = shared_progress["completed"]
                                 speed_tracker.add(local_bytes)
                                 local_bytes = 0
+                                last_flush_time = now
 
                                 # Throttled progress callback (max ~20 Hz).
                                 if progress_callback and shared_progress is not None:
-                                    now = time.monotonic()
                                     if now - last_cb_time >= _CALLBACK_INTERVAL:
                                         self._notify_progress(
                                             progress_callback, completed_val, total_size
@@ -738,6 +968,18 @@ class DownloadController:
 
             except (requests.RequestException, OSError, ConnectionError) as exc:
                 retryable, status = _is_retryable_exception(exc)
+                # Count this attempt's unflushed tail before deciding whether to
+                # retry.  Those bytes are already in the file (the handle closes
+                # on the way out) and the retry resumes from them, so dropping
+                # them from the counter would make the displayed progress jump
+                # forward later.  Never allowed to go backwards.
+                if local_bytes and shared_progress is not None:
+                    with progress_lock:
+                        if progress is not None and task_id is not None:
+                            progress.update(task_id, advance=local_bytes)
+                        shared_progress["completed"] += local_bytes
+                    speed_tracker.add(local_bytes)
+                    local_bytes = 0
                 if optimizer is not None:
                     try:
                         optimizer.on_server_error(status)
@@ -750,7 +992,9 @@ class DownloadController:
                     not first_byte_seen and attempt >= startup_attempts
                 ):
                     detail = f" (HTTP {status})" if status else ""
-                    self.last_error = friendly_error_message(exc, status)
+                    self.last_error = friendly_error_message(
+                        exc, status, will_retry=False
+                    )
                     # Diagnostics name the exact range and the attempt budget,
                     # so a failure report is actionable rather than "part
                     # failed".  URL query strings are redacted: a signed link's
@@ -769,6 +1013,19 @@ class DownloadController:
                     started=first_byte_seen,
                     retry_after=_retry_after_seconds(exc),
                 )
+                if not first_byte_seen:
+                    # No body byte yet: these attempts are cheap, so never sleep
+                    # the exponential ladder's long tail and never sleep past the
+                    # phase budget.
+                    delay = min(delay, _STARTUP_MAX_BACKOFF)
+                    if time.monotonic() + delay > startup_deadline:
+                        self.last_error = (
+                            "Server accepted the connection but sent no data within "
+                            f"{self._startup_budget():.0f}s. It may be down, "
+                            "rate-limiting, or waiting for a browser session."
+                        )
+                        self._print(f"[red]{self.last_error}[/red]")
+                        return False
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -792,18 +1049,37 @@ class DownloadController:
         )
         max_retries = max(1, self.config.max_retries)
         cancel_event = DownloadContext._cancel_event
-        chunk_size = self.config.chunk_size
-        startup_attempts = max(1, min(max_retries, self.config.startup_max_attempts))
-        startup_timeout = (
-            self.config.startup_connect_timeout,
-            self.config.startup_read_timeout,
+        # Bounded read slices: the read size is the progress granularity, so a
+        # 4 MB chunk left the UI blind for a whole chunk's worth of transfer.
+        chunk_size = min(self.config.chunk_size, _READ_SLICE)
+        startup_attempts = max(
+            1,
+            min(max_retries, self.config.startup_max_attempts, _STARTUP_MAX_ATTEMPTS),
         )
+        # Wall-clock cap for the whole pre-first-byte phase (all attempts), so a
+        # server that accepts the connection and then says nothing fails in
+        # seconds with a specific error instead of stalling for ~90 s.
+        startup_deadline = time.monotonic() + self._startup_budget()
         first_byte_seen = False
 
         for attempt in range(1, max_retries + 1):
             if cancel_event.is_set() or self._ctl_cancelled(control):
                 return False
             if not self._ctl_wait(control):
+                return False
+
+            timeouts = self._startup_timeouts(first_byte_seen, startup_deadline)
+            if timeouts is None:
+                self.last_error = (
+                    "Server accepted the connection but sent no data within "
+                    f"{self._startup_budget():.0f}s. It may be down, rate-limiting, "
+                    "or waiting for a browser session."
+                )
+                self._print(f"[red]{self.last_error}[/red]")
+                log.warning(
+                    "TIMELINE gave up waiting for a first byte (%s)",
+                    self._timeline.summary() if self._timeline else "",
+                )
                 return False
 
             resume_from = tmp_path.stat().st_size if tmp_path.exists() else 0
@@ -817,10 +1093,11 @@ class DownloadController:
 
             try:
                 with self.smart_request(url, headers=headers, stream=True,
-                                        timeout=startup_timeout if not first_byte_seen
-                                        else _DOWNLOAD_TIMEOUT,
+                                        timeout=timeouts,
                                         session=self.session.probe_session
                                         if not first_byte_seen else None) as response:
+                    if self._timeline is not None and not first_byte_seen:
+                        self._timeline.mark("headers")
                     if response.status_code not in (200, 206):
                         response.raise_for_status()
 
@@ -883,6 +1160,7 @@ class DownloadController:
                             # Local byte accumulator for batched progress updates.
                             local_bytes = 0
                             last_cb_time = 0.0
+                            last_flush_time = 0.0
 
                             for raw_chunk in response.iter_content(chunk_size):
                                 if cancel_event.is_set() or self._ctl_cancelled(control):
@@ -906,22 +1184,28 @@ class DownloadController:
                                 local_bytes += len(raw_chunk)
                                 if not first_byte_seen:
                                     first_byte_seen = True
+                                    self._fire_first_byte()
 
-                                if local_bytes >= _PROGRESS_FLUSH_THRESHOLD:
+                                # Flush on bytes OR on time: the read slice
+                                # bounds how stale the byte counter can get, and
+                                # the interval keeps a fast link from flooding
+                                # the UI with events.
+                                now = time.monotonic()
+                                if (local_bytes >= _PROGRESS_FLUSH_THRESHOLD
+                                        or now - last_flush_time >= _PROGRESS_FLUSH_INTERVAL):
                                     if progress is not None and task_id is not None:
                                         progress.update(
                                             task_id, advance=local_bytes
                                         )
                                     speed_tracker.add(local_bytes)
                                     local_bytes = 0
+                                    last_flush_time = now
 
-                                    if progress_callback:
-                                        now = time.monotonic()
-                                        if now - last_cb_time >= _CALLBACK_INTERVAL:
-                                            self._notify_progress(
-                                                progress_callback, downloaded, total
-                                            )
-                                            last_cb_time = now
+                                    if progress_callback and now - last_cb_time >= _CALLBACK_INTERVAL:
+                                        self._notify_progress(
+                                            progress_callback, downloaded, total
+                                        )
+                                        last_cb_time = now
 
                             # Final flush.
                             if local_bytes > 0:
@@ -953,7 +1237,9 @@ class DownloadController:
                 if not retryable or attempt >= max_retries or (
                     not first_byte_seen and attempt >= startup_attempts
                 ):
-                    self.last_error = friendly_error_message(exc, status)
+                    self.last_error = friendly_error_message(
+                        exc, status, will_retry=False
+                    )
                     detail = f" (HTTP {status})" if status else ""
                     self._print(
                         f"[red]Download failed (attempt {attempt}/{max_retries})"
@@ -967,6 +1253,19 @@ class DownloadController:
                     started=first_byte_seen,
                     retry_after=_retry_after_seconds(exc),
                 )
+                if not first_byte_seen:
+                    # No body byte yet: these attempts are cheap, so never sleep
+                    # the exponential ladder's long tail and never sleep past the
+                    # phase budget.
+                    delay = min(delay, _STARTUP_MAX_BACKOFF)
+                    if time.monotonic() + delay > startup_deadline:
+                        self.last_error = (
+                            "Server accepted the connection but sent no data within "
+                            f"{self._startup_budget():.0f}s. It may be down, "
+                            "rate-limiting, or waiting for a browser session."
+                        )
+                        self._print(f"[red]{self.last_error}[/red]")
+                        return False
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
@@ -1007,6 +1306,16 @@ class DownloadController:
         path_callback: Optional[Callable[[str], None]] = None,
         smart_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
+        # Per-download diagnostics and the first-byte signal start here, so a
+        # reused controller instance never inherits the previous run's state.
+        self._timeline = DownloadTimeline()
+        self._first_byte = threading.Event()
+        self._first_byte_hook = (
+            (lambda: self._notify_status(status_callback, "DOWNLOADING"))
+            if status_callback is not None
+            else None
+        )
+        self._timeline.mark("requested")
         self.wait_for_schedule(control)
         if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled before it started.[/yellow]")
@@ -1046,6 +1355,10 @@ class DownloadController:
             error = analysis.error or ""
             resolved = str(getattr(analysis, "final_url", "") or "")
 
+        # Metadata is resolved (or deliberately skipped): from here on the only
+        # thing that can delay the first byte is the transfer request itself.
+        self._timeline.mark("metadata")
+
         if not reachable:
             if self._ctl_cancelled(control):
                 DownloadContext.clear()
@@ -1062,6 +1375,7 @@ class DownloadController:
             if not sec_ok:
                 self.last_error = sec_err
                 self._print(f"[red]{sec_err}[/red]")
+                self._log_timeline(url, "blocked")
                 return False
             self._print(
                 f"[yellow]Probe failed ({error or 'unreachable'}); "
@@ -1076,6 +1390,7 @@ class DownloadController:
             self._print("[yellow]Download cancelled while checking the link.[/yellow]")
             DownloadContext.clear()
             self.last_error = "Cancelled"
+            self._log_timeline(url, "cancelled")
             return False
 
         # Redirect-chain reuse: when the probe resolved the URL to a final
@@ -1122,15 +1437,25 @@ class DownloadController:
 
         if file_path.exists() and total_size > 0 and file_path.stat().st_size == total_size:
             self._print(f"[green]✓ Already complete: {file_path}")
+            self._timeline.mark("done")
+            self._log_timeline(url, "already-complete")
             return True
 
-        self._notify_status(status_callback, "DOWNLOADING")
+        # The transfer request is about to be issued.  Report CONNECTING rather
+        # than DOWNLOADING: no body byte exists yet, and the task stays in
+        # STARTING until one arrives, so a silent server cannot masquerade as a
+        # running transfer.  (See _fire_first_byte.)
+        self._notify_status(status_callback, "CONNECTING")
+        self._timeline.mark("connect")
 
         if not can_resume:
             try:
-                return self.single_thread_download(
+                ok = self.single_thread_download(
                     transfer_url, file_path, progress_callback, control=control
                 )
+                self._timeline.mark("done")
+                self._log_timeline(url, "ok" if ok else "failed")
+                return ok
             finally:
                 # Single-thread downloads do not create a DownloadState, but
                 # cancellation and pause controls still use this shared context.
@@ -1190,7 +1515,7 @@ class DownloadController:
                     file_path,
                     self.config.min_part_size,
                 )
-                state_mgr.save(url, total_size, parts, effective_threads)
+                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
         else:
             parts = None
 
@@ -1210,9 +1535,12 @@ class DownloadController:
                     f"[yellow]⚠ Reduced threads to {effective_threads} "
                     f"for file size {format_size(total_size)}[/yellow]"
                 )
-            state_mgr.save(url, total_size, parts, effective_threads)
+            self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
 
-        self._notify_status(status_callback, "DOWNLOADING")
+        # NOTE: DOWNLOADING is deliberately *not* announced here.  The engine
+        # announces it from _fire_first_byte() when the first body byte lands,
+        # so the task stays in STARTING while the parts are still connecting.
+        # Announcing it here made a silent server look like a running transfer.
         DownloadContext.begin(state_mgr, url, total_size, parts, effective_threads)
 
         already_bytes = sum(p.downloaded_size for p in parts)
@@ -1285,6 +1613,26 @@ class DownloadController:
                                 range_state=range_state,
                             )
                         finally:
+                            # Re-derive the counter from what is actually on
+                            # disk.  A failed attempt loses the bytes it had
+                            # buffered but not yet flushed, so the running
+                            # counter could sit below the truth and then jump
+                            # forward at the end.  Reading the parts back is
+                            # O(parts) stats — negligible, and it makes the
+                            # displayed number monotonic and honest.
+                            if shared_progress is not None:
+                                with progress_lock:
+                                    # ``downloaded_size`` stats the file, and the
+                                    # part handles are 8 MB-buffered, so the sum
+                                    # can LAG the byte counter the part threads
+                                    # have been adding.  Reconcile upwards only:
+                                    # assigning it outright made progress go
+                                    # backwards whenever a part finished while
+                                    # another still had buffered data.
+                                    shared_progress["completed"] = max(
+                                        shared_progress["completed"],
+                                        sum(p.downloaded_size for p in parts),
+                                    )
                             if governor is not None:
                                 governor.release()
 
@@ -1306,13 +1654,15 @@ class DownloadController:
                             )
 
                     self._notify_progress(progress_callback, completed, total_size)
+                    self._timeline.mark("transferred")
 
                 if self._ctl_cancelled(control):
-                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
                     self.last_error = "Cancelled"
                     self._print(
                         "[yellow]Download cancelled. State saved for resume.[/yellow]"
                     )
+                    self._log_timeline(url, "cancelled")
                     return False
 
                 if range_state.unusable:
@@ -1329,14 +1679,17 @@ class DownloadController:
                         stale.path.unlink(missing_ok=True)
                     state_mgr.delete()
                     try:
-                        return self.single_thread_download(
+                        ok = self.single_thread_download(
                             transfer_url, file_path, progress_callback, control=control
                         )
+                        self._timeline.mark("done")
+                        self._log_timeline(url, "ok (single-stream fallback)")
+                        return ok
                     finally:
                         DownloadContext.clear()
 
                 if failed_parts:
-                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
                     self.last_error = (
                         self.last_error
                         or f"{len(failed_parts)} part(s) failed — will resume on retry"
@@ -1348,29 +1701,33 @@ class DownloadController:
                     return False
 
                 if not all(p.is_complete for p in parts):
-                    state_mgr.save(url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
                     self.last_error = self.last_error or "Some parts incomplete — will resume on retry"
                     self._print("[bold red]Some parts incomplete. Re-run to resume.")
                     return False
 
             self._notify_status(status_callback, "MERGING")
+            self._timeline.mark("merge")
             merge_expected = total_size if self.config.verify_size else 0
             ok, merge_err = merge_parts(
                 parts, file_path, self.config.buffer_size, expected_size=merge_expected
             )
             if not ok:
-                state_mgr.save(url, total_size, parts, effective_threads)
+                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
                 self.last_error = merge_err
                 self._print(f"[red]{merge_err}. Parts preserved for retry.")
+                self._log_timeline(url, "merge-failed")
                 return False
 
             if verify_checksum and expected_hash:
                 self._notify_status(status_callback, "VERIFYING")
+                self._timeline.mark("verify")
                 try:
                     algorithm = detect_hash_algorithm(expected_hash)
                 except ValueError as exc:
                     self.last_error = str(exc)
                     self._print(f"[red]{exc}")
+                    self._log_timeline(url, "hash-unsupported")
                     return False
                 self._print(f"[cyan]Verifying {algorithm.upper()} checksum...")
                 actual_hash = calculate_checksum(file_path, algorithm)
@@ -1381,6 +1738,7 @@ class DownloadController:
                         f"got {actual_hash}"
                     )
                     file_path.unlink(missing_ok=True)
+                    self._log_timeline(url, "checksum-mismatch")
                     return False
                 self._print("[green]✓ Checksum verified!")
 
@@ -1388,6 +1746,8 @@ class DownloadController:
                 part.path.unlink(missing_ok=True)
             state_mgr.delete()
             self._print(f"[bold green]✓ Saved: {file_path}")
+            self._timeline.mark("done")
+            self._log_timeline(url, "ok")
             return True
 
         finally:
