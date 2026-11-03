@@ -87,6 +87,15 @@ class SettingsViewModel(
 
     fun setNotifyStarted(value: Boolean) = update { it.copy(notifyStarted = value) }
 
+    /**
+     * Records that the notification prompt has been shown.
+     *
+     * Persisted so the automatic prompt in [com.sohayb.n13download.N13App] fires
+     * at most once.  Also set from here, because asking from Settings is the same
+     * event from the user's point of view — one prompt, not two.
+     */
+    fun markNotificationPermissionAsked() = update { it.copy(notificationPermissionAsked = true) }
+
     fun setThemeMode(mode: ThemeMode) = update { it.copy(themeMode = mode) }
 
     fun setAccentColor(argb: Long) = update { it.copy(accentColor = argb) }

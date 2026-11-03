@@ -9,19 +9,19 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.sohayb.n13download.N13Application
 import com.sohayb.n13download.di.AppContainer
 import com.sohayb.n13download.domain.download.TaskEvent
 import com.sohayb.n13download.domain.model.DownloadTask
 import com.sohayb.n13download.domain.model.TaskStatus
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -51,12 +51,24 @@ import kotlinx.coroutines.launch
  */
 class DownloadService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /**
+     * Off the main thread on purpose.
+     *
+     * Everything this scope does — reading rows, formatting notification text,
+     * building `PendingIntent`s — used to run on `Main.immediate`, i.e. on the
+     * thread the UI is drawn on, for every progress tick of every download.
+     * None of it touches the view tree, and the service APIs called from here
+     * (`startForeground`, `stopForeground`, `stopSelf`, `notify`) are plain
+     * binder calls that are safe off the main thread.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var container: AppContainer
 
+    @Volatile
     private var foregroundActive = false
 
     /** Id the service is currently promoted under, or [NO_FOREGROUND_ID]. */
+    @Volatile
     private var foregroundId = NO_FOREGROUND_ID
 
     /**
@@ -65,8 +77,22 @@ class DownloadService : Service() {
      * Used to clear a stale progress notification the moment its task stops
      * being active, so nothing is ever cancelled that a completion/failure event
      * still owns.
+     *
+     * Concurrent because two collectors touch it: the progress stream and the
+     * terminal-event stream are separate coroutines on the same dispatcher, and
+     * the dispatcher is free to run them on different threads.
      */
-    private val postedProgressIds = mutableSetOf<Int>()
+    private val postedProgressIds: MutableSet<Int> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * What the notification currently on screen for each id says.
+     *
+     * Comparing against this is what makes "rebuild only when something the
+     * user can see changed" true.  The flow's `distinctUntilChanged()` alone was
+     * not enough: the projection carried the whole task, so any row change made
+     * every notification look stale and they were all rebuilt.
+     */
+    private val postedContent = ConcurrentHashMap<Int, NotificationContent>()
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var idleJob: Job? = null
@@ -101,6 +127,25 @@ class DownloadService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Android 15 puts a six-hour ceiling on `dataSync` foreground services.
+     *
+     * When the limit is reached the system calls this and the app **must** stop
+     * the service itself; otherwise the platform throws
+     * `ForegroundServiceDidNotStopInTimeException` and kills the process — a
+     * crash in the middle of a transfer, with no state saved.  Pausing first
+     * means the queue records real PAUSED rows with their byte counts, so the
+     * downloads resume from where they were instead of restarting.
+     */
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int) {
+        Log.w(TAG, "dataSync foreground time limit reached; pausing the queue")
+        scope.launch {
+            runCatching { container.queue.pauseAll() }
+            stopForegroundAndSelf()
+        }
+    }
+
     override fun onDestroy() {
         releaseWakeLock()
         scope.cancel()
@@ -129,6 +174,9 @@ class DownloadService : Service() {
                 val settings = container.settingsSnapshot()
                 val notificationId = DownloadNotifications.notificationId(event.taskId)
                 postedProgressIds.remove(notificationId)
+                // The terminal notification replaces the progress one, so the
+                // cached content no longer describes what is on screen.
+                postedContent.remove(notificationId)
 
                 when (event) {
                     is TaskEvent.Completed -> {
@@ -176,51 +224,57 @@ class DownloadService : Service() {
      */
     private fun observeProgress() {
         scope.launch {
-            container.repository.observeAll()
-                .map { tasks -> tasks.map { it.toNotificationState() } }
-                .distinctUntilChanged()
-                .collect { states ->
-                    val settings = container.settingsSnapshot()
+            container.repository.observeAll().collect { tasks ->
+                val settings = container.settingsSnapshot()
 
-                    if (!settings.notificationsEnabled) {
-                        states.forEach { container.notifications.cancel(it.notificationId) }
-                        postedProgressIds.clear()
-                        return@collect
-                    }
-
-                    val notifiable = states.filter { it.notifiable }
-                    val totalSpeed = notifiable.sumOf { it.fullTask?.currentSpeed ?: 0.0 }
-                    val liveIds = notifiable.mapTo(HashSet()) { it.notificationId }
-
-                    // Rebuild each active task's notification from the row we
-                    // already have, so no extra database read is needed.
-                    notifiable.forEach { state ->
-                        val task = state.fullTask ?: return@forEach
-                        container.notifications.post(
-                            state.notificationId,
-                            container.notifications.progress(task, totalSpeed),
-                        )
-                        postedProgressIds.add(state.notificationId)
-                    }
-
-                    // A task that stopped being active loses its progress
-                    // notification.  Terminal events remove their own id from
-                    // `postedProgressIds` before posting, so this only ever
-                    // cancels genuinely abandoned progress.
-                    val stale = postedProgressIds.filter { it !in liveIds }
-                    stale.forEach { container.notifications.cancel(it) }
-                    postedProgressIds.retainAll(liveIds)
-
-                    // The foreground notification follows the first active task.
-                    // Promoting onto *its* id keeps the count at exactly one.
-                    val anchor = notifiable.firstOrNull()?.fullTask
-                    if (anchor != null) {
-                        promoteToForeground(
-                            DownloadNotifications.notificationId(anchor.id),
-                            container.notifications.progress(anchor, totalSpeed),
-                        )
-                    }
+                if (!settings.notificationsEnabled) {
+                    postedProgressIds.forEach { container.notifications.cancel(it) }
+                    postedProgressIds.clear()
+                    postedContent.clear()
+                    return@collect
                 }
+
+                val states = tasks.map { it.toNotificationState() }
+                val notifiable = states.filter { it.notifiable }
+                val totalSpeed = notifiable.sumOf { it.fullTask?.currentSpeed ?: 0.0 }
+                val totalSpeedBucket = (totalSpeed / SPEED_BUCKET).toLong()
+                val liveIds = notifiable.mapTo(HashSet()) { it.notificationId }
+
+                // Rebuild each active task's notification from the row we
+                // already have, so no extra database read is needed — but only
+                // when the rendered fields actually changed.
+                notifiable.forEach { state ->
+                    val task = state.fullTask ?: return@forEach
+                    val content = state.content(totalSpeedBucket)
+                    if (postedContent[state.notificationId] == content) return@forEach
+
+                    container.notifications.post(
+                        state.notificationId,
+                        container.notifications.progress(task, totalSpeed),
+                    )
+                    postedProgressIds.add(state.notificationId)
+                    postedContent[state.notificationId] = content
+                }
+
+                // A task that stopped being active loses its progress
+                // notification.  Terminal events remove their own id from
+                // `postedProgressIds` before posting, so this only ever
+                // cancels genuinely abandoned progress.
+                val stale = postedProgressIds.filter { it !in liveIds }
+                stale.forEach { container.notifications.cancel(it) }
+                postedProgressIds.retainAll(liveIds)
+                postedContent.keys.retainAll(liveIds)
+
+                // The foreground notification follows the first active task.
+                // Promoting onto *its* id keeps the count at exactly one.
+                val anchor = notifiable.firstOrNull()?.fullTask
+                if (anchor != null) {
+                    promoteToForeground(
+                        DownloadNotifications.notificationId(anchor.id),
+                        container.notifications.progress(anchor, totalSpeed),
+                    )
+                }
+            }
         }
     }
 
@@ -248,9 +302,8 @@ class DownloadService : Service() {
 
     private fun promoteToForeground(id: Int, notification: Notification) {
         if (foregroundActive && foregroundId == id) {
-            // Same task: a plain notify is enough and avoids re-entering
-            // startForeground on every progress tick.
-            container.notifications.post(id, notification)
+            // Same task, and its notification was just posted by the caller:
+            // re-entering startForeground on every progress tick is pure churn.
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -314,29 +367,61 @@ private data class NotificationState(
     val notificationId: Int,
     val status: TaskStatus,
     val percent: Int,
-    val downloaded: Long,
+    val downloadedBucket: Long,
     val speedBucket: Long,
     val notifiable: Boolean,
     val fullTask: DownloadTask?,
-)
-
-private fun DownloadTask.toNotificationState(): NotificationState {
-    val known = hasKnownSize
-    return NotificationState(
-        taskKey = id,
-        notificationId = DownloadNotifications.notificationId(id),
+) {
+    /**
+     * The rendered fields, for change detection.
+     *
+     * Byte counts are compared in [BYTE_BUCKET] steps and speeds in
+     * [SPEED_BUCKET] steps.  Both are finer than what the notification prints,
+     * so text can never be left stale — it just stops being rebuilt for
+     * differences the formatter would have rounded away.
+     */
+    fun content(totalSpeedBucket: Long): NotificationContent = NotificationContent(
+        filename = fullTask?.filename.orEmpty(),
+        percent = percent,
+        downloadedBucket = downloadedBucket,
+        totalSize = fullTask?.totalSize ?: 0L,
+        speedBucket = speedBucket,
+        totalSpeedBucket = totalSpeedBucket,
         status = status,
-        // Unknown-size transfers report 0% and a monotonically growing byte
-        // count instead, so they still refresh on real progress.
-        percent = if (known) percent.toInt().coerceIn(0, 100) else 0,
-        downloaded = if (known) 0L else downloadedSize / BYTE_BUCKET,
-        // Speeds are shown rounded; finer changes would redraw the notification
-        // for no visible benefit.
-        speedBucket = (currentSpeed / SPEED_BUCKET).toLong(),
-        notifiable = isNotifiable(),
-        fullTask = this,
     )
 }
+
+/**
+ * Everything a progress notification actually renders.
+ *
+ * Two notifications with equal content are indistinguishable to the user, so
+ * posting the second one is pure cost: a binder round trip, a notification
+ * rebuild in SystemUI, and a wake-up for a UI that has nothing new to show.
+ */
+private data class NotificationContent(
+    val filename: String,
+    val percent: Int,
+    val downloadedBucket: Long,
+    val totalSize: Long,
+    val speedBucket: Long,
+    val totalSpeedBucket: Long,
+    val status: TaskStatus,
+)
+
+private fun DownloadTask.toNotificationState(): NotificationState = NotificationState(
+    taskKey = id,
+    notificationId = DownloadNotifications.notificationId(id),
+    status = status,
+    // Unknown-size transfers report 0% and a growing byte count instead, so they
+    // still refresh on real progress.
+    percent = if (hasKnownSize) percent.toInt().coerceIn(0, 100) else 0,
+    downloadedBucket = downloadedSize / BYTE_BUCKET,
+    // Speeds are shown rounded; finer changes would redraw the notification for
+    // no visible benefit.
+    speedBucket = (currentSpeed / SPEED_BUCKET).toLong(),
+    notifiable = isNotifiable(),
+    fullTask = this,
+)
 
 /**
  * Whether a task deserves a notification.

@@ -163,7 +163,12 @@ class PersianLocalizationDeviceTest {
         /**
          * Keys whose value is the same in both languages on purpose: the example
          * URL is shown verbatim in the link field, and a URL is not translated.
+         * The batch screen has one for each mode (a plain list and a pattern).
          */
-        val INTENTIONALLY_IDENTICAL = setOf("add_link_placeholder")
+        val INTENTIONALLY_IDENTICAL = setOf(
+            "add_link_placeholder",
+            "batch_url_placeholder",
+            "batch_pattern_placeholder",
+        )
     }
 }

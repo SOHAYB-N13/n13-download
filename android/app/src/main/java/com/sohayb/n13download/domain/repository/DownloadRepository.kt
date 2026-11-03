@@ -45,15 +45,36 @@ interface DownloadRepository {
 
     suspend fun insert(task: DownloadTask): Long
 
+    /**
+     * Inserts a batch in one round trip.
+     *
+     * A batch of N links must not cost N invalidations of the observed table:
+     * every one of those re-runs the queries behind the list, the queue and the
+     * notifications.  Implementations are expected to make this atomic.
+     */
+    suspend fun insertAll(tasks: List<DownloadTask>): List<Long> {
+        val ids = ArrayList<Long>(tasks.size)
+        for (task in tasks) ids += insert(task)
+        return ids
+    }
+
     suspend fun update(task: DownloadTask)
 
     /**
      * Hot-path update: only the counters change, so the rest of the row is left
      * alone.  Called a few times per second per task at most.
+     *
+     * @param totalBytes the size the transfer discovered, or 0 when it is still
+     *   unknown.  A non-zero value is persisted, because a task can start life
+     *   without a size (a batch entry is queued without a probe) and the row
+     *   must stop claiming "unknown length" the moment the engine knows better —
+     *   otherwise the list shows an indeterminate bar and 0% for the whole
+     *   download even though every byte count is right.
      */
     suspend fun updateProgress(
         id: Long,
         downloadedBytes: Long,
+        totalBytes: Long,
         currentSpeed: Double,
         averageSpeed: Double,
         etaSeconds: Double?,

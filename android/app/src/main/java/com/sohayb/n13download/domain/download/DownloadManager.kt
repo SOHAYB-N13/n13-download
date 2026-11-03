@@ -5,6 +5,9 @@ import com.sohayb.n13download.core.FilenameResolver
 import com.sohayb.n13download.core.N13Errors
 import com.sohayb.n13download.core.UniqueNaming
 import com.sohayb.n13download.core.UrlSecurity
+import com.sohayb.n13download.domain.batch.BatchAddResult
+import com.sohayb.n13download.domain.batch.BatchItem
+import com.sohayb.n13download.domain.batch.BatchRejection
 import com.sohayb.n13download.domain.model.DownloadAnalysis
 import com.sohayb.n13download.domain.model.DownloadPriority
 import com.sohayb.n13download.domain.model.DownloadSettings
@@ -199,6 +202,145 @@ class DownloadManager(
     /** `report.pdf` -> `report (1).pdf`, never overwriting an existing file. */
     suspend fun uniqueName(destination: DownloadDestination, filename: String): String =
         UniqueNaming.unique(destination.listNames(), filename)
+
+    /**
+     * Queues a whole batch in one pass.
+     *
+     * This is the Android counterpart of the Windows `add_batch` bridge call, and
+     * it deliberately differs from calling [addDownload] in a loop in three ways
+     * that all matter for a phone:
+     *
+     *  - **No per-link probe.**  The Windows batch queues `DownloadRequest`s and
+     *    lets ANALYZING discover size and Range support.  Probing 200 links here
+     *    would mean 200 round trips before the user sees anything happen; the
+     *    engine already probes each task when it starts.
+     *  - **One database read, one insert.**  Duplicate detection is answered from
+     *    a single snapshot instead of a query per link, and the rows are written
+     *    in one transaction, so a 500-entry batch does not invalidate the UI
+     *    stream 500 times.
+     *  - **One DNS lookup per host.**  A pattern batch is hundreds of links on the
+     *    same host; resolving each one would add seconds of latency to a queue
+     *    operation that must feel instant.
+     *
+     * Duplicate policy follows the Windows batch rule: `ask` cannot be answered
+     * for 200 files at once, and silently overwriting is never acceptable, so it
+     * behaves as `rename`.  Links already waiting or downloading are reported as
+     * skipped rather than queued twice.
+     */
+    suspend fun addBatch(
+        items: List<BatchItem>,
+        startNow: Boolean = true,
+    ): BatchAddResult = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext BatchAddResult()
+
+        val settings = settingsProvider.current()
+        val destination = destinations.create(settings)
+        if (!destination.isAvailable()) {
+            return@withContext BatchAddResult(
+                rejected = items.map { BatchRejection(it.url, N13Errors.DESTINATION_UNAVAILABLE) },
+            )
+        }
+
+        // One authoritative read: the UI stream can be replaying an older
+        // snapshot, and scheduling decisions must not be made from it.
+        val existing = repository.allNow()
+        val activeUrls = existing.filter { !it.status.isTerminal }.mapTo(HashSet()) { it.url }
+        val takenNames = runCatching { destination.listNames().toMutableSet() }
+            .getOrDefault(mutableSetOf())
+
+        val hostPolicy = HashMap<String, UrlSecurity.Result>()
+        val rejected = ArrayList<BatchRejection>()
+        val tasks = ArrayList<DownloadTask>(items.size)
+        val seenUrls = HashSet<String>()
+        var skipped = 0
+
+        for (item in items) {
+            val raw = item.url.trim()
+            if (raw.isEmpty()) continue
+
+            val url = FilenameResolver.normalizeUrl(raw)
+            if (!FilenameResolver.isValidHttpUrl(url)) {
+                rejected += BatchRejection(raw, N13Errors.INVALID_URL)
+                continue
+            }
+            if (!seenUrls.add(url)) {
+                skipped++
+                continue
+            }
+            if (url in activeUrls) {
+                skipped++
+                continue
+            }
+
+            val host = FilenameResolver.hostOf(url)
+            val security = hostPolicy.getOrPut(host) {
+                val syntactic = UrlSecurity.validate(url, blockPrivate = false)
+                if (!syntactic.ok) {
+                    syntactic
+                } else if (settings.blockPrivateUrls) {
+                    UrlSecurity.resolveHost(host)
+                } else {
+                    UrlSecurity.Result.OK
+                }
+            }
+            if (!security.ok) {
+                rejected += BatchRejection(url, security.reason)
+                continue
+            }
+
+            val requested = item.filename?.takeIf { it.isNotBlank() }
+                ?: FilenameResolver.fromUrl(url)
+            val baseName = FilenameResolver.sanitize(requested)
+            if (!FilenameResolver.isSafeName(baseName)) {
+                rejected += BatchRejection(url, "That file name is not valid")
+                continue
+            }
+
+            var finalName = baseName
+            if (finalName in takenNames) {
+                when (settings.duplicatePolicy) {
+                    DuplicatePolicy.REPLACE -> destination.delete(finalName)
+                    DuplicatePolicy.ALLOW -> Unit
+                    DuplicatePolicy.ASK, DuplicatePolicy.RENAME ->
+                        finalName = UniqueNaming.unique(takenNames, finalName)
+                }
+            }
+            takenNames += finalName
+
+            val category = if (settings.autoCategorize) {
+                CategoryDetector.detect(finalName, "")
+            } else {
+                "General"
+            }
+
+            tasks += DownloadTask(
+                url = url,
+                filename = finalName,
+                directory = destination.displayPath,
+                category = category,
+                status = TaskStatus.QUEUED,
+                priority = DownloadPriority.DEFAULT,
+                createdAt = System.currentTimeMillis(),
+                autostart = startNow,
+                destinationKind = settings.destinationKind,
+                destinationUri = settings.destinationUri,
+            )
+        }
+
+        if (tasks.isEmpty()) {
+            return@withContext BatchAddResult(skipped = skipped, rejected = rejected)
+        }
+
+        val ids = repository.insertAll(tasks)
+        // One pump for the whole batch; `pump` respects the queue gate.
+        queue.enqueueAllPending()
+        BatchAddResult(
+            queued = ids.size,
+            taskIds = ids,
+            skipped = skipped,
+            rejected = rejected,
+        )
+    }
 
     // --- Task control -------------------------------------------------------
 

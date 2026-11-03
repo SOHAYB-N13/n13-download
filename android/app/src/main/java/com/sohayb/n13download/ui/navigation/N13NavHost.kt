@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -28,6 +29,7 @@ import com.sohayb.n13download.di.AppContainer
 import com.sohayb.n13download.ui.components.N13BottomBar
 import com.sohayb.n13download.ui.components.N13Icons
 import com.sohayb.n13download.ui.screens.adddownload.AddDownloadScreen
+import com.sohayb.n13download.ui.screens.batch.BatchScreen
 import com.sohayb.n13download.ui.screens.details.DetailsScreen
 import com.sohayb.n13download.ui.screens.downloads.DownloadsScreen
 import com.sohayb.n13download.ui.screens.history.HistoryScreen
@@ -46,6 +48,13 @@ enum class N13Destination(
     val icon: ImageVector,
 ) {
     Downloads("downloads", R.string.nav_downloads, N13Icons.Download),
+
+    /**
+     * Batch sits right after Downloads, matching the Windows sidebar order.
+     * It is a primary destination there too — queueing many links is a first-class
+     * task, not something hidden behind a menu.
+     */
+    Batch("batch", R.string.nav_batch, N13Icons.Batch),
     History("history", R.string.nav_history, N13Icons.History),
     Settings("settings", R.string.nav_settings, N13Icons.Settings),
     ;
@@ -150,6 +159,21 @@ fun N13NavHost(
                     onOpenTask = { id -> navController.navigate(N13Routes.details(id)) },
                     onOpenHistory = {
                         navController.navigate(N13Destination.History.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            }
+
+            composable(N13Destination.Batch.route) {
+                val settings by container.settingsProvider.settings
+                    .collectAsStateWithLifecycle(initialValue = container.settingsSnapshot())
+                BatchScreen(
+                    manager = container.downloadManager,
+                    startNowByDefault = settings.startImmediately,
+                    onQueued = {
+                        navController.navigate(N13Destination.Downloads.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                             launchSingleTop = true
                         }
                     },

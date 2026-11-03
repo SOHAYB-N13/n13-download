@@ -84,19 +84,39 @@ class OkHttpDownloadEngine : DownloadEngine {
 
         // ---- Discover the real size / Range support -----------------------
         listener.onPhase(TaskStatus.STARTING)
-        val probe = runCatching { HttpProbe.probe(request.task.url, settings) }
-            .onFailure { Log.d(TAG, "probe before transfer failed", it) }
-            .getOrNull()
+
+        // A task added from the add screen already carries the analysis the probe
+        // produced there (size *and* proven Range support), and the queue
+        // persisted it.  Probing again would add a whole round trip — a HEAD,
+        // plus a one-byte GET when the host does not advertise ranges — to the
+        // start of every transfer, to learn what the row already says.
+        //
+        // Only a *complete* analysis is trusted: a task queued without a probe
+        // (batch entries are, by design) has no size or no proven ranges, and it
+        // still needs the probe.  A resume probes too — it costs one request and
+        // re-validates the segment plan against a server that may have changed
+        // since the file was added.
+        val known = request.task
+        val trusted = known.totalSize > 0L &&
+            known.supportsRange &&
+            known.downloadedSize == 0L
+        val probe = if (trusted) {
+            null
+        } else {
+            runCatching { HttpProbe.probe(known.url, settings) }
+                .onFailure { Log.d(TAG, "probe before transfer failed", it) }
+                .getOrNull()
+        }
 
         val probeOk = probe?.ok == true
-        val totalSize = if (probeOk) probe!!.totalSize else request.task.totalSize
-        val supportsRange = if (probeOk) probe!!.supportsRange else request.task.supportsRange
+        val totalSize = if (probeOk) probe!!.totalSize else known.totalSize
+        val supportsRange = if (probeOk) probe!!.supportsRange else known.supportsRange
         val transferUrl = probe?.finalUrl
             ?.takeIf { probeOk && it.isNotBlank() && it.startsWith("http") }
-            ?: request.task.url
+            ?: known.url
 
-        if (!probeOk) {
-            Log.d(TAG, "probe failed (${probe?.error}); attempting a direct download")
+        if (probe != null && !probeOk) {
+            Log.d(TAG, "probe failed (${probe.error}); attempting a direct download")
         }
 
         listener.onPhase(TaskStatus.DOWNLOADING)

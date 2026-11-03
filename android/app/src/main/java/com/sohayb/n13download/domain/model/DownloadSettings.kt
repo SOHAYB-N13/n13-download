@@ -54,6 +54,12 @@ data class DownloadSettings(
     val notifyCompleted: Boolean = true,
     val notifyFailed: Boolean = true,
     val notifyStarted: Boolean = false,
+    /**
+     * True once N13 has shown the Android 13+ notification prompt, whatever the
+     * answer.  Persisted so a user who declined is never asked again by surprise;
+     * Settings still offers an explicit way back.
+     */
+    val notificationPermissionAsked: Boolean = false,
 
     // --- Network -----------------------------------------------------------
     val userAgent: String = com.sohayb.n13download.core.BrowserHeaders.DEFAULT_USER_AGENT,

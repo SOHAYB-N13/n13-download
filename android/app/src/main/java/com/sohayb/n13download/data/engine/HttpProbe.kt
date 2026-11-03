@@ -28,6 +28,23 @@ object HttpProbe {
 
     private const val TAG = "N13Probe"
 
+    /**
+     * Below this size a segmented download is not worth its own handshake, so the
+     * extra one-byte request that proves Range support is skipped.
+     */
+    private const val RANGE_PROBE_MIN_SIZE = 1L * 1024 * 1024
+
+    /**
+     * Status codes a HEAD may return *because it is a HEAD*.
+     *
+     * Servers reject the method, throttle it, or answer it differently from a GET;
+     * for these the ranged GET is a genuinely better source.  Every other 4xx/5xx
+     * (404, 410, 500, 502 …) is the server's real answer about the resource, and
+     * spending the rest of the probe budget to hear it twice is what made a dead
+     * link take three round trips to report.
+     */
+    private val HEAD_MAY_BE_BLOCKED = setOf(400, 401, 403, 405, 406, 429, 501)
+
     suspend fun probe(
         url: String,
         settings: DownloadSettings,
@@ -38,7 +55,13 @@ object HttpProbe {
 
         // ---- Strategy A: HEAD ------------------------------------------
         when (val head = runHead(client, url, userAgent)) {
-            is HeadResult.Done -> return@withContext head.analysis
+            is HeadResult.Done -> return@withContext verifyRangeSupport(
+                client = client,
+                url = url,
+                userAgent = userAgent,
+                analysis = head.analysis,
+                enabled = !headOnly,
+            )
             // Timeout / connection error / 405 / HTML: fall through.
             HeadResult.Retry -> Unit
         }
@@ -51,6 +74,69 @@ object HttpProbe {
     private sealed interface HeadResult {
         data class Done(val analysis: DownloadAnalysis) : HeadResult
         data object Retry : HeadResult
+    }
+
+    /** `"HTTP 404 - Not Found"`, matching the wording the Windows build reports. */
+    private fun describe(code: Int, reason: String): String =
+        if (reason.isBlank()) "HTTP $code" else "HTTP $code - $reason"
+
+    /**
+     * Spends one byte to find out whether ranges really work.
+     *
+     * `Accept-Ranges` is advisory and is missing on plenty of hosts that *do*
+     * honour a `Range` header, while some hosts advertise it and then answer a
+     * ranged request with `200`.  Either way the decision is made from the
+     * response, not the advertisement: only a `206` counts as support, and its
+     * `Content-Range` total is authoritative enough to correct a wrong
+     * `Content-Length` from the HEAD.
+     *
+     * Only worth a request when the file is big enough to be split at all.
+     */
+    private fun verifyRangeSupport(
+        client: OkHttpClient,
+        url: String,
+        userAgent: String,
+        analysis: DownloadAnalysis,
+        enabled: Boolean,
+    ): DownloadAnalysis {
+        if (!enabled || !analysis.ok) return analysis
+        if (analysis.supportsRange || analysis.totalSize < RANGE_PROBE_MIN_SIZE) return analysis
+
+        val request = Request.Builder()
+            .url(url)
+            .headers(
+                toOkHttpHeaders(
+                    BrowserHeaders.build(url, userAgent, rangeHeader = "bytes=0-0", accept = "*/*"),
+                ),
+            )
+            .build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                // 200 means the Range header was ignored: no segmented download.
+                if (response.code != 206) return analysis
+
+                val contentRange = response.headers.toFlatMap().header("Content-Range").orEmpty()
+                val provenSize = contentRange
+                    .substringAfter('/', "")
+                    .trim()
+                    .toLongOrNull()
+                    ?: 0L
+
+                analysis.copy(
+                    supportsRange = true,
+                    totalSize = if (provenSize > 0L) provenSize else analysis.totalSize,
+                )
+            }
+        } catch (io: IOException) {
+            // The HEAD already succeeded; a failed verification only means we
+            // keep the conservative single-connection plan.
+            Log.d(TAG, "Range verification failed (${io.javaClass.simpleName}), assuming no ranges")
+            analysis
+        } catch (unexpected: Exception) {
+            Log.d(TAG, "Range verification failed unexpectedly, assuming no ranges", unexpected)
+            analysis
+        }
     }
 
     private fun runHead(client: OkHttpClient, url: String, userAgent: String): HeadResult {
@@ -67,7 +153,16 @@ object HttpProbe {
                 val finalUrl = response.request.url.toString()
 
                 // A HEAD the server does not support tells us nothing about the file.
-                if (code >= 400 || code == 405) return HeadResult.Retry
+                if (code >= 400) {
+                    return if (code in HEAD_MAY_BE_BLOCKED) {
+                        HeadResult.Retry
+                    } else {
+                        // A definitive error — the server has said what it thinks.
+                        HeadResult.Done(
+                            failure(url, describe(code, response.message), finalUrl),
+                        )
+                    }
+                }
                 // An HTML answer to a HEAD may still be a real file on GET.
                 if (RetryPolicy.isHtmlInterstitial(headers["Content-Type"])) return HeadResult.Retry
 
@@ -142,7 +237,7 @@ object HttpProbe {
                 val headers = response.headers.toFlatMap()
                 val finalUrl = response.request.url.toString()
                 if (response.code >= 400) {
-                    return failure(url, "HTTP ${response.code}", finalUrl)
+                    return failure(url, describe(response.code, response.message), finalUrl)
                 }
                 if (RetryPolicy.isHtmlInterstitial(headers["Content-Type"])) {
                     return failure(url, N13Errors.HTML_INTERSTITIAL, finalUrl)

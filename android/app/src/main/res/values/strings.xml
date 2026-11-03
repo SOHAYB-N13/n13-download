@@ -134,6 +134,62 @@
     <string name="add_resumable">Resumable</string>
     <string name="add_unknown_size">Unknown size</string>
 
+    <!-- Batch -->
+    <string name="nav_batch">Batch</string>
+    <string name="batch_title">Batch</string>
+    <string name="batch_mode_url_list">URL list</string>
+    <string name="batch_mode_pattern">Pattern</string>
+    <string name="batch_url_hint">One link per line. Blank lines are ignored.</string>
+    <string name="batch_url_placeholder">https://example.com/file1.zip\nhttps://example.com/file2.zip</string>
+    <string name="batch_valid_count">%1$d valid</string>
+    <string name="batch_duplicate_count">%1$d duplicate</string>
+    <string name="batch_invalid_count">%1$d invalid</string>
+    <string name="batch_show_rejects">Show rejected lines</string>
+    <string name="batch_hide_rejects">Hide rejected lines</string>
+    <string name="batch_rejects_more">…and %1$d more</string>
+    <string name="batch_reject_not_link">Not a link</string>
+    <string name="batch_reject_invalid">Not a valid http(s) link</string>
+    <string name="batch_reject_duplicate">Duplicate — already in this list</string>
+    <string name="batch_reject_overflow">Over the limit for one batch</string>
+    <string name="batch_import">Import file</string>
+    <string name="batch_paste">Paste</string>
+    <string name="batch_queue_count">Queue %1$d</string>
+    <string name="batch_queued_count">%1$d queued</string>
+    <string name="batch_skipped_count">%1$d skipped</string>
+    <string name="batch_rejected_count">%1$d rejected</string>
+    <string name="batch_nothing_queued">Nothing could be queued</string>
+    <string name="batch_all_duplicates">Already in the queue (%1$d)</string>
+    <string name="batch_scan_first">Scan the pattern first</string>
+    <string name="batch_import_failed">Could not read that file</string>
+    <string name="batch_pattern_hint">Use * where the number goes — N13 fills it in for every entry.</string>
+    <string name="batch_pattern_url">Pattern URL</string>
+    <string name="batch_pattern_placeholder">https://example.com/episode-*.mkv</string>
+    <string name="batch_pattern_mode">How to build the list</string>
+    <string name="batch_pattern_mode_auto">Scan until missing</string>
+    <string name="batch_pattern_mode_range">Number range</string>
+    <string name="batch_start_at">Start</string>
+    <string name="batch_end_at">End</string>
+    <string name="batch_step">Step</string>
+    <string name="batch_zero_padding">Zero padding</string>
+    <string name="batch_scan">Scan</string>
+    <string name="batch_cancel_scan">Stop</string>
+    <string name="batch_scan_progress">Tried %1$d · found %2$d</string>
+    <string name="batch_preview_found">%1$d found</string>
+    <string name="batch_preview_range">%1$d URLs will be queued</string>
+    <string name="batch_preview_auto">First URLs the scan will try</string>
+    <string name="batch_preview_more">…and %1$d more</string>
+    <string name="batch_stop_misses">Stopped after %1$d misses in a row</string>
+    <string name="batch_stop_attempts">Stopped at the %1$d-attempt limit</string>
+    <string name="batch_stop_server">Too many server errors — the host looks unhealthy</string>
+    <string name="batch_problem_empty">Enter a pattern URL</string>
+    <string name="batch_problem_placeholder">Use * where the number goes, e.g. file-*.zip</string>
+    <string name="batch_problem_url">That pattern does not build a valid http(s) link</string>
+    <string name="batch_problem_start">Start must be 0 or more</string>
+    <string name="batch_problem_padding">Zero padding must be between 0 and 12</string>
+    <string name="batch_problem_end">End must be at least the start value</string>
+    <string name="batch_problem_step">Step must be at least 1</string>
+    <string name="batch_problem_too_many">That range is too large — split it into smaller batches</string>
+
     <!-- Duplicate conflict -->
     <string name="duplicate_active_title">Already downloading</string>
     <string name="duplicate_title">Duplicate detected</string>
@@ -296,6 +352,18 @@
     <string name="notif_complete_title">Download complete</string>
     <string name="notif_failed_title">Download failed</string>
     <string name="notif_cancelled_title">Download cancelled</string>
+    <string name="notif_permission_title">Turn on download notifications</string>
+    <string name="notif_permission_message">N13 shows live progress while a download runs, and tells you when it finishes or fails. Without this permission those notifications stay hidden — downloads themselves still work.</string>
+    <string name="notif_permission_allow">Allow notifications</string>
+    <string name="notif_permission_later">Not now</string>
+    <string name="settings_notif_access">Notification access</string>
+    <string name="settings_notif_granted">Allowed</string>
+    <string name="settings_notif_not_asked">Not asked yet</string>
+    <string name="settings_notif_denied">Denied</string>
+    <string name="settings_notif_blocked">Blocked in system settings</string>
+    <string name="settings_notif_allow">Allow</string>
+    <string name="settings_notif_open_settings">Open settings</string>
+    <string name="settings_notif_system_hint">Android controls this permission, not N13.</string>
 
     <!-- Row metadata -->
     <string name="row_paused_elapsed">Paused · %1$s</string>

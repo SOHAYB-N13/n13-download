@@ -62,6 +62,9 @@ import com.sohayb.n13download.ui.components.N13InfoRow
 import com.sohayb.n13download.ui.components.N13PageHeader
 import com.sohayb.n13download.ui.components.N13SectionLabel
 import com.sohayb.n13download.ui.components.N13SecondaryButton
+import com.sohayb.n13download.ui.permission.NotificationAccess
+import com.sohayb.n13download.ui.permission.NotificationPermissionState
+import com.sohayb.n13download.ui.permission.rememberNotificationPermission
 import com.sohayb.n13download.ui.theme.LocalN13Colors
 import com.sohayb.n13download.ui.theme.N13AccentSwatches
 import com.sohayb.n13download.ui.theme.N13PillShape
@@ -89,6 +92,15 @@ fun SettingsScreen(
 
     val context = LocalContext.current
     val appInfo = remember(context) { readAppInfo(context) }
+
+    // Android's POST_NOTIFICATIONS decision, tracked separately from the app's
+    // own switch.  Opening this screen is an explicit "I want notifications"
+    // signal, so answering the prompt here also records that N13 has asked and
+    // stops the automatic pre-download prompt from firing later.
+    val permission = rememberNotificationPermission(
+        askedBefore = settings.notificationPermissionAsked,
+        onAsked = viewModel::markNotificationPermissionAsked,
+    )
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -273,6 +285,15 @@ fun SettingsScreen(
 
         // ---- Notifications --------------------------------------------------
         SettingsGroup(title = stringResource(R.string.settings_group_notifications)) {
+            // The app-level switch above is ours; this row is the OS one. They
+            // are independent — notifications can be enabled here and blocked by
+            // Android — so both have to be visible, or a user who granted the
+            // permission once and then blocked the channel would see "on" and
+            // get nothing.
+            NotificationAccessRow(
+                permission = permission,
+                enabled = settings.notificationsEnabled,
+            )
             ToggleRow(
                 label = stringResource(R.string.settings_notifications),
                 hint = stringResource(R.string.settings_notifications_hint),
@@ -407,6 +428,79 @@ private fun SettingsRowContainer(content: @Composable () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp),
     ) { content() }
+}
+
+/**
+ * The OS-level notification permission, with the one action that can change it.
+ *
+ * Android 13 split notification consent out of the install: the app can be fully
+ * functional, `notificationsEnabled` can be `true`, and every notification is
+ * still dropped because `POST_NOTIFICATIONS` was never granted.  This row is the
+ * only place a user can see that state and fix it — and it deliberately offers
+ * different actions per state rather than a single "Allow" button that would do
+ * nothing once the permission is blocked.
+ */
+@Composable
+private fun NotificationAccessRow(
+    permission: NotificationPermissionState,
+    enabled: Boolean,
+) {
+    val n13 = LocalN13Colors.current
+
+    val status = when (permission.access) {
+        NotificationAccess.GRANTED -> stringResource(R.string.settings_notif_granted)
+        NotificationAccess.NOT_ASKED -> stringResource(R.string.settings_notif_not_asked)
+        NotificationAccess.DENIED -> stringResource(R.string.settings_notif_denied)
+        NotificationAccess.BLOCKED -> stringResource(R.string.settings_notif_blocked)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.settings_notif_access),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) n13.text1 else n13.text3,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                // The status is data ("Allowed", "Denied"), so it is shown as
+                // the hint — it is the whole reason this row exists.
+                text = status,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (permission.granted) n13.text3 else n13.accent,
+            )
+        }
+
+        if (enabled && !permission.granted) {
+            Spacer(Modifier.width(12.dp))
+            N13SecondaryButton(
+                label = if (permission.canRequest) {
+                    stringResource(R.string.settings_notif_allow)
+                } else {
+                    stringResource(R.string.settings_notif_open_settings)
+                },
+                // A prompt the OS will not show must not be launched: asking
+                // when BLOCKED is a silent no-op and looks like a broken button.
+                onClick = {
+                    if (permission.canRequest) permission.request() else permission.openSettings()
+                },
+            )
+        }
+    }
+
+    if (enabled && !permission.granted) {
+        Text(
+            text = stringResource(R.string.settings_notif_system_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = n13.text3,
+            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+        )
+    }
 }
 
 @Composable

@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -89,9 +90,19 @@ class DownloadQueue(
 
     init {
         scope.launch {
+            // Only a change that can free or occupy a slot needs a scheduling
+            // pass.  This used to call `pump()` on *every* settings emission,
+            // which meant a full database read per keystroke in the
+            // user-agent field and a pointless query on every theme or accent
+            // change.
+            var lastConcurrency = -1
             settingsProvider.settings.collect { settings ->
                 globalLimiter.updateLimit(settings.maxSpeedBps)
-                pump()
+                val concurrency = settings.maxConcurrent.coerceAtLeast(1)
+                if (concurrency != lastConcurrency) {
+                    lastConcurrency = concurrency
+                    pump()
+                }
             }
         }
     }
@@ -187,7 +198,19 @@ class DownloadQueue(
     }
 
     suspend fun remove(taskId: Long, deleteFile: Boolean) {
-        mutex.withLock { controls[taskId] }?.requestCancel()
+        // A live transfer must actually be gone before its files are touched.
+        // Requesting the cancel alone is not enough: the engine still owns an
+        // open socket and a `.part` handle, so deleting the working folder
+        // underneath it either failed or was undone by the next write, leaving
+        // an orphaned directory nothing ever collected.
+        val live = mutex.withLock { controls[taskId] to jobs[taskId] }
+        live.first?.requestCancel()
+        live.second?.cancel()
+        // Bounded: a blocking socket read cannot be interrupted, so this only
+        // waits for a cooperative stop.  The cancel above has already aborted
+        // the in-flight request, so the wait is short in practice.
+        withTimeoutOrNull(REMOVE_STOP_TIMEOUT_MILLIS) { live.second?.join() }
+
         val task = repository.get(taskId)
         if (task != null) {
             if (deleteFile && task.resolvedPath.isNotBlank()) {
@@ -214,8 +237,18 @@ class DownloadQueue(
         repository.clearHistory()
     }
 
+    /**
+     * Pauses **everything**: closes the queue gate *and* stops every active
+     * transfer.
+     *
+     * Windows parity (`TaskManager.pause_all`) — the old version only closed the
+     * gate and paused waiting rows, so "Pause all" left running downloads
+     * running and the button did not do what it says.
+     */
     suspend fun pauseAll() {
         _queuePaused.value = true
+        val live = mutex.withLock { controls.values.toList() }
+        live.forEach { it.requestPause() }
         repository.allNow()
             .filter { it.status == TaskStatus.QUEUED }
             .forEach { repository.updateStatus(it.id, TaskStatus.PAUSED) }
@@ -295,11 +328,16 @@ class DownloadQueue(
             runCatching { repository.updateStatus(task.id, TaskStatus.FAILED, message) }
             emit(TaskEvent.Failed(task.id, task.filename, message))
         } finally {
-            mutex.withLock {
-                controls.remove(task.id)
-                taskLimiters.remove(task.id)
+            // Runs on the cancellation path too (remove-while-running), so it
+            // must not suspend in a cancelled context or the slot and the
+            // control would never be released.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    controls.remove(task.id)
+                    taskLimiters.remove(task.id)
+                }
+                updateActiveCount()
             }
-            updateActiveCount()
             // A finished task frees a slot; keep the queue moving.
             scope.launch { pump() }
         }
@@ -370,6 +408,7 @@ class DownloadQueue(
                 repository.updateProgress(
                     task.id,
                     outcome.totalBytes,
+                    outcome.totalBytes,
                     0.0,
                     outcome.averageSpeed,
                     0.0,
@@ -380,12 +419,12 @@ class DownloadQueue(
             }
 
             is EngineOutcome.Paused -> {
-                repository.updateProgress(task.id, outcome.downloadedBytes, 0.0, 0.0, null)
+                repository.updateProgress(task.id, outcome.downloadedBytes, 0L, 0.0, 0.0, null)
                 repository.updateStatus(task.id, TaskStatus.PAUSED)
             }
 
             is EngineOutcome.Cancelled -> {
-                repository.updateProgress(task.id, outcome.downloadedBytes, 0.0, 0.0, null)
+                repository.updateProgress(task.id, outcome.downloadedBytes, 0L, 0.0, 0.0, null)
                 repository.updateStatus(task.id, TaskStatus.CANCELLED)
                 emit(TaskEvent.Cancelled(task.id, targetName))
             }
@@ -436,6 +475,9 @@ class DownloadQueue(
 
     private companion object {
         const val PAUSE_GRACE_MILLIS = 8_000L
+
+        /** How long `remove` waits for a cancelled transfer to unwind. */
+        const val REMOVE_STOP_TIMEOUT_MILLIS = 2_000L
 
         /** Lower priority value first, then oldest request first. */
         val QUEUE_ORDER = compareBy<DownloadTask> { it.priority.value }
@@ -537,7 +579,14 @@ private class QueueEngineListener(
         if (now - lastWriteMillis < WRITE_INTERVAL_MILLIS) return
         lastWriteMillis = now
         write {
-            repository.updateProgress(taskId, downloadedBytes, speed, averageSpeed, etaSeconds)
+            repository.updateProgress(
+                taskId,
+                downloadedBytes,
+                totalBytes,
+                speed,
+                averageSpeed,
+                etaSeconds,
+            )
         }
     }
 

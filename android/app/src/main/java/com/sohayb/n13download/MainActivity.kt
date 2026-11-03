@@ -80,7 +80,11 @@ class MainActivity : ComponentActivity() {
             ?.let { pendingTaskId.value = it }
 
         intent.getStringExtra(EXTRA_START_TAB)
-            ?.takeIf { it == N13Destination.History.route || it == N13Destination.Settings.route }
+            ?.takeIf {
+                it == N13Destination.Batch.route ||
+                    it == N13Destination.History.route ||
+                    it == N13Destination.Settings.route
+            }
             ?.let { startTab.value = it }
 
         when (intent.action) {

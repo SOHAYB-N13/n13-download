@@ -166,6 +166,57 @@ object FilenameResolver {
         return FALLBACK
     }
 
+    /**
+     * Best filename from the URL alone, with no server response.
+     *
+     * Ported from `core/urls.py::url_filename`, which the Windows batch page uses
+     * because a batch entry is queued before anything has been fetched.  Priority:
+     *
+     * 1. the last path segment — authoritative even without an extension, so
+     *    `/download` names the file `download`;
+     * 2. a filename carried in the query string (`download.php?file=setup.exe`);
+     * 3. the host, so two anonymous links never collide on one placeholder name.
+     */
+    fun fromUrl(url: String): String {
+        val uri = try {
+            URI(url)
+        } catch (_: Exception) {
+            return FALLBACK
+        }
+
+        val path = decode(uri.path.orEmpty())
+        val segment = path.trimEnd('/').substringAfterLast('/')
+        if (segment.isNotEmpty()) {
+            val name = sanitize(segment)
+            if (name != FALLBACK) return name
+        }
+
+        filenameFromQuery(uri.rawQuery.orEmpty())?.let { return it }
+
+        val host = sanitize(uri.host.orEmpty())
+        return if (host == FALLBACK) FALLBACK else host
+    }
+
+    /** Query keys that conventionally carry a filename, matching `core/urls.py`. */
+    private val FILENAME_PARAMS = setOf(
+        "file", "filename", "file_name", "name", "download", "dl", "f",
+        "attachment", "fn", "document",
+    )
+
+    private fun filenameFromQuery(query: String): String? {
+        if (query.isEmpty()) return null
+        for (pair in query.split('&')) {
+            if (pair.isEmpty()) continue
+            val key = pair.substringBefore('=')
+            val value = pair.substringAfter('=', "")
+            if (value.isEmpty()) continue
+            if (key.lowercase(Locale.US) !in FILENAME_PARAMS) continue
+            val name = sanitize(decode(value))
+            if (looksLikeFilename(name)) return name
+        }
+        return null
+    }
+
     private fun header(headers: Map<String, String>, name: String): String =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value.orEmpty()
 

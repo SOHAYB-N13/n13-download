@@ -68,6 +68,7 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             prefs[Keys.NOTIFY_COMPLETED] = settings.notifyCompleted
             prefs[Keys.NOTIFY_FAILED] = settings.notifyFailed
             prefs[Keys.NOTIFY_STARTED] = settings.notifyStarted
+            prefs[Keys.NOTIFICATION_PERMISSION_ASKED] = settings.notificationPermissionAsked
             prefs[Keys.USER_AGENT] = settings.userAgent
             prefs[Keys.THEME_MODE] = settings.themeMode.storageValue
             prefs[Keys.ACCENT_COLOR] = settings.accentColor
@@ -131,6 +132,8 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
             notifyCompleted = this[Keys.NOTIFY_COMPLETED] ?: defaults.notifyCompleted,
             notifyFailed = this[Keys.NOTIFY_FAILED] ?: defaults.notifyFailed,
             notifyStarted = this[Keys.NOTIFY_STARTED] ?: defaults.notifyStarted,
+            notificationPermissionAsked = this[Keys.NOTIFICATION_PERMISSION_ASKED]
+                ?: defaults.notificationPermissionAsked,
             userAgent = this[Keys.USER_AGENT] ?: BrowserHeaders.DEFAULT_USER_AGENT,
             themeMode = ThemeMode.fromStorage(this[Keys.THEME_MODE]),
             accentColor = this[Keys.ACCENT_COLOR] ?: defaults.accentColor,
@@ -165,6 +168,7 @@ class DataStoreSettingsProvider(context: Context) : SettingsProvider {
         val NOTIFY_COMPLETED = booleanPreferencesKey("notify_completed")
         val NOTIFY_FAILED = booleanPreferencesKey("notify_failed")
         val NOTIFY_STARTED = booleanPreferencesKey("notify_started")
+        val NOTIFICATION_PERMISSION_ASKED = booleanPreferencesKey("notification_permission_asked")
         val USER_AGENT = stringPreferencesKey("user_agent")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT_COLOR = longPreferencesKey("accent_color")

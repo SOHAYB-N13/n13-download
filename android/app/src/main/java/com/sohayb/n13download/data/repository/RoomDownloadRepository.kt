@@ -84,15 +84,21 @@ class RoomDownloadRepository(
 
     override suspend fun insert(task: DownloadTask): Long = dao.insert(task.toEntity())
 
+    override suspend fun insertAll(tasks: List<DownloadTask>): List<Long> {
+        if (tasks.isEmpty()) return emptyList()
+        return dao.insertAll(tasks.map { it.toEntity() })
+    }
+
     override suspend fun update(task: DownloadTask) = dao.update(task.toEntity())
 
     override suspend fun updateProgress(
         id: Long,
         downloadedBytes: Long,
+        totalBytes: Long,
         currentSpeed: Double,
         averageSpeed: Double,
         etaSeconds: Double?,
-    ) = dao.updateProgress(id, downloadedBytes, currentSpeed, averageSpeed, etaSeconds)
+    ) = dao.updateProgress(id, downloadedBytes, totalBytes, currentSpeed, averageSpeed, etaSeconds)
 
     override suspend fun updateStatus(id: Long, status: TaskStatus, error: String?) {
         // The lifecycle is validated against the same transition table the Windows

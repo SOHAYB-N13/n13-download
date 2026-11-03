@@ -85,6 +85,16 @@ interface DownloadTaskDao {
     @Insert
     suspend fun insert(entity: DownloadTaskEntity): Long
 
+    /**
+     * Inserts a whole batch in one transaction.
+     *
+     * One `@Insert` with a list is a single statement batch and a single
+     * invalidation, so a 500-entry batch does not re-run every `@Query` 500
+     * times and re-render the list 500 times.
+     */
+    @Insert
+    suspend fun insertAll(entities: List<DownloadTaskEntity>): List<Long>
+
     @Update
     suspend fun update(entity: DownloadTaskEntity)
 
@@ -92,6 +102,7 @@ interface DownloadTaskDao {
         """
         UPDATE download_tasks
         SET downloaded_size = :downloadedBytes,
+            total_size = CASE WHEN :totalBytes > 0 THEN :totalBytes ELSE total_size END,
             current_speed = :currentSpeed,
             average_speed = :averageSpeed,
             eta_seconds = :etaSeconds
@@ -101,6 +112,7 @@ interface DownloadTaskDao {
     suspend fun updateProgress(
         id: Long,
         downloadedBytes: Long,
+        totalBytes: Long,
         currentSpeed: Double,
         averageSpeed: Double,
         etaSeconds: Double?,
