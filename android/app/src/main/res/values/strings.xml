@@ -352,10 +352,10 @@
     <string name="notif_complete_title">Download complete</string>
     <string name="notif_failed_title">Download failed</string>
     <string name="notif_cancelled_title">Download cancelled</string>
-    <string name="notif_permission_title">Turn on download notifications</string>
-    <string name="notif_permission_message">N13 shows live progress while a download runs, and tells you when it finishes or fails. Without this permission those notifications stay hidden — downloads themselves still work.</string>
-    <string name="notif_permission_allow">Allow notifications</string>
-    <string name="notif_permission_later">Not now</string>
+    <string name="notif_permission_title">Enable notifications</string>
+    <string name="notif_permission_message">To keep you informed about download status, download progress, and completed files, may the app show you notifications?</string>
+    <string name="notif_permission_allow">Yes, enable them</string>
+    <string name="notif_permission_later">Not for now</string>
     <string name="settings_notif_access">Notification access</string>
     <string name="settings_notif_granted">Allowed</string>
     <string name="settings_notif_not_asked">Not asked yet</string>

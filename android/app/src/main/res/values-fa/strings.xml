@@ -351,10 +351,10 @@
     <string name="notif_complete_title">دانلود تکمیل شد</string>
     <string name="notif_failed_title">دانلود ناموفق بود</string>
     <string name="notif_cancelled_title">دانلود لغو شد</string>
-    <string name="notif_permission_title">اعلان‌های دانلود را روشن کنید</string>
-    <string name="notif_permission_message">N13 هنگام دانلود پیشرفت زنده را نشان می‌دهد و پایان یا شکست آن را خبر می‌دهد. بدون این دسترسی، اعلان‌ها پنهان می‌مانند — خودِ دانلود همچنان کار می‌کند.</string>
-    <string name="notif_permission_allow">اجازهٔ اعلان‌ها</string>
-    <string name="notif_permission_later">الآن نه</string>
+    <string name="notif_permission_title">فعال‌سازی اعلان‌ها</string>
+    <string name="notif_permission_message">برای اطلاع از وضعیت دانلودها، پیشرفت دانلود و تکمیل فایل‌ها، به برنامه اجازه نمایش اعلان‌ها را می‌دهید؟</string>
+    <string name="notif_permission_allow">بله، فعال می‌کنم</string>
+    <string name="notif_permission_later">فعلاً نه</string>
     <string name="settings_notif_access">دسترسی اعلان</string>
     <string name="settings_notif_granted">مجاز</string>
     <string name="settings_notif_not_asked">هنوز پرسیده نشده</string>
