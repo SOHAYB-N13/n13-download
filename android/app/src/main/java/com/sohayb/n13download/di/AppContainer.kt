@@ -17,7 +17,7 @@ import com.sohayb.n13download.domain.download.SettingsProvider
 import com.sohayb.n13download.domain.model.DownloadSettings
 import com.sohayb.n13download.domain.repository.DownloadRepository
 import com.sohayb.n13download.domain.update.UpdateCenter
-import com.sohayb.n13download.service.DownloadNotifications
+import com.sohayb.n13download.service.DownloadNotificationCenter
 import com.sohayb.n13download.service.DownloadService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +50,27 @@ class AppContainer(context: Context) {
 
     val destinations = DestinationFactoryImpl(appContext)
 
-    val notifications = DownloadNotifications(appContext)
+    /**
+     * Latest settings, cached so synchronous callers (the service's notification
+     * path, for instance) never have to block on DataStore.
+     */
+    @Volatile
+    private var cachedSettings: DownloadSettings = DownloadSettings()
+
+    fun settingsSnapshot(): DownloadSettings = cachedSettings
+
+    /**
+     * The single owner of the notification shade.
+     *
+     * Application-scoped, not service-scoped, for two reasons: it must remember
+     * what it has posted across a service stop and start (the service stops as
+     * soon as nothing is running, but paused notifications stay), and the
+     * dismissal receiver has to reach it without a service being alive.
+     */
+    val notificationCenter = DownloadNotificationCenter(
+        context = appContext,
+        settings = { settingsSnapshot() },
+    )
 
     val queue = DownloadQueue(
         repository = repository,
@@ -59,6 +79,11 @@ class AppContainer(context: Context) {
         destinations = destinations,
         workingRoot = destinations.workingRoot(),
         scope = scope,
+        // Removing a download must take its notification with it, even when the
+        // centre has never seen the task — which is exactly the case after the
+        // process was restarted while a finished notification was still on screen.
+        onTaskRemoved = { notificationCenter.forget(it) },
+        onHistoryCleared = { notificationCenter.forgetFinished() },
     )
 
     val downloadManager = DownloadManager(
@@ -84,16 +109,21 @@ class AppContainer(context: Context) {
         scope = scope,
     )
 
-    /**
-     * Latest settings, cached so synchronous callers (the service's notification
-     * path, for instance) never have to block on DataStore.
-     */
-    @Volatile
-    private var cachedSettings: DownloadSettings = DownloadSettings()
-
-    fun settingsSnapshot(): DownloadSettings = cachedSettings
-
     init {
+        // Empty the shade before anything else can post to it.
+        //
+        // Notifications survive a process death; the app's knowledge of them does
+        // not, and neither the system (`getActiveNotifications()` returns nothing
+        // on MIUI) nor a persisted record can say which of them are still true.
+        // Starting from an empty shade and rebuilding it from the rows in the
+        // same pass is exact, and it also clears leftovers from versions that
+        // kept no records at all.  Runs synchronously and first, so it can never
+        // race the foreground service — `Application.onCreate` always precedes
+        // `Service.onCreate`.
+        runCatching { notificationCenter.resetShade() }.onFailure {
+            android.util.Log.w("N13App", "notification reset failed", it)
+        }
+
         scope.launch {
             settingsProvider.settings.collect { cachedSettings = it }
         }
@@ -106,6 +136,17 @@ class AppContainer(context: Context) {
             val recovered = downloadManager.recoverAfterRestart()
             if (recovered > 0) {
                 android.util.Log.i("N13App", "recovered $recovered interrupted download(s)")
+            }
+
+            // Rebuild the shade *after* recovery, from the persisted rows: a
+            // process killed mid-transfer leaves progress notifications claiming
+            // downloads that are no longer running, and they must not survive the
+            // restart.  Doing it here rather than waiting for the service is what
+            // makes that true even when nothing is downloading.
+            runCatching {
+                notificationCenter.render(repository.allNow())
+            }.onFailure {
+                android.util.Log.w("N13App", "notification reconcile failed", it)
             }
         }
 

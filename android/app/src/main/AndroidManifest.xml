@@ -84,6 +84,12 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
+        <!-- Records a swiped notification so the dismissal is honoured rather than
+             undone by the next refresh. -->
+        <receiver
+            android:name=".service.NotificationDismissReceiver"
+            android:exported="false" />
+
         <!-- Exposes finished app-storage downloads to open/share intents. -->
         <provider
             android:name="androidx.core.content.FileProvider"

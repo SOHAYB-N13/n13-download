@@ -29,7 +29,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Edge-triggered lifecycle events, used to drive notifications. */
+/**
+ * Edge-triggered lifecycle events.
+ *
+ * Notifications deliberately do **not** consume these: they are derived from the
+ * persisted rows by [com.sohayb.n13download.service.DownloadNotificationCenter],
+ * so there is one source of truth and no event can arrive "late" with an older
+ * state than the row it describes.  The stream remains as an observation point
+ * for tests and for anything that genuinely needs the edge rather than the state.
+ */
 sealed interface TaskEvent {
     val taskId: Long
     val filename: String
@@ -65,6 +73,14 @@ class DownloadQueue(
     /** Root folder for `.part` files; always app-private and writable. */
     private val workingRoot: File,
     private val scope: CoroutineScope,
+    /**
+     * Called after a task row is deleted, so anything still describing it in the
+     * notification shade goes with it.  A callback rather than a dependency: the
+     * queue owns downloads, not notifications.
+     */
+    private val onTaskRemoved: suspend (Long) -> Unit = {},
+    /** Called after the history is emptied. */
+    private val onHistoryCleared: suspend () -> Unit = {},
 ) {
 
     private val mutex = Mutex()
@@ -229,12 +245,14 @@ class DownloadQueue(
             }
             cleanupWorkingFiles(taskId)
             repository.delete(taskId)
+            onTaskRemoved(taskId)
         }
         pump()
     }
 
     suspend fun clearHistory() {
         repository.clearHistory()
+        onHistoryCleared()
     }
 
     /**

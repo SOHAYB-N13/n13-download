@@ -350,7 +350,14 @@
     <string name="notif_preparing">آماده‌سازی دانلودها…</string>
     <string name="notif_complete_title">دانلود تکمیل شد</string>
     <string name="notif_failed_title">دانلود ناموفق بود</string>
+    <string name="notif_failed_unknown">خطای نامشخص</string>
     <string name="notif_cancelled_title">دانلود لغو شد</string>
+    <string name="notif_state_starting">در حال شروع…</string>
+    <string name="notif_state_analyzing">در حال بررسی…</string>
+    <string name="notif_state_merging">در حال ادغام بخش‌ها…</string>
+    <string name="notif_state_verifying">در حال بررسی نهایی…</string>
+    <string name="notif_paused_detail">متوقف · %1$s</string>
+    <string name="notif_eta_left">%1$s باقی‌مانده</string>
     <string name="notif_permission_title">فعال‌سازی اعلان‌ها</string>
     <string name="notif_permission_message">برای اطلاع از وضعیت دانلودها، پیشرفت دانلود و تکمیل فایل‌ها، به برنامه اجازه نمایش اعلان‌ها را می‌دهید؟</string>
     <string name="notif_permission_allow">بله، فعال می‌کنم</string>

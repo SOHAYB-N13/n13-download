@@ -351,7 +351,14 @@
     <string name="notif_preparing">Preparing downloads…</string>
     <string name="notif_complete_title">Download complete</string>
     <string name="notif_failed_title">Download failed</string>
+    <string name="notif_failed_unknown">Unknown error</string>
     <string name="notif_cancelled_title">Download cancelled</string>
+    <string name="notif_state_starting">Starting…</string>
+    <string name="notif_state_analyzing">Analyzing…</string>
+    <string name="notif_state_merging">Merging segments…</string>
+    <string name="notif_state_verifying">Verifying…</string>
+    <string name="notif_paused_detail">Paused · %1$s</string>
+    <string name="notif_eta_left">%1$s left</string>
     <string name="notif_permission_title">Enable notifications</string>
     <string name="notif_permission_message">To keep you informed about download status, download progress, and completed files, may the app show you notifications?</string>
     <string name="notif_permission_allow">Yes, enable them</string>
