@@ -31,6 +31,11 @@ const Shortcuts = {
   },
 
   onKeydown(app, e) {
+    // A dialog owns the keyboard while it is open: the modal shell handles
+    // Escape/Tab, and its own controls handle the rest.  Global shortcuts here
+    // could otherwise replace the dialog and discard everything typed in it.
+    const overlay = Utils.$id("modalOverlay");
+    if (overlay && overlay.classList.contains("open")) return;
     const ae = document.activeElement;
     const typing = !!(ae && (
       /^(input|textarea|select)$/i.test(ae.tagName || "") ||

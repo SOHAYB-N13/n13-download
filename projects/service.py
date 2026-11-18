@@ -49,9 +49,12 @@ from projects.views import ProjectCounts, ProjectView, derive_state
 
 logger = logging.getLogger("n13")
 
-# Statuses that mean bytes are moving.  Deleting a project mid-transfer would
-# orphan a worker, so these block a delete until the caller stops them.
-_TRANSFER_STATES = ("Analyzing", "Starting", "Downloading", "Merging", "Verifying")
+# Statuses that mean the task still owns unfinished work.  Deleting a project
+# mid-transfer would orphan a worker; deleting one with a paused transfer would
+# drop its partial data and leave a stale row behind when the worker finalizes.
+# PAUSED is included on purpose — it is in core.task.ACTIVE_STATES for the same
+# reason ("still alive" for queue accounting).
+_TRANSFER_STATES = ("Analyzing", "Starting", "Downloading", "Paused", "Merging", "Verifying")
 
 __all__ = ["ProjectGate", "ProjectService"]
 

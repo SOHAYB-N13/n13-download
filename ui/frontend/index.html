@@ -8,10 +8,16 @@
 <link rel="icon" href="favicon.png">
 <title>N13 Download Manager</title>
 <script>
-/* Apply saved theme before first paint to avoid a flash. */
+/* Apply saved theme and text direction before first paint to avoid a flash. */
 try {
   var p = JSON.parse(localStorage.getItem("n13-prefs") || "{}");
   document.documentElement.dataset.theme = p.theme || "dark";
+  // The sidebar is pinned left by CSS in both languages; only content
+  // direction changes here.
+  if (p.lang === "fa") {
+    document.documentElement.lang = "fa";
+    document.documentElement.dir = "rtl";
+  }
 } catch (e) {}
 </script>
 <link rel="stylesheet" href="css/main.css">
@@ -293,6 +299,8 @@ try {
         <!-- The open group's name, state, progress and settings.  Hidden on the
              "All" tab, where there is no single group to describe. -->
         <div class="grp-head" id="grpHead" hidden></div>
+
+        <div class="sched-panel" id="scheduledPanel" hidden></div>
 
         <div class="dl-toolbar">
           <div class="chips" id="filterChips" role="group" aria-label="Filter downloads" data-i18n-aria-label="landmark.filter_downloads">
@@ -673,6 +681,8 @@ try {
 <script src="js/features/groups/groups-view.js"></script>
 <script src="js/features/groups/group-dialogs.js"></script>
 <script src="js/features/groups/groups.js"></script>
+<script src="js/features/batch/scan-results.js"></script>
+<script src="js/features/scheduling/scheduled-panel.js"></script>
 <script src="js/app.js"></script>
 <script src="js/queue.js"></script>
 </body>

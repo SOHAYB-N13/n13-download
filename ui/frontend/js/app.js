@@ -96,6 +96,10 @@ const App = {
     // Bind the group strip containers before any render, so a
     // `projects_changed` event that arrives during boot has somewhere to paint.
     if (typeof Groups !== "undefined") Groups.init(this);
+    if (typeof ScheduledPanel !== "undefined") {
+      ScheduledPanel.mount();
+      ScheduledPanel.render(this);
+    }
     Utils.$qa("[data-nav]").forEach((el) =>
       el.addEventListener("click", () => this.navigate(el.dataset.nav)));
     this._renderPageChrome();
@@ -103,6 +107,10 @@ const App = {
 
     const start = async () => {
       await this._initBackend();
+      // pywebview has fired both ready-event spellings on some builds, and a
+      // fallback timer also calls start(). Polling loops must exist once.
+      if (this.state.started) return;
+      this.state.started = true;
       this._startPolling();
       this._startStatsPolling();
       this._startSparkline();
@@ -223,6 +231,12 @@ const App = {
   _applyLanguage() {
     const lang = (this.state.settings && this.state.settings.language) || "en";
     I18N.setLang(lang);
+    // Cache for the pre-paint script in index.html so Persian starts RTL.
+    try {
+      const p = JSON.parse(localStorage.getItem("n13-prefs") || "{}");
+      p.lang = lang;
+      localStorage.setItem("n13-prefs", JSON.stringify(p));
+    } catch {}
   },
 
   _onLanguageChange() {
@@ -293,7 +307,10 @@ const App = {
     Utils.$id("winMin").addEventListener("click", () => API.winMinimize());
     Utils.$id("winMax").addEventListener("click", () => API.winToggleMaximize());
     Utils.$id("winClose").addEventListener("click", () => API.winClose());
-    window.addEventListener("resize", Utils.throttle(() => this._syncMaxState(), 250));
+    window.addEventListener("resize", Utils.throttle(() => {
+      this._syncMaxState();
+      Nav.moveNavIndicator(this);
+    }, 250));
     this._syncMaxState();
   },
 
@@ -892,7 +909,13 @@ const App = {
   async _renderHistoryStats() {
     const box = Utils.$id("historyStats");
     if (!box) return;
+    // Several renders can overlap (navigation, search, a task finishing).  Only
+    // the newest request may write, or a slow older reply can replace fresh
+    // analytics with stale numbers.
+    const ticket = (this._historyStatsTicket || 0) + 1;
+    this._historyStatsTicket = ticket;
     const a = await API.getAnalytics();
+    if (ticket !== this._historyStatsTicket || !box.isConnected) return;
     if (!a || !a.total_downloads) {
       box.hidden = true;
       box.innerHTML = "";
@@ -1006,11 +1029,18 @@ const App = {
 
     const area = Utils.$id("batchUrls");
     const counter = Utils.$id("batchCount");
-    const updateCount = () => {
-      const n = area.value.split("\n").map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l)).length;
-      counter.textContent = n ? I18N.fmt("batch.valid_urls", { n }) : "";
+    const updateCount = async () => {
+      // Count through the same extractor the backend uses. A line of prose or
+      // a scheme-less domain must be reported the same way it will be queued.
+      const parsed = await API.parseBatchUrls(area.value);
+      counter.textContent = parsed.accepted
+        ? I18N.fmt("batch.valid_urls", { n: parsed.accepted })
+        : "";
+      return parsed;
     };
-    area.addEventListener("input", updateCount);
+    // Debounce the live counter: parsing on every keystroke would mean a
+    // Python round-trip per character in a large pasted list.
+    area.addEventListener("input", Utils.debounce(() => updateCount(), 200));
 
     Utils.$id("btnBatchFile").addEventListener("click", async () => {
       const path = await API.selectFile();
@@ -1018,7 +1048,7 @@ const App = {
       const res = await API.readTextFile(path);
       if (res && res.ok) {
         area.value = res.text;
-        updateCount();
+        await updateCount();
         Components.toast(I18N.t("toast.file_loaded", "File loaded"), `${path.split(/[\\/]/).pop()}`, "success");
       } else {
         Components.toast(I18N.t("toast.file_not_read", "Could not read file"), res?.error || "", "error");
@@ -1030,20 +1060,34 @@ const App = {
       if (dir) Utils.$id("batchDir").value = dir;
     });
 
-    Utils.$id("btnBatchQueue").addEventListener("click", async () => {
-      const urls = area.value.split("\n").map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l));
+    const batchBtn = Utils.$id("btnBatchQueue");
+    batchBtn.addEventListener("click", async () => {
+      if (batchBtn.disabled) return;           // one add per click sequence
+      const parsed = await API.parseBatchUrls(area.value);
+      const urls = parsed.urls;
       if (!urls.length) {
         Components.toast(I18N.t("toast.no_urls", "No URLs"), I18N.t("batch.no_urls_msg", "Paste at least one valid http(s) link"), "warning");
         return;
       }
+      batchBtn.disabled = true;
       // Empty folder => backend applies per-file category routing.
       const dir = Utils.$id("batchDir").value.trim();
       const projectId = (Utils.$id("batchProject") || {}).value || "";
-      const count = await API.addBatch(urls, dir, projectId);
-      Components.toast(I18N.t("toast.batch_queued", "Batch queued"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
-      area.value = "";
-      updateCount();
-      this.navigate("downloads");
+      try {
+        const count = await API.addBatch(urls, dir, projectId);
+        const notes = [];
+        if (parsed.duplicates) notes.push(`${parsed.duplicates} ${I18N.t("batch.duplicates", "duplicate skipped")}`);
+        if (parsed.skipped) notes.push(`${parsed.skipped} ${I18N.t("batch.skipped", "line skipped")}`);
+        Components.toast(
+          I18N.t("toast.batch_queued", "Batch queued"),
+          `${count} ${I18N.t("batch.queued", "queued")}${notes.length ? " · " + notes.join(" · ") : ""}`,
+          "success");
+        area.value = "";
+        await updateCount();
+        this.navigate("downloads");
+      } finally {
+        batchBtn.disabled = false;
+      }
     });
 
     // Pattern scan.
@@ -1067,22 +1111,40 @@ const App = {
       btn.classList.add("busy");
       results.innerHTML = `<div class="pattern-note"><span class="sk sk-line w35"></span></div>`;
       try {
-        const res = await API.scanPattern(pattern, dir, start, padding);
-        if (res && res.urls && res.urls.length) {
-          results.innerHTML = `
-            <div class="pattern-note ok">${Utils.icon("check", 14)} ${res.urls.length} ${I18N.t("batch.files_found", "files found — queued for download")}</div>
-            <div class="pattern-list">${res.urls.slice(0, 40).map((u) => `<div class="pattern-item">${Utils.escapeHtml(u)}</div>`).join("")}
-            ${res.urls.length > 40 ? `<div class="pattern-item dim">… ${res.urls.length - 40} ${I18N.t("batch.more", "more")}</div>` : ""}</div>`;
-          const count = await API.addBatch(res.urls, dir, (Utils.$id("batchProject") || {}).value || "");
-          Components.toast(I18N.t("toast.scan_complete", "Scan complete"), `${count} ${I18N.t("batch.queued", "queued")}`, "success");
-        } else {
-          results.innerHTML = `<div class="pattern-note">${Utils.icon("info", 14)} ${I18N.t("batch.nothing_matched", "No reachable files matched this pattern")}</div>`;
+        // Discovery only. Scanning must never enqueue or start a download.
+        const report = await API.scanPatternPreview(pattern, start, padding);
+        if (report && report.stop_reason === "invalid_pattern") {
+          results.innerHTML = `<div class="pattern-note bad">${Utils.icon("alert", 14)} ${Utils.escapeHtml(I18N.t("batch.invalid_pattern_msg", "Use * where the number goes"))}</div>`;
+          return;
         }
+        if (!report || !report.discovered) {
+          results.innerHTML = `<div class="pattern-note">${Utils.icon("info", 14)} ${I18N.t("batch.nothing_matched", "No files matched this pattern")}</div>`;
+          return;
+        }
+        ScanResultsUI.show(this, report, { pattern, start, padding, directory: dir }, async (choice) => {
+          if (choice.behavior === "schedule") {
+            const res = await API.scheduleDownloads(
+              choice.urls, choice.directory, choice.projectId,
+              choice.localTime, choice.tzName, true);
+            if (!res || !res.ok) throw new Error((res && res.error) || "schedule_failed");
+            return { added: 0, scheduled: res.scheduled, duplicates: 0, failed: choice.urls.length - res.scheduled };
+          }
+          const reportResult = await API.addBatchReport(
+            choice.urls, choice.directory, choice.projectId, choice.behavior === "now");
+          return {
+            added: reportResult.added,
+            duplicates: reportResult.duplicates || 0,
+            skipped: reportResult.skipped || 0,
+            failed: reportResult.failed || 0,
+            scheduled: 0,
+          };
+        });
       } catch {
         results.innerHTML = `<div class="pattern-note bad">${Utils.icon("alert", 14)} ${I18N.t("toast.scan_failed", "Scan failed")}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("busy");
       }
-      btn.disabled = false;
-      btn.classList.remove("busy");
     });
 
     // The project list may not have arrived yet at bind time; this also runs on
@@ -1161,7 +1223,16 @@ const App = {
       }
       Components.toast(I18N.t("ext_install.title", "Installing extension…"), I18N.t("ext_install.stage.locating", "Locating the N13 extension…"), "info", 2600);
       this.state.extInstalling = true;
-      setTimeout(() => { if (!this.state.extInstalling) btn.disabled = false; }, 30000);
+      // Safety valve: if no ext_install_done event arrived, stop claiming an
+      // install is in flight and re-enable the button. The old inverted check
+      // only fired when the install had *already* finished, so a hung install
+      // left the button disabled for the rest of the session.
+      setTimeout(() => {
+        if (this.state.extInstalling) {
+          this.state.extInstalling = false;
+          btn.disabled = false;
+        }
+      }, 30000);
     });
 
     Utils.$id("btnRepairExt").addEventListener("click", async () => {

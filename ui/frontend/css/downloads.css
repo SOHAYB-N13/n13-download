@@ -72,6 +72,13 @@
   outline: none;
 }
 .sort-wrap option { background: var(--bg-elevated); color: var(--text-1); }
+/* `outline: none` above would otherwise hide the only visible keyboard
+   focus cue on the select. Restore a clear ring for keyboard users. */
+.sort-wrap select:focus-visible {
+  outline: 2px solid var(--accent-ring, var(--accent));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 
 /* ── 13. Downloads list ────────────────────────────────────────────────── */
 
@@ -424,3 +431,41 @@
   white-space: nowrap;
 }
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+
+/* ── Scheduled downloads panel ─────────────────────────────────────────── */
+.sched-panel {
+  margin-bottom: 12px;
+  border: 1px solid var(--warning-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  padding: 10px 12px;
+}
+.sched-panel[hidden] { display: none; }
+.sched-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
+.sched-count {
+  background: var(--warning-soft); color: var(--warning);
+  border-radius: 999px; padding: 1px 7px; font-weight: 700;
+}
+.sched-missed { color: var(--danger); font-weight: 600; }
+.sched-note { color: var(--text-3); margin-inline-start: auto; }
+.sched-rows { margin-top: 8px; max-height: 220px; overflow-y: auto; }
+.sched-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.sched-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sched-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-when { color: var(--text-2); }
+.sched-err { color: var(--danger); font-size: 11px; }
+.sched-state { font-weight: 600; font-size: 11px; color: var(--text-2); }
+.sched-state.s-missed, .sched-state.s-failed { color: var(--danger); }
+.sched-state.s-scheduled { color: var(--warning); }
+.sched-state.s-completed { color: var(--success); }
+.sched-ops { display: flex; flex-wrap: wrap; gap: 4px; }
+.sched-edit { display: flex; flex-direction: column; gap: 10px; }
+.sched-edit-err { color: var(--danger); font-size: 12px; }

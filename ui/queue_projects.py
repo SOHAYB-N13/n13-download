@@ -23,8 +23,12 @@ This is a mixin, not a standalone object.  It expects ``TaskManager`` to provide
 ``_max_concurrent``     the application-wide ceiling
 ``_closed``             True once the manager is shutting down
 ``_tasks``              the task registry
+``_order``              manual queue order (task ids)
 ``_start_next``         the queue's single start loop
 ``_save_task_locked``   persistence, caller already holding the lock
+``_save_order_locked``  persist the manual order, caller holds the lock
+``_remove_record_locked`` drop a task from memory and the store
+``_snap`` / ``_emit``   snapshot a record / announce an event (lock released)
 
 Everything here assumes the caller holds ``_lock`` unless the method takes it
 itself — the ``_locked`` suffix marks the ones that do not.
@@ -162,6 +166,33 @@ class ProjectAdmissionMixin:
     # Task moves
     # ------------------------------------------------------------------
 
+    def apply_project_deletion(self, project_id: str, mode: str) -> None:
+        """Reconcile in-memory tasks after ``ProjectService.delete`` committed.
+
+        The service edits task rows directly (reassign or delete) inside its own
+        DB transaction.  Without this step the manager's ``_tasks``/``_order``
+        still hold the old project id, so snapshots, counters, queue plans and
+        the Downloads list keep showing tasks the database no longer has.
+        Called only after the delete succeeded, so a failed/rolled-back delete
+        cannot desync the two sides.
+        """
+        events = []
+        with self._lock:
+            for tid in list(self._order):
+                rec = self._tasks.get(tid)
+                if rec is None or rec.task.project_id != project_id:
+                    continue
+                if mode == "keep_tasks":
+                    rec.task.project_id = DEFAULT_PROJECT_ID
+                    self._save_task_locked(rec)
+                    events.append(("updated", self._snap(rec)))
+                else:  # delete_records / delete_files — rows are already gone
+                    events.append(("removed", self._snap(rec)))
+                    self._remove_record_locked(tid)
+            self._save_order_locked()
+        for ev, snap in events:
+            self._emit(ev, snap)
+
     def set_task_project(self, task_id: str, project_id: str) -> bool:
         """Move a task to another project.
 
@@ -175,4 +206,9 @@ class ProjectAdmissionMixin:
                 return False
             rec.task.project_id = project_id or DEFAULT_PROJECT_ID
             self._save_task_locked(rec)
+            snap = self._snap(rec)
+        # A group move changes what the row's group header must show. Without
+        # a task event the Downloads list keeps rendering the old membership
+        # until some unrelated event happens to repaint it.
+        self._emit("updated", snap)
         return True

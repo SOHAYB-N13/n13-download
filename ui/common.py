@@ -265,6 +265,11 @@ class TaskSnapshot:
     # The owning project.  Resolved (never empty) so a renderer can group by it
     # without having to know about the Default fallback.
     project_id: str = DEFAULT_PROJECT_ID
+    # True when the transfer control is paused while the task is still in a
+    # pre-DOWNLOADING state (ANALYZING/STARTING/MERGING/VERIFYING). Only
+    # DOWNLOADING may legally transition to PAUSED, so this flag is the only
+    # honest way to tell the UI the task is being held.
+    control_paused: bool = False
 
     @property
     def name(self) -> str:
@@ -308,6 +313,7 @@ class TaskSnapshot:
             "speed_limit_bps": self.request.speed_limit_bps,
             "queue_index": self.queue_index,
             "queue_position": self.queue_position,
+            "control_paused": bool(self.control_paused),
         }
 
 
@@ -629,6 +635,7 @@ class TaskManager(ProjectAdmissionMixin):
             queue_index=self._queue_index(t.id),
             queue_position=self._queue_position_locked(rec),
             project_id=t.project_id or DEFAULT_PROJECT_ID,
+            control_paused=bool(rec.control.paused and t.status != TaskStatus.PAUSED),
         )
 
     def get(self, task_id: str) -> Optional[TaskSnapshot]:
@@ -1306,6 +1313,23 @@ class TaskManager(ProjectAdmissionMixin):
         self._save_task_locked(rec)
         return True
 
+    def _resume_active_control_locked(self, rec: _TaskRecord) -> bool:
+        """Release a control that was paused outside ``DOWNLOADING``.
+
+        ``pause_task``/``pause_all`` pause the control of *every* active task,
+        but only ``DOWNLOADING`` may legally transition to ``PAUSED``.  A task
+        paused during ``ANALYZING``/``STARTING``/``MERGING``/``VERIFYING``
+        therefore keeps its original status while its control is paused; it
+        parks at the next chunk barrier and no Resume action keyed on the
+        ``PAUSED`` status can ever free it.  Releasing the control here lets the
+        worker continue normally.  Callers must hold ``self._lock``.
+        """
+        if rec.task.status == TaskStatus.PAUSED or not rec.control.paused:
+            return False
+        rec.control.resume()
+        self._save_task_locked(rec)
+        return True
+
     def resume_all(self) -> None:
         """Resume **everything**: open the queue gate AND resume every pause."""
         events: List[tuple[str, TaskSnapshot]] = []
@@ -1313,9 +1337,12 @@ class TaskManager(ProjectAdmissionMixin):
             self._global_pause = False
             for tid in self._order:
                 rec = self._tasks.get(tid)
-                if not rec or rec.task.status != TaskStatus.PAUSED:
+                if not rec:
                     continue
-                if self._resume_paused_locked(rec):
+                if rec.task.status == TaskStatus.PAUSED:
+                    if self._resume_paused_locked(rec):
+                        events.append(("updated", self._snap(rec)))
+                elif rec.task.status in ACTIVE_STATES and self._resume_active_control_locked(rec):
                     events.append(("updated", self._snap(rec)))
         for ev, sn in events:
             self._emit(ev, sn)
@@ -1333,12 +1360,13 @@ class TaskManager(ProjectAdmissionMixin):
         event: Optional[tuple[str, TaskSnapshot]] = None
         with self._lock:
             rec = self._tasks.get(task_id)
-            if (
-                rec
-                and rec.task.status == TaskStatus.PAUSED
-                and self._resume_paused_locked(rec)
-            ):
-                event = ("updated", self._snap(rec))
+            if rec:
+                if rec.task.status == TaskStatus.PAUSED and self._resume_paused_locked(rec):
+                    event = ("updated", self._snap(rec))
+                elif rec.task.status in ACTIVE_STATES and self._resume_active_control_locked(rec):
+                    # Paused while in a pre/post-transfer state: releasing the
+                    # control is the whole operation (see helper above).
+                    event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
         self._start_next()
@@ -1356,10 +1384,17 @@ class TaskManager(ProjectAdmissionMixin):
                 self._save_task_locked(rec)
                 event = ("finished", self._snap(rec))
             elif rec.task.status in ACTIVE_STATES:
+                live_worker = self._has_live_worker(rec)
                 rec.control.cancel()
                 rec.task.force_status(TaskStatus.CANCELLED, error="Cancelled")
+                if not live_worker:
+                    # No worker will finalize this task, so complete the
+                    # terminal bookkeeping and emit the same event a worker
+                    # would.  Downstream consumers (completion actions,
+                    # auto-shutdown, session counters) listen for "finished".
+                    rec.task.completed_at = time.time()
                 self._save_task_locked(rec)
-                event = ("updated", self._snap(rec))
+                event = ("updated" if live_worker else "finished", self._snap(rec))
         if event:
             self._emit(*event)
 
@@ -1397,7 +1432,9 @@ class TaskManager(ProjectAdmissionMixin):
             rec = self._tasks.get(task_id)
             if not rec:
                 return
-            if rec.task.status in ACTIVE_STATES:
+            # A restored PAUSED task has no worker to finalize the removal, so
+            # only defer to that worker when one is actually alive.
+            if rec.task.status in ACTIVE_STATES and self._has_live_worker(rec):
                 rec.removed = True
                 rec.control.cancel()
                 return

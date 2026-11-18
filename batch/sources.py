@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from core.utils import normalize_url, validate_url
+from core.urls import canonical_url
 
 console = Console()
 
@@ -91,7 +92,17 @@ def load_url_list(path: Path) -> Optional[List[str]]:
             return None
         urls = [normalize_url(str(u)) for u in urls if str(u).strip()]
         urls = [u for u in urls if validate_url(u)]
-        return list(dict.fromkeys(urls)) or None
+        # Canonical identity, so #fragments / case / default ports cannot slip
+        # through as separate entries in an imported list.
+        deduped = []
+        seen = set()
+        for u in urls:
+            key = canonical_url(u)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(u)
+        return deduped or None
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, csv.Error) as exc:
         console.print(f"[red]Failed to read file: {exc}[/red]")
         return None

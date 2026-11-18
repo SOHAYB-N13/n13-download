@@ -214,6 +214,18 @@ const Queue = {
     const waitingEl = Utils.$id("queueWaiting");
     this.state.scroller = waitingEl ? waitingEl.scrollTop : this.state.scroller;
 
+    // The 1.2 s tick rebuilds the whole view.  Remember where the keyboard
+    // focus was so arrow/Enter navigation is not dropped on the floor every
+    // time a progress event arrives.
+    const active = document.activeElement;
+    const focusablesBefore = active && view.contains(active)
+      ? Utils.$qa("button, [tabindex], input, select", view) : [];
+    const focused = active && focusablesBefore.includes(active) ? {
+      qk: active.dataset ? active.dataset.qk : "",
+      id: active.dataset ? active.dataset.id : "",
+      idx: focusablesBefore.indexOf(active),
+    } : null;
+
     // The gate banner is only built while it has something to say, so the DOM
     // never carries an empty placeholder node.
     const gate = this._gateBannerEl();
@@ -223,6 +235,14 @@ const Queue = {
 
     const scroller = Utils.$id("queueWaiting");
     if (scroller) scroller.scrollTop = this.state.scroller;
+
+    if (focused) {
+      const after = Utils.$qa("button, [tabindex], input, select", view);
+      const target = after.find((n) =>
+        (focused.qk && n.dataset.qk === focused.qk) ||
+        (focused.id && n.dataset.id === focused.id)) || after[focused.idx];
+      if (target && !target.disabled && target.focus) target.focus({ preventScroll: true });
+    }
 
     // Keep the sidebar count honest from the moment the page paints rather
     // than waiting for the next tick.
@@ -345,7 +365,7 @@ const Queue = {
     row.innerHTML = `
       <div class="qk-main">
         <span class="qk-name" title="${Utils.escapeHtml(t.url || "")}">${Utils.escapeHtml(Utils.fileName(t))}</span>
-        <span class="qk-meta">${Utils.escapeHtml(Utils.statusLabel(t.state))}${t.connections > 1 ? ` · ${t.connections} ${Utils.escapeHtml(I18N.t("col.connections", "connections").toLowerCase())}` : ""}</span>
+        <span class="qk-meta">${Utils.escapeHtml(Utils.statusLabel(Utils.displayState(t)))}${t.connections > 1 ? ` · ${t.connections} ${Utils.escapeHtml(I18N.t("col.connections", "connections").toLowerCase())}` : ""}</span>
       </div>
       <div class="qk-bar" role="progressbar" aria-valuenow="${pct.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
         <span style="width:${pct}%"></span>
@@ -569,7 +589,7 @@ const Queue = {
     }
 
     return `<dl class="qk-kvs">
-      ${row(I18N.t("queue.kv_status", "Status"), Utils.statusLabel(t.state))}
+      ${row(I18N.t("queue.kv_status", "Status"), Utils.statusLabel(Utils.displayState(t)))}
       ${row(I18N.t("queue.kv_size", "Size"), t.total > 0 ? Utils.formatSize(t.total) : I18N.t("queue.unknown", "unknown"))}
       ${row(I18N.t("queue.kv_done", "Downloaded"), Utils.formatSize(t.completed))}
       ${row(I18N.t("queue.kv_speed", "Speed"), Utils.formatSpeed(t.speed_bps))}
@@ -843,6 +863,25 @@ const Queue = {
       "info", 3200);
   },
 
+  /**
+   * Translate a position in the *visible waiting* list into the absolute index
+   * the backend's ``reorder_tasks`` expects in its full ``_order`` (which also
+   * contains already-running tasks).  Using the visible index directly made a
+   * drag or Ctrl+Up land in the wrong slot whenever anything was downloading.
+   *
+   * ``rows`` is the visible waiting order, ``moving`` the ids being moved and
+   * ``position`` an index into ``rows`` with the moving ids removed.
+   */
+  _absolutePosition(rows, moving, position) {
+    const moved = new Set(moving);
+    const restRows = rows.filter((id) => !moved.has(id));
+    const all = this._all().slice().sort((a, b) => this._manualIdx(a) - this._manualIdx(b));
+    const restFull = all.map((t) => t.id).filter((id) => !moved.has(id));
+    if (position >= restRows.length) return restFull.length;  // bottom
+    const anchor = restFull.indexOf(restRows[Math.max(0, position)]);
+    return anchor >= 0 ? anchor : restFull.length;
+  },
+
   /** Move the selection by *delta* places within the manual order. */
   async _move(ids, delta) {
     await this._ensureManual();
@@ -855,7 +894,8 @@ const Queue = {
       const current = rows.indexOf(id);
       const target = current + delta;
       if (target < 0 || target >= rows.length) continue;
-      await API.moveTaskTo(id, target);
+      const absolute = this._absolutePosition(rows, [id], target);
+      await API.moveTaskTo(id, absolute);
       // Mirror the move locally so a multi-row block shifts coherently.
       rows.splice(current, 1);
       rows.splice(target, 0, id);
@@ -869,7 +909,8 @@ const Queue = {
     if (!ids.length) return;
     await this._ensureManual();
     if (kind === "move-top") {
-      await API.reorderTasks(ids, 0);
+      const rows = Array.from(Utils.$qa("#queueWaiting .qk-row-wait")).map((r) => r.dataset.id);
+      await API.reorderTasks(ids, this._absolutePosition(rows, ids, 0));
     } else {
       for (const id of ids) await API.moveToBottom(id);
     }
@@ -977,7 +1018,11 @@ const Queue = {
     if (anchorIdx === -1) return;
     const position = target.after ? anchorIdx + 1 : anchorIdx;
 
-    await API.reorderTasks(movingIds, position);
+    // `position` is already an index into the visible rows with the moving
+    // ids removed — translate it to the backend's full-order index.
+    const absolute = this._absolutePosition(rows, movingIds, position);
+
+    await API.reorderTasks(movingIds, absolute);
     this.state.sel = new Set(movingIds);
     await this._afterMove();
   },

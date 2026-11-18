@@ -10,9 +10,21 @@
    `App._handleEvent` delegate here, so call sites and tests see no change.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* global API, Utils, I18N, Components */
+/* global API, Utils, I18N, Components, Groups, ScheduledPanel */
 
 const Events = {
+  // Progress events arrive up to ~8 times a second per active download. The
+  // dashboard only needs to look live, not redraw on every one of them.
+  _dashTimer: null,
+  _scheduleDashboard(app) {
+    if (app.state.page !== "dashboard") return;
+    if (this._dashTimer) return;
+    this._dashTimer = setTimeout(() => {
+      this._dashTimer = null;
+      app._renderDashboardLists();
+    }, 350);
+  },
+
   /**
    * Long-running poll loop.  One poll every 200ms; errors are swallowed so a
    * hiccup in the bridge never kills the loop (matches the original code).
@@ -59,7 +71,7 @@ const Events = {
       }
       app._updateBadge();
       app._updateCounts();
-      app._renderDashboardLists();
+      this._scheduleDashboard(app);
       if (evt.event === "finished") {
         if (t.state === "Complete") {
           Components.toast(I18N.t("toast.download_complete", "Download complete"), Utils.fileName(t) + " — " + Utils.formatSize(t.completed || t.total), "success");
@@ -123,9 +135,17 @@ const Events = {
       // exactly one response shape and one place that reads it.
       if (typeof Groups !== "undefined") {
         Promise.resolve(Groups.load())
-          .then(() => app._syncProjectSelects())
+          .then(() => {
+            app._syncProjectSelects();
+            // Group membership can change (delete/keep-tasks, assign). Force a
+            // list repaint so counters and tabs agree with the backend.
+            app.state.listSig = "";
+            if (app.state.page === "downloads") app._renderDownloads(true);
+          })
           .catch(() => {});
       }
+    } else if (evt.type === "scheduled_changed") {
+      if (typeof ScheduledPanel !== "undefined") ScheduledPanel.render(app);
     } else if (evt.type === "update_state") {
       app._applyUpdateState(evt.state);
       const st = evt.state;

@@ -48,6 +48,7 @@ const EmptyStateUI = {
         <div class="dl-progress"><span class="sk sk-bar"></span></div>
         <div class="dl-cell"><span class="sk sk-line w70"></span></div>
         <div class="dl-cell"><span class="sk sk-line w50"></span></div>
+        <div class="dl-conn"><span class="sk sk-line w40"></span></div>
         <div class="dl-status"><span class="sk sk-pill"></span></div>
         <div class="dl-actions"><span class="sk sk-dot3"></span></div>
       </div>`;

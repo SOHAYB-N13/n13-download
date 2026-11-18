@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from typing import Callable, List, Optional, Tuple
 
 from rich.columns import Columns
@@ -17,9 +18,10 @@ from rich.table import Table
 from config.loader import save_config
 from config.settings import AppConfig
 from core.download import DownloadController
-from core.probe import probe_url
+from core.probe import probe_url, probe_with_headers
 from core.session import SessionManager
 from core.utils import format_size, validate_url
+from core.urls import canonical_url, normalize_url
 from batch.sources import get_saved_links_dir, import_urls_from_file, save_links_to_file
 from core.paths import user_data_dir as get_user_data_dir
 from ui.progress import create_batch_progress, create_scan_progress
@@ -61,6 +63,192 @@ def _classify(message: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Scan results (GUI) — discovery with no side effects
+# ─────────────────────────────────────────────────────────────────────────────
+
+# A failed probe only tells us the server did not answer *this* request. A
+# 404 is a strong hint the numbered file is absent, but timeouts, 5xx and
+# blocked URLs are NOT evidence of absence — the UI must say so.
+_STATUS_BY_KIND = {
+    _Kind.NOT_FOUND: "not_found",
+    _Kind.TIMEOUT: "timeout",
+    _Kind.SERVER: "server_error",
+    _Kind.OTHER: "error",
+}
+
+
+@dataclass
+class ScanItem:
+    """One probed candidate. Sizes are 0 when the server did not report one."""
+
+    url: str
+    requested_url: str
+    number: int
+    available: bool
+    status: str
+    filename: str = ""
+    size: int = 0
+    content_type: str = ""
+    server: str = ""
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self.url,
+            "requested_url": self.requested_url,
+            "number": self.number,
+            "available": self.available,
+            "status": self.status,
+            "filename": self.filename,
+            "size": self.size,
+            "content_type": self.content_type,
+            "server": self.server,
+            "error": self.error,
+        }
+
+
+@dataclass
+class ScanOutcome:
+    """Everything the UI needs to render a reviewable scan result."""
+
+    items: List[ScanItem] = field(default_factory=list)
+    scanned: int = 0
+    stop_reason: str = "completed"   # completed | consecutive_404 | attempt_limit | server_errors | cancelled | invalid_pattern
+    cancelled: bool = False
+
+    @property
+    def available(self) -> List[ScanItem]:
+        return [i for i in self.items if i.available]
+
+    def counts(self) -> dict:
+        available = self.available
+        not_found = [i for i in self.items if i.status == "not_found"]
+        failed = [i for i in self.items if i.status in ("timeout", "server_error", "error")]
+        return {
+            "discovered": len(self.items),
+            "available": len(available),
+            "unavailable": len(not_found) + len(failed),
+            "not_found": len(not_found),
+            "failed_probes": len(failed),
+        }
+
+    def to_dict(self) -> dict:
+        return {
+            "items": [i.to_dict() for i in self.items],
+            "urls": [i.url for i in self.available],
+            "scanned": self.scanned,
+            "stop_reason": self.stop_reason,
+            "cancelled": self.cancelled,
+            **self.counts(),
+        }
+
+
+# Reserved characters must survive so signed query strings stay byte-for-byte;
+# spaces and non-ASCII characters are encoded once, before probing.
+_URL_SAFE = "/:@-._~!$&'()*+,;=%?#[]"
+
+
+def build_candidate_url(pattern: str, num_str: str) -> str:
+    """Replace the wildcard and percent-encode only what is not URL-safe."""
+    return quote(normalize_url(pattern).replace("*", num_str), safe=_URL_SAFE)
+
+
+def scan_pattern_detailed(
+    pattern: str,
+    config: AppConfig,
+    session: SessionManager,
+    start_num: int = 1,
+    padding: int = 2,
+    max_consecutive_404: int = 5,
+    max_attempts: int = 200,
+    max_server_errors: int = 10,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> ScanOutcome:
+    """Probe a numbered pattern and return a structured, reviewable report.
+
+    This is pure discovery: it creates no tasks, touches no queue and changes
+    no settings. ``cancel`` is polled between probes, so a long running scan
+    can be stopped without killing the process. The 5/404, 200-attempt and
+    10-server-error stop rules are the same ones the CLI scanner uses.
+    """
+    outcome = ScanOutcome()
+    raw = normalize_url(str(pattern or ""))
+    if "*" not in raw or not raw.lower().startswith(("http://", "https://")):
+        outcome.stop_reason = "invalid_pattern"
+        return outcome
+
+    start_num = max(0, int(start_num or 0))
+    padding = min(10, max(0, int(padding or 0)))
+    max_consecutive_404 = max(1, int(max_consecutive_404))
+    max_attempts = min(500, max(1, int(max_attempts)))
+    max_server_errors = max(1, int(max_server_errors))
+
+    seen = set()
+    failures_404 = 0
+    server_errors = 0
+    num = start_num
+
+    while failures_404 < max_consecutive_404 and outcome.scanned < max_attempts:
+        if cancel is not None and cancel():
+            outcome.cancelled = True
+            outcome.stop_reason = "cancelled"
+            break
+
+        num_str = f"{num:0{padding}d}" if padding > 0 else str(num)
+        test_url = build_candidate_url(raw, num_str)
+        key = canonical_url(test_url)
+        if key in seen:
+            # Never send a duplicate request; the same resource is already in
+            # the report. Move on instead of probing it again.
+            num += 1
+            continue
+        seen.add(key)
+        outcome.scanned += 1
+
+        try:
+            ok, total, _supports, name, err, headers, final_url = probe_with_headers(
+                test_url, config, session, timeout=8
+            )
+        except Exception as exc:  # a probe failure is data, not a scan failure
+            ok, total, name, headers, final_url = False, 0, "", {}, test_url
+            err = f"Error: {exc}"
+
+        if ok:
+            failures_404 = 0
+            server_errors = 0
+            outcome.items.append(ScanItem(
+                url=final_url or test_url, requested_url=test_url, number=num,
+                available=True, status="available",
+                filename=name or urlparse(final_url or test_url).path.rsplit("/", 1)[-1],
+                size=int(total or 0),
+                content_type=str(headers.get("Content-Type", "")),
+                server=str(headers.get("Server", "")),
+            ))
+        else:
+            kind = _classify(err)
+            if kind == _Kind.NOT_FOUND:
+                failures_404 += 1
+                if failures_404 >= max_consecutive_404:
+                    outcome.stop_reason = "consecutive_404"
+            elif kind == _Kind.SERVER:
+                server_errors += 1
+                if server_errors >= max_server_errors:
+                    outcome.stop_reason = "server_errors"
+            outcome.items.append(ScanItem(
+                url=final_url or test_url, requested_url=test_url, number=num,
+                available=False, status=_STATUS_BY_KIND.get(kind, "error"),
+                error=err or "Unavailable",
+            ))
+            if outcome.stop_reason != "completed":
+                break
+        num += 1
+
+    if outcome.scanned >= max_attempts and outcome.stop_reason == "completed":
+        outcome.stop_reason = "attempt_limit"
+    return outcome
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Scan — sequential
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -79,6 +267,10 @@ def scan_pattern_urls(
 
     ``quiet=True`` disables the rich console progress UI — required when the
     scan runs on a worker thread inside the GUI (no usable stdout there).
+
+    Discovery only: this function never creates tasks or starts downloads.
+    CLI callers consume the returned URL strings; the GUI uses
+    :func:`scan_pattern_detailed` for the full report.
     """
     found: List[str] = []
     failures_404 = 0
@@ -264,7 +456,16 @@ def batch_download_urls(
     state_path = batch_state_path or (
         get_saved_links_dir(get_user_data_dir()) / "batch_resume.json"
     )
-    unique_urls = list(dict.fromkeys(urls))
+    # Dedupe by resource identity, not raw text: a fragment, host casing or a
+    # redundant default port must not queue the same file twice.
+    _seen = set()
+    unique_urls = []
+    for raw in urls:
+        key = canonical_url(normalize_url(str(raw)))
+        if key in _seen:
+            continue
+        _seen.add(key)
+        unique_urls.append(raw)
     if not unique_urls:
         return 0, 0
 

@@ -73,19 +73,34 @@ const ContextMenuUI = {
     // is part of the current selection, act on the whole selection; otherwise
     // act on just the right-clicked task.
     const targets = (cb && typeof cb.targetsFor === "function") ? cb.targetsFor(task.id) : [task.id];
+    // The clicked task decides *which* actions are offered, but the selection
+    // decides *how many* tasks each action will touch.  In a mixed selection
+    // those differ: a "Pause (2)" that only pauses one row is a lie.  Filter
+    // per action and label the real count.  Fall back to the clicked task's
+    // state when no lookup callback is supplied.
+    const taskFor = (cb && typeof cb.taskFor === "function")
+      ? cb.taskFor
+      : (id) => (id === task.id ? task : null);
+    const eligible = (states) => targets.filter((id) => {
+      const t = taskFor(id);
+      return t && states.includes(t.state);
+    });
+    const cntFor = (list) => (list.length > 1 ? ` (${list.length})` : "");
     const multi = targets.length > 1;
-    const cnt = multi ? ` (${targets.length})` : "";
     const items = [];
     const active = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
-    if (s === "Downloading") items.push({ label: L("act.pause", "Pause") + cnt, icon: "pause", action: () => cb.onPause(targets) });
-    if (s === "Paused") items.push({ label: L("act.resume", "Resume") + cnt, icon: "play", action: () => cb.onResume(targets) });
-    if (s === "Queued") items.push({ label: L("act.start_now", "Start now") + cnt, icon: "play", action: () => cb.onStart(targets) });
-    if (active.includes(s) || s === "Paused" || s === "Queued")
-      items.push({ label: L("act.cancel", "Cancel") + cnt, icon: "xCircle", action: () => cb.onCancel(targets) });
-    if (s === "Failed" || s === "Cancelled" || s === "Stopped")
-      items.push({ label: L("act.retry", "Retry") + cnt, icon: "retry", action: () => cb.onRetry(targets) });
+    const pauseIds = eligible(["Downloading"]);
+    const resumeIds = eligible(["Paused"]);
+    const startIds = eligible(["Queued"]);
+    const cancelIds = eligible([...active, "Paused", "Queued"]);
+    const retryIds = eligible(["Failed", "Cancelled", "Stopped"]);
+    if (pauseIds.length) items.push({ label: L("act.pause", "Pause") + cntFor(pauseIds), icon: "pause", action: () => cb.onPause(pauseIds) });
+    if (resumeIds.length) items.push({ label: L("act.resume", "Resume") + cntFor(resumeIds), icon: "play", action: () => cb.onResume(resumeIds) });
+    if (startIds.length) items.push({ label: L("act.start_now", "Start now") + cntFor(startIds), icon: "play", action: () => cb.onStart(startIds) });
+    if (cancelIds.length) items.push({ label: L("act.cancel", "Cancel") + cntFor(cancelIds), icon: "xCircle", action: () => cb.onCancel(cancelIds) });
+    if (retryIds.length) items.push({ label: L("act.retry", "Retry") + cntFor(retryIds), icon: "retry", action: () => cb.onRetry(retryIds) });
     if (items.length)     items.push({ separator: true });
-    items.push({ label: L("act.copy_url", "Copy URL") + cnt, icon: "copy", action: () => cb.onCopyUrl(targets) });
+    items.push({ label: L("act.copy_url", "Copy URL") + cntFor(targets), icon: "copy", action: () => cb.onCopyUrl(targets) });
     if (s === "Complete") {
       items.push({ label: L("act.open_file", "Open file"), icon: "external", action: () => cb.onOpenFile(task.id) });
       items.push({ label: L("act.open_folder", "Open folder"), icon: "folderOpen", action: () => cb.onOpenFolder(task.id) });
@@ -102,13 +117,13 @@ const ContextMenuUI = {
       items.push({ label: L("act.properties", "Properties"), icon: "info", action: () => cb.onProperties(task.id) });
     }
     // Move up/down only reorder tasks that are still waiting to start.
-    if (s === "Queued") {
+    if (startIds.length) {
       items.push({ separator: true });
-      items.push({ label: L("act.move_up", "Move up") + cnt, icon: "arrowUp", action: () => cb.onReorder(targets, -1) });
-      items.push({ label: L("act.move_down", "Move down") + cnt, icon: "arrowDown", action: () => cb.onReorder(targets, 1) });
+      items.push({ label: L("act.move_up", "Move up") + cntFor(startIds), icon: "arrowUp", action: () => cb.onReorder(startIds, -1) });
+      items.push({ label: L("act.move_down", "Move down") + cntFor(startIds), icon: "arrowDown", action: () => cb.onReorder(startIds, 1) });
     }
     items.push({ separator: true });
-    items.push({ label: L("act.remove", "Remove from list") + cnt, icon: "x", danger: true, action: () => cb.onRemove(targets) });
+    items.push({ label: L("act.remove", "Remove from list") + cntFor(targets), icon: "x", danger: true, action: () => cb.onRemove(targets) });
     return items;
   },
 
@@ -122,8 +137,6 @@ const ContextMenuUI = {
    */
   selectionActions(tasks, cb) {
     const L = (k, f) => (typeof I18N !== "undefined" ? I18N.t(k, f) : f);
-    const states = tasks.map((t) => t.state);
-    const any = (list) => states.some((s) => list.includes(s));
     const ids = tasks.map((t) => t.id);
     const single = tasks.length === 1 ? tasks[0] : null;
     const firstComplete = tasks.find((t) => t.state === "Complete") || null;
@@ -131,23 +144,34 @@ const ContextMenuUI = {
     const out = [];
 
     const ACTIVE = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
+    // Each action targets only the rows it can actually affect. A mixed
+    // selection must never offer "Cancel (3)" when only two rows are live.
+    const eligible = (states) => tasks.filter((t) => states.includes(t.state)).map((t) => t.id);
+    const count = (list) => (list.length > 1 && list.length < n ? ` (${list.length})` : "");
+    const startIds = eligible(["Queued"]);
+    const pauseIds = eligible(["Downloading"]);
+    const resumeIds = eligible(["Paused"]);
+    const retryIds = eligible(["Failed", "Cancelled", "Stopped"]);
+    const cancelIds = eligible([...ACTIVE, "Paused", "Queued"]);
 
-    if (any(["Queued"]))
-      out.push({ id: "start", label: L("act.start_now", "Start"), icon: "play", kind: "primary", run: () => cb.onStart(ids) });
-    if (any(["Downloading"]))
-      out.push({ id: "pause", label: L("act.pause", "Pause"), icon: "pause", kind: "", run: () => cb.onPause(ids) });
-    if (any(["Paused"]))
-      out.push({ id: "resume", label: L("act.resume", "Resume"), icon: "play", kind: "primary", run: () => cb.onResume(ids) });
-    if (any(["Failed", "Cancelled", "Stopped"]))
-      out.push({ id: "retry", label: L("act.retry", "Retry"), icon: "retry", kind: "primary", run: () => cb.onRetry(ids) });
-    if (any(ACTIVE) || any(["Paused", "Queued"]))
-      out.push({ id: "cancel", label: L("act.cancel", "Cancel"), icon: "xCircle", kind: "", run: () => cb.onCancel(ids) });
+    if (startIds.length)
+      out.push({ id: "start", label: L("act.start_now", "Start") + count(startIds), icon: "play", kind: "primary", run: () => cb.onStart(startIds) });
+    if (pauseIds.length)
+      out.push({ id: "pause", label: L("act.pause", "Pause") + count(pauseIds), icon: "pause", kind: "", run: () => cb.onPause(pauseIds) });
+    if (resumeIds.length)
+      out.push({ id: "resume", label: L("act.resume", "Resume") + count(resumeIds), icon: "play", kind: "primary", run: () => cb.onResume(resumeIds) });
+    if (retryIds.length)
+      out.push({ id: "retry", label: L("act.retry", "Retry") + count(retryIds), icon: "retry", kind: "primary", run: () => cb.onRetry(retryIds) });
+    if (cancelIds.length)
+      out.push({ id: "cancel", label: L("act.cancel", "Cancel") + count(cancelIds), icon: "xCircle", kind: "", run: () => cb.onCancel(cancelIds) });
 
     if (out.length) out.push({ separator: true });
 
     if (firstComplete)
       out.push({ id: "openfile", label: L("act.open_file", "Open file"), icon: "external", kind: "", run: () => cb.onOpenFile(firstComplete.id) });
-    out.push({ id: "folder", label: L("act.open_folder", "Open folder"), icon: "folderOpen", kind: "", run: () => cb.onOpenFolder(ids[0]) });
+    const folderTarget = firstComplete || tasks[0];
+    if (folderTarget)
+      out.push({ id: "folder", label: L("act.open_folder", "Open folder"), icon: "folderOpen", kind: "", run: () => cb.onOpenFolder(folderTarget.id) });
     out.push({ id: "copy", label: L("act.copy_url", "Copy link"), icon: "copy", kind: "", run: () => cb.onCopyUrl(ids) });
     if (single)
       out.push({ id: "rename", label: L("act.rename", "Rename"), icon: "edit", kind: "", run: () => cb.onRename(single.id) });
@@ -157,7 +181,7 @@ const ContextMenuUI = {
     // Queue controls.  Reordering is only meaningful for tasks that are still
     // waiting, so Move up/down is offered only when *every* selected task is
     // queued — otherwise the buttons would appear to do nothing.
-    if (states.length && states.every((s) => s === "Queued")) {
+    if (tasks.length && tasks.every((t) => t.state === "Queued")) {
       out.push({ id: "moveup", label: L("act.move_up", "Move up"), icon: "arrowUp", kind: "", run: () => cb.onReorder(ids, -1) });
       out.push({ id: "movedown", label: L("act.move_down", "Move down"), icon: "arrowDown", kind: "", run: () => cb.onReorder(ids, 1) });
     }

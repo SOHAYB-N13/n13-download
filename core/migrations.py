@@ -30,7 +30,8 @@ from typing import List, Sequence
 
 # 1 = tasks / history / queue_order
 # 2 = projects + tasks.project_id
-SCHEMA_VERSION = 2
+# 3 = scheduled_downloads (per-task one-shot scheduling)
+SCHEMA_VERSION = 3
 
 # --------------------------------------------------------------------------- #
 # Identity of the implicit project
@@ -224,8 +225,40 @@ def _migrate_to_2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_3(conn: sqlite3.Connection) -> None:
+    """Persisted, one-shot scheduled downloads.
+
+    The existing ``Scheduler`` is a queue-wide time-of-day gate; it cannot
+    express "download this file at that date". A separate table keeps one row
+    per scheduled submission, with the full request payload as JSON so an
+    add at due time uses exactly the settings the user reviewed.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_downloads (
+            id           TEXT PRIMARY KEY,
+            batch_id     TEXT NOT NULL DEFAULT '',
+            payload_json TEXT NOT NULL,
+            due_at       REAL NOT NULL,
+            tz_name      TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL DEFAULT 'scheduled',
+            created_at   REAL NOT NULL,
+            updated_at   REAL NOT NULL,
+            started_at   REAL,
+            finished_at  REAL,
+            attempts     INTEGER NOT NULL DEFAULT 0,
+            task_id      TEXT NOT NULL DEFAULT '',
+            last_error   TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_downloads(status, due_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_batch ON scheduled_downloads(batch_id)")
+
+
 # Ordered, append-only.  Each entry is ``(version, description, callable)``.
 MIGRATIONS: Sequence[tuple] = (
     (1, "baseline: tasks, history, queue_order", _migrate_to_1),
     (2, "projects table and tasks.project_id", _migrate_to_2),
+    (3, "persisted one-shot scheduled downloads", _migrate_to_3),
 )

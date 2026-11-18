@@ -11,7 +11,7 @@
    Extracted verbatim from app.js (Phase 2).  `App.navigate` delegates here.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* global Utils, I18N, Queue, Groups */
+/* global Utils, I18N, Queue, Groups, ScheduledPanel */
 
 const Nav = {
   /** Bind sidebar nav items + the collapse toggle. */
@@ -30,6 +30,9 @@ const Nav = {
 
   applySidebar(app) {
     document.body.classList.toggle("sidebar-collapsed", app.state.sidebarCollapsed);
+    // The indicator is positioned from offsetTop/offsetHeight, both of which
+    // change with the sidebar width. Reposition after the new layout applies.
+    requestAnimationFrame(() => this.moveNavIndicator(app));
   },
 
   navigate(app, page) {
@@ -62,6 +65,7 @@ const Nav = {
       // The group strip lives inside this page, so it repaints with it — the
       // workspace never shows a stale tab row.
       if (typeof Groups !== "undefined") Groups.paint();
+      if (typeof ScheduledPanel !== "undefined") ScheduledPanel.render(app);
       app._renderDownloads(true);
     }
     // The Queue page owns its own rendering (js/queue.js).

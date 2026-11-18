@@ -36,8 +36,9 @@ const DownloadRowUI = {
   },
 
   _badge(task) {
-    const cls = Utils.statusClass(task.state);
-    const lbl = Utils.statusLabel(task.state);
+    const state = Utils.displayState(task);
+    const cls = Utils.statusClass(state);
+    const lbl = Utils.statusLabel(state);
     return `<span class="badge badge-${cls}"><i class="badge-dot"></i>${lbl}</span>`;
   },
 
@@ -94,7 +95,7 @@ const DownloadRowUI = {
   renderRow(task, cb, elapsedMs = 0) {
     const name = Utils.fileName(task);
     const pct = task.total > 0 ? Utils.clamp((task.completed / task.total) * 100, 0, 100) : 0;
-    const stCls = Utils.statusClass(task.state);
+    const stCls = Utils.statusClass(Utils.displayState(task));
     const row = document.createElement("div");
     row.className = "dl-row row-enter";
     row.dataset.id = task.id;
@@ -178,9 +179,9 @@ const DownloadRowUI = {
 
   updateRow(row, task, elapsedMs = 0) {
     const pct = task.total > 0 ? Utils.clamp((task.completed / task.total) * 100, 0, 100) : 0;
-    const stCls = Utils.statusClass(task.state);
-    const stateChanged = row.dataset.state !== task.state;
-    row.dataset.state = task.state;
+    const stCls = Utils.statusClass(Utils.displayState(task));
+    const stateChanged = row.dataset.state !== Utils.displayState(task);
+    row.dataset.state = Utils.displayState(task);
 
     const fill = row.querySelector(".progress-fill");
     if (fill) {
@@ -225,12 +226,23 @@ const DownloadRowUI = {
 
     if (stateChanged) {
       const status = row.querySelector(".dl-status");
-      if (status) {
-        status.innerHTML = this._badge(task) +
-          (task.error ? `<span class="dl-err" title="${Utils.escapeHtml(task.error)}">${Utils.icon("info", 13)}</span>` : "");
-      }
+      if (status) status.innerHTML = this._badge(task);
       const actions = row.querySelector(".dl-actions");
       if (actions) actions.innerHTML = this._rowActions(task);
+    }
+    // An error can appear or clear without a state change (e.g. a failed probe
+    // on a still-downloading row). Keep the badge in sync on every update.
+    const statusEl = row.querySelector(".dl-status");
+    if (statusEl) {
+      let errEl = statusEl.querySelector(".dl-err");
+      if (task.error) {
+        const title = Utils.escapeHtml(task.error);
+        if (errEl) errEl.title = task.error;
+        else statusEl.insertAdjacentHTML("beforeend",
+          `<span class="dl-err" title="${title}">${Utils.icon("info", 13)}</span>`);
+      } else if (errEl) {
+        errEl.remove();
+      }
     }
   },
 };

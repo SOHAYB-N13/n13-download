@@ -84,6 +84,14 @@
   --border: rgba(15, 23, 42, 0.09);
   --border-strong: rgba(15, 23, 42, 0.16);
 
+  /* The base palette is tuned for dark surfaces. On white cards the same
+     greens/ambers/red fall below 4.5:1 as text, so darken them here. They
+     remain the same hues — only the lightness changes. */
+  --accent: #B91C1C;
+  --success: #15803D;
+  --warning: #B45309;
+  --danger: #B91C1C;
+
   --accent-soft: rgba(239, 68, 68, 0.12);
   --success-soft: rgba(34, 197, 94, 0.12);
   --warning-soft: rgba(245, 158, 11, 0.13);

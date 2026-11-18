@@ -99,8 +99,15 @@ const Utils = {
 
   // ── Status ────────────────────────────────────────────────────────
 
+  /** A paused control in a pre-DOWNLOADING state gets an honest badge. */
+  displayState(task) {
+    if (task && task.control_paused && task.state !== "Paused") return "Pausing";
+    return task ? task.state : "";
+  },
+
   statusClass(state) {
     return {
+      "Pausing": "paused",
       "Downloading": "downloading",
       "Analyzing": "analyzing",
       "Starting": "starting",
@@ -119,7 +126,7 @@ const Utils = {
 
   statusLabel(state) {
     const key = {
-      "Downloading": "status.downloading",
+      "Pausing": "status.pausing",
       "Analyzing": "status.analyzing",
       "Starting": "status.starting",
       "Merging": "status.merging",
@@ -135,6 +142,7 @@ const Utils = {
       "Removed": "status.removed",
     }[state];
     const fallback = {
+      "Pausing": "Pausing",
       "Downloading": "Downloading", "Analyzing": "Analyzing", "Starting": "Starting",
       "Merging": "Merging", "Verifying": "Verifying", "Paused": "Paused",
       "Queued": "Queued", "Complete": "Completed", "Completed": "Completed",

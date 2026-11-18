@@ -132,7 +132,7 @@ const AddDownload = {
 
       const model = {
         valid: false, normalized: "", nameTouched: false, dirTouched: false,
-        category: "General", baseDir, probing: 0,
+        category: "General", baseDir, probing: 0, validating: 0,
         projectId: initialProject ? initialProject.id : "",
       };
 
@@ -183,7 +183,12 @@ const AddDownload = {
         const raw = el.url.value.trim();
         el.detect.hidden = true;
         if (!raw) { setValid(false); el.probing.hidden = true; return; }
+        const validationTicket = ++model.validating;
         const v = await API.validateUrl(raw);
+        // A later keystroke (or a cleared field) invalidates this reply.
+        // Without the ticket, a slow response could enable Download for a URL
+        // the user already replaced.
+        if (validationTicket !== model.validating || el.url.value.trim() !== raw) return;
         if (!v || !v.valid) { setValid(false, L("dlg.valid_url_error", "Enter a valid http:// or https:// link")); return; }
         model.normalized = v.normalized;
         setValid(true);
@@ -214,7 +219,15 @@ const AddDownload = {
         }
       }, 550);
 
-      el.url.addEventListener("input", probe);
+      // Any edit immediately invalidates the previous value: Go must not stay
+      // enabled from an older URL during the 550 ms validation debounce.
+      el.url.addEventListener("input", () => {
+        model.validating++;
+        model.normalized = "";
+        el.detect.hidden = true;
+        setValid(false);
+        probe();
+      });
       el.url.addEventListener("keydown", (e) => { if (e.key === "Enter" && !el.go.disabled) el.go.click(); });
       el.name.addEventListener("input", () => { model.nameTouched = true; });
       el.dir.addEventListener("input", () => { model.dirTouched = true; model.baseDir = el.dir.value; });
@@ -300,7 +313,9 @@ const AddDownload = {
           }
         } finally {
           el.go.classList.remove("busy");
-          el.go.disabled = false;
+          // Restore the *validated* state, not an unconditional enable: after
+          // a failed add the button must stay disabled until the URL changes.
+          el.go.disabled = !model.valid;
         }
       });
 
@@ -337,7 +352,9 @@ const AddDownload = {
     if (!hasConflict) return add();
     if (policy === "allow") return add(true);
     if (policy === "replace") return add(false, "replace");
-    if (policy === "rename") return add();
+    // "rename" means: create a NEW task with a unique destination name now.
+    // It is not the same as "allow", which keeps the original name.
+    if (policy === "rename") return add(false, "rename");
     // "ask" — show the conflict dialog.
     const choice = await Components.conflictPrompt({
       reason: conflict.reason || (conflict.has_active ? "same_url" : ""),
@@ -357,6 +374,7 @@ const AddDownload = {
     }
     if (choice === "replace") return add(false, "replace");
     if (choice === "again") return add(true);
+    if (choice === "rename") return add(false, "rename");
     return add();
   },
 };

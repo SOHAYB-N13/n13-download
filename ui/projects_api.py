@@ -42,12 +42,16 @@ from projects.service import ProjectService
 
 log = logging.getLogger("n13")
 
-# States in which a download is actually moving.  Used to decide whether a
-# project can be deleted, and which tasks "Stop project" should cancel.
+# States in which a download still owns unfinished work.  Used to decide
+# whether a project can be deleted, and which tasks "Stop project" must cancel.
+# PAUSED is included: a paused task is still in ``ACTIVE_STATES`` and may own a
+# live worker parked at the pause barrier — leaving it out let a project be
+# deleted underneath it, after which the worker re-created the row on finalize.
 _LIVE_STATES = (
     TaskState.ANALYZING,
     TaskState.STARTING,
     TaskState.DOWNLOADING,
+    TaskState.PAUSED,
     TaskState.MERGING,
     TaskState.VERIFYING,
 )
@@ -271,6 +275,9 @@ class ProjectsApiMixin:
             )
         except ProjectError as exc:
             return exc.to_dict()
+        # The service committed DB changes directly; bring the manager's
+        # in-memory registry/order in line before telling the UI to refresh.
+        self._manager.apply_project_deletion(project_id, result["mode"])
         self.refresh_project_gates()
         self._projects_changed()
         return result

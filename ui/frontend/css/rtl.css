@@ -93,6 +93,19 @@
 [dir="rtl"] .step-text { text-align: right; }
 [dir="rtl"] .server-kv code { direction: ltr; }
 [dir="rtl"] .h-dir-t { direction: ltr; text-align: right; }
+/* Data-bearing fields keep their own direction in a Persian UI: a URL, a
+   Windows path or a scanned link list must read left-to-right. `plaintext`
+   (for static text) respects the first strong character in mixed strings. */
+[dir="rtl"] input.mono,
+[dir="rtl"] #ndDir,
+[dir="rtl"] #grpFDir,
+[dir="rtl"] #reFolder,
+[dir="rtl"] #batchDir { direction: ltr; unicode-bidi: isolate; }
+[dir="rtl"] .pattern-item { direction: ltr; unicode-bidi: plaintext; text-align: left; }
+/* The Advanced-options disclosure points right in LTR; in RTL it must point
+   left. The open (rotated) state points down in both languages. */
+[dir="rtl"] .nd-adv-toggle .ico { transform: scaleX(-1); }
+[dir="rtl"] .nd-adv-toggle.open .ico { transform: rotate(90deg); }
 /* Log lines are technical output, always LTR.  Without this the neutral "["
    opening the timestamp takes the RTL paragraph direction and the timestamp
    jumps to the end of the line, so the same log reads differently in fa. */

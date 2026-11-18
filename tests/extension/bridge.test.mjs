@@ -25,8 +25,17 @@ function mockChrome(tabs = {}) {
   globalThis.chrome = {
     runtime: { getURL: (p) => "chrome-extension://test/" + p },
     tabs: {
+      // launchApp is intentionally silent: it never opens a new tab.
+      created: [],
       create: (o, cb) => { (tabs.created || []).push(o); cb && cb({ id: 7 }); },
       remove: (id, cb) => { (tabs.removed || []).push(id); cb && cb(); },
+      query: (info) => Promise.resolve([{ id: 7, url: "https://example.com/page" }]),
+      sendMessage: (id, msg, cb) => {
+        (tabs.messages || []).push(msg);
+        if (cb) cb({ ok: true });
+      },
+      update: (id, info, cb) => { (tabs.updated || []).push(info); if (cb) cb({ id }); },
+      goBack: (id, cb) => { if (cb) cb(); },
     },
   };
 }
@@ -197,50 +206,67 @@ test("waitUntilReady gives up on unauthorized (no infinite loop)", async () => {
 // launchApp
 // ---------------------------------------------------------------------------
 
-test("launchApp launches dldm://launch and never passes a URL", async () => {
-  const tabs = { created: [], removed: [] };
+test("launchApp launches dldm://launch silently and never passes a URL", async () => {
+  const tabs = { created: [], messages: [], updated: [] };
   mockChrome(tabs);
   const b = makeBridge();
   const ok = await b.launchApp();
   assert.equal(ok, true);
-  assert.equal(tabs.created.length, 1);
-  assert.equal(tabs.created[0].url, "dldm://launch");
-  assert.ok(!tabs.created[0].url.includes("http"));
-  // removal is scheduled after the linger; assert it was NOT removed synchronously.
-  assert.equal(tabs.removed.length, 0);
+  // The product deliberately switched from tabs.create to a hidden-iframe
+  // navigation via the content script. Assert the CURRENT contract.
+  assert.equal(tabs.created.length, 0, "silent launch must never open a tab");
+  assert.equal(tabs.messages.length, 1);
+  assert.deepEqual(tabs.messages[0], { action: "protocol_navigate", url: "dldm://launch" });
+  assert.equal(tabs.updated.length, 0, "the iframe path needs no tab fallback");
 });
 
-test("launchApp resolves false (no throw) when the tab creation fails", async () => {
+test("launchApp resolves false (no throw) when there is no active tab", async () => {
   globalThis.chrome = {
     runtime: { getURL: (p) => "chrome-extension://test/" + p },
     tabs: {
-      create: (o, cb) => { chrome.runtime.lastError = { message: "blocked" }; cb(); },
-      remove: () => {},
+      query: () => Promise.resolve([]),
+      sendMessage: () => { throw new Error("should not be called without a tab"); },
+      update: () => { throw new Error("should not be called without a tab"); },
     },
   };
   const b = makeBridge();
   const ok = await b.launchApp();
   assert.equal(ok, false);
-  delete chrome.runtime.lastError;
 });
 
-test("launchApp remove callback tolerates a gone tab (no unhandled lastError)", async () => {
-  const tabs = { created: [], removed: [] };
+test("launchApp fallback tolerates a gone tab (no unhandled lastError)", async () => {
+  const tabs = { created: [], updated: [], sent: [] };
   globalThis.chrome = {
     runtime: { getURL: (p) => "chrome-extension://test/" + p },
     tabs: {
-      create: (o, cb) => { tabs.created.push(o); cb({ id: 99 }); },
-      // Simulate the tab already being gone when remove runs.
-      remove: (id, cb) => { tabs.removed.push(id); chrome.runtime.lastError = { message: "No tab with id: 99" }; cb(); },
+      create: (o, cb) => { tabs.created.push(o); cb && cb({ id: 99 }); },
+      query: () => Promise.resolve([{ id: 99, url: "https://example.com/page" }]),
+      // Simulate no content script: sendMessage fails, so the current-tab
+      // fallback must be used instead of opening a new tab.
+      sendMessage: (id, msg, cb) => {
+        tabs.sent.push(msg);
+        chrome.runtime.lastError = { message: "Receiving end does not exist" };
+        if (cb) cb(undefined);
+      },
+      update: (id, info, cb) => {
+        tabs.updated.push(info);
+        // lastError is per-call in Chrome; the sendMessage error must not
+        // leak into the fallback's update callback.
+        delete chrome.runtime.lastError;
+        if (cb) cb({ id });
+      },
+      goBack: (id, cb) => { if (cb) cb(); },
     },
   };
   const b = makeBridge();
   const ok = await b.launchApp();
   assert.equal(ok, true);
-  assert.equal(tabs.created.length, 1);
-  // The removal is scheduled 3s later; this asserts create succeeded and no
-  // synchronous throw occurred.  (The `void chrome.runtime.lastError` in the
-  // remove callback is what suppresses Chrome's "Unchecked runtime.lastError".)
+  assert.equal(tabs.created.length, 0, "fallback must still never open a tab");
+  assert.equal(tabs.sent.length, 1);
+  assert.equal(tabs.updated[0].url, "dldm://launch");
+  assert.ok(!String(tabs.updated[0].url).includes("http"));
+  // The linger timer restores the page 3s later; the `void lastError` in
+  // that callback is what suppresses Chrome's "Unchecked runtime.lastError".
   delete chrome.runtime.lastError;
 });
 

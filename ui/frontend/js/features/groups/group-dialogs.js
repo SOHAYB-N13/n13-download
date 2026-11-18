@@ -48,6 +48,9 @@ const GroupDialogs = {
   openEditor(app, project, projects) {
     return new Promise((resolve) => {
       const editing = !!project;
+      let settled = false;                // onClose must not override the result
+      let submitting = false;             // guard against a fast double click
+      const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
       const schedule = (project && project.schedule) || { enabled: false, start: "23:00", stop: "07:00", days: [] };
       const t = (k, v, f) => this.t(k, v, f);
       const days = schedule.days || [];
@@ -137,7 +140,7 @@ const GroupDialogs = {
           : t("groups.new_title", null, "New download group"),
         subtitle: t("groups.form_sub", null, "Group downloads that share a folder, a limit or a time window."),
         width: 560,
-        onClose: () => resolve(null),
+        onClose: () => finish(null),
       });
 
       modal.setFooter(`
@@ -198,47 +201,58 @@ const GroupDialogs = {
       });
 
       const submit = async () => {
-        const draft = collect();
-        err.hidden = true;
-        nameErr.hidden = true;
+        if (submitting) return;                 // a fast double click must not create twice
+        submitting = true;
+        const saveBtn = q("#grpFSave");
+        saveBtn.disabled = true;
+        try {
+          const draft = collect();
+          err.hidden = true;
+          nameErr.hidden = true;
 
-        // Validate locally first so the user is not made to wait for a round
-        // trip to learn their name is empty — using the same rules the backend
-        // applies, so the two can never disagree.
-        const check = GroupsModel.validateDraft(draft, projects || [], editing ? project.id : "");
-        if (!check.ok) {
-          showError(check.field, check.error);
-          return;
+          // Validate locally first so the user is not made to wait for a round
+          // trip to learn their name is empty — using the same rules the backend
+          // applies, so the two can never disagree.
+          const check = GroupsModel.validateDraft(draft, projects || [], editing ? project.id : "");
+          if (!check.ok) {
+            showError(check.field, check.error);
+            return;
+          }
+
+          const payload = {
+            description: draft.description.trim(),
+            directory: draft.directory.trim(),
+            max_concurrent: Number(draft.max_concurrent) || 0,
+            completion_action: draft.completion_action,
+            schedule: draft.schedule,
+          };
+          const result = editing
+            ? await API.updateProject(project.id, Object.assign({ name: draft.name.trim() }, payload))
+            : await API.createProject(
+                draft.name.trim(), payload.description, payload.directory,
+                payload.max_concurrent, payload.schedule, payload.completion_action
+              );
+
+          if (!result || result.ok === false) {
+            showError((result && result.field) || "", (result && result.error) || "unknown");
+            return;
+          }
+          const id = (result.project && result.project.id) || (editing ? project.id : "");
+          // Settle BEFORE closing: modal.close() synchronously runs onClose,
+          // which must only win when the user actually cancelled.
+          finish(id || null);
+          modal.close();
+          Components.toast(
+            editing
+              ? t("groups.toast.updated", null, "Group updated")
+              : t("groups.toast.created", null, "Group created"),
+            draft.name.trim(),
+            "success"
+          );
+        } finally {
+          // On a validation/server error the dialog stays open, so re-arm it.
+          if (!settled) { submitting = false; saveBtn.disabled = false; }
         }
-
-        const payload = {
-          description: draft.description.trim(),
-          directory: draft.directory.trim(),
-          max_concurrent: Number(draft.max_concurrent) || 0,
-          completion_action: draft.completion_action,
-          schedule: draft.schedule,
-        };
-        const result = editing
-          ? await API.updateProject(project.id, Object.assign({ name: draft.name.trim() }, payload))
-          : await API.createProject(
-              draft.name.trim(), payload.description, payload.directory,
-              payload.max_concurrent, payload.schedule, payload.completion_action
-            );
-
-        if (!result || result.ok === false) {
-          showError((result && result.field) || "", (result && result.error) || "unknown");
-          return;
-        }
-        const id = (result.project && result.project.id) || (editing ? project.id : "");
-        modal.close();
-        Components.toast(
-          editing
-            ? t("groups.toast.updated", null, "Group updated")
-            : t("groups.toast.created", null, "Group created"),
-          draft.name.trim(),
-          "success"
-        );
-        resolve(id || null);
       };
 
       q("#grpFSave").addEventListener("click", submit);
@@ -258,6 +272,9 @@ const GroupDialogs = {
    */
   openDelete(app, project) {
     return new Promise((resolve) => {
+      let settled = false;
+      let submitting = false;
+      const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
       const t = (k, v, f) => this.t(k, v, f);
       const options = [
         { mode: "keep_tasks", label: t("groups.delete.keep", null, "Keep the downloads"), hint: t("groups.delete.keep_hint", null, "Move them to the Default group. Nothing is deleted.") },
@@ -287,7 +304,7 @@ const GroupDialogs = {
         title: t("groups.delete.title", null, "Delete group"),
         subtitle: t("groups.delete.sub", null, "Choose what happens to the downloads in this group."),
         width: 560,
-        onClose: () => resolve(false),
+        onClose: () => finish(false),
       });
 
       modal.setFooter(`
@@ -312,26 +329,35 @@ const GroupDialogs = {
 
       q("#grpDelCancel").addEventListener("click", () => modal.close());
       q("#grpDelGo").addEventListener("click", async () => {
-        const mode = selectedMode();
-        err.hidden = true;
-        if (GroupsModel.destroysFiles(mode) && !q("#grpDelConfirm").checked) {
-          err.textContent = this.errorText("delete_files_not_confirmed");
-          err.hidden = false;
-          return;
+        if (submitting) return;                 // never send the destructive request twice
+        submitting = true;
+        const goBtn = q("#grpDelGo");
+        goBtn.disabled = true;
+        try {
+          const mode = selectedMode();
+          err.hidden = true;
+          if (GroupsModel.destroysFiles(mode) && !q("#grpDelConfirm").checked) {
+            err.textContent = this.errorText("delete_files_not_confirmed");
+            err.hidden = false;
+            return;
+          }
+          const result = await API.deleteProject(project.id, mode, q("#grpDelConfirm").checked);
+          if (!result || result.ok === false) {
+            err.textContent = this.errorText((result && result.error) || "unknown");
+            err.hidden = false;
+            return;
+          }
+          // Settle before close so onClose cannot report a cancellation.
+          finish(true);
+          modal.close();
+          Components.toast(
+            t("groups.toast.deleted", null, "Group deleted"),
+            project.name,
+            "success"
+          );
+        } finally {
+          if (!settled) { submitting = false; goBtn.disabled = false; }
         }
-        const result = await API.deleteProject(project.id, mode, q("#grpDelConfirm").checked);
-        if (!result || result.ok === false) {
-          err.textContent = this.errorText((result && result.error) || "unknown");
-          err.hidden = false;
-          return;
-        }
-        modal.close();
-        Components.toast(
-          t("groups.toast.deleted", null, "Group deleted"),
-          project.name,
-          "success"
-        );
-        resolve(true);
       });
     });
   },

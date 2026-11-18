@@ -7,6 +7,7 @@ import logging
 import os
 import queue
 import subprocess
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -78,6 +79,11 @@ class Api(ProjectsApiMixin):
         # re-validates URL match, freshness and SSRF before reuse).
         self._probe_cache: Dict[str, tuple] = {}
 
+        # Pattern scan lifecycle. One active scan at a time; cancellation is
+        # cooperative and polled between probes by the scanner.
+        self._scan_lock = threading.Lock()
+        self._scan_cancel = threading.Event()
+
         from core.paths import data_dir, migrate_legacy_saved_links
 
         # Migrate any legacy project-relative saved_links/ into the per-user
@@ -130,6 +136,23 @@ class Api(ProjectsApiMixin):
             logger=log,
         )
         self._scheduler.start()
+
+        # Per-task one-shot schedules. The database is authoritative; this
+        # loop only fires rows that are actually due. Recovery runs once per
+        # process so an old missed schedule is surfaced, never silently fired.
+        from core.scheduled import ScheduledDownloadService, ScheduledRunner
+
+        self._scheduled_service = ScheduledDownloadService(self._store.db)
+        self._scheduled_runner = ScheduledRunner(
+            self._scheduled_service,
+            on_due=self._fire_scheduled_download,
+            logger_obj=log,
+        )
+        self._missed_schedules = self._scheduled_service.recover_on_startup()
+        # No polling thread for the common case of "no schedules". The loop is
+        # started on demand when a row is created (or restored at startup).
+        if self._scheduled_service.list_all():
+            self._scheduled_runner.start()
 
         # Optional clipboard monitor (off by default).
         self._clipboard = None
@@ -507,11 +530,30 @@ class Api(ProjectsApiMixin):
             "num_threads": rule.manual_connections if rule.connection_mode == "manual" else 0,
         }
 
+    def _valid_project_id(self, project_id: str) -> str:
+        """Never persist a deleted/unknown group id on a new task."""
+        from core.db import DEFAULT_PROJECT_ID
+        from projects.models import ProjectError
+
+        pid = str(project_id or "").strip()
+        if not pid:
+            return DEFAULT_PROJECT_ID
+        try:
+            self._projects.get(pid)
+            return pid
+        except ProjectError:
+            return DEFAULT_PROJECT_ID
+
     def add_download(self, url: str, directory: str = "", label: str = "",
                      checksum: str = "", autostart: bool = True,
                      category: str = "", allow_duplicate: bool = False,
                      resolve_conflict: str = "", size: int = 0,
                      content_type: str = "", project_id: str = "") -> str:
+        project_id = self._valid_project_id(project_id)
+        # Both "allow" and "rename" mean the user wants another task; rename
+        # additionally gives it a unique destination name (below).
+        if resolve_conflict == "rename":
+            allow_duplicate = True
         hint = label or url
         rule = self._rule_overrides(url, hint, size, content_type)
         # A project's destination is a *default*, not an override: an explicit
@@ -530,6 +572,14 @@ class Api(ProjectsApiMixin):
         resolved = self._resolve_directory(directory, cat, hint)
         if resolve_conflict == "replace":
             self._delete_destination_file(resolved, label or "")
+        final_label = label
+        if resolve_conflict == "rename" and label:
+            # "Rename" is a distinct product policy: the new task must be
+            # created with a unique destination filename now, not merely be
+            # allowed to collide and rely on the engine to pick a path later.
+            from core.utils import unique_filepath
+
+            final_label = Path(unique_filepath(Path(resolved), label)).name
         priority = int(rule["priority"]) if rule else 5
         conn = rule["connection_mode"] if rule else ""
         nthreads = int(rule["num_threads"]) if rule else 0
@@ -541,7 +591,7 @@ class Api(ProjectsApiMixin):
         if entry is not None and (time.time() - entry[0]) <= _PROBE_CACHE_TTL:
             probe_analysis = entry[1]
         request = DownloadRequest(
-            url=url, directory=resolved, checksum=checksum, label=label, category=cat,
+            url=url, directory=resolved, checksum=checksum, label=final_label, category=cat,
             priority=priority, connection_mode=conn, num_threads=nthreads,
             probe_analysis=probe_analysis, project_id=project_id or "",
         )
@@ -570,22 +620,41 @@ class Api(ProjectsApiMixin):
         """(allow_duplicate, resolve_conflict) for non-interactive add flows."""
         policy = getattr(self._config, "duplicate_policy", "ask")
         allow = policy == "allow"
-        resolve = "replace" if policy == "replace" else ""
+        resolve = "replace" if policy == "replace" else "rename" if policy == "rename" else ""
         return allow, resolve
 
     def add_batch(self, urls: List[str], directory: str, project_id: str = "") -> int:
+        """Legacy int-returning batch add. Kept for existing call sites."""
+        return int(self.add_batch_report(urls, directory, project_id)["added"])
+
+    def add_batch_report(
+        self,
+        urls: List[str],
+        directory: str,
+        project_id: str = "",
+        autostart: bool = True,
+    ) -> Dict[str, Any]:
+        """Create a batch and report what actually happened, per outcome.
+
+        The scan-review flow needs an honest breakdown: a URL that resolved to
+        an existing task is a duplicate, not a new download. Nothing here
+        starts anything unless ``autostart`` is True.
+        """
         from ui.common import name_from_url
+
+        project_id = self._valid_project_id(project_id)
         policy = getattr(self._config, "duplicate_policy", "ask")
-        # A project's destination is a default for the whole batch, exactly as in
-        # add_download: an explicit directory still wins.
         if not directory and project_id:
             directory = self.project_directory(project_id)
-        # "ask" in a batch context means auto-rename (never overwrite silently);
-        # "replace" deletes existing destinations; "allow" permits duplicates.
-        allow_duplicate = policy == "allow"
-        requests = []
-        for u in urls:
-            if not u.strip():
+        # "rename" must also bypass the same-URL dedupe: the user explicitly
+        # asked for another file, and we just gave it a unique name.
+        allow_duplicate = policy in ("allow", "rename")
+        requests: List[DownloadRequest] = []
+        skipped = 0
+        reserved: set = set()
+        for u in urls or []:
+            if not str(u).strip():
+                skipped += 1
                 continue
             rule = self._rule_overrides(u, name_from_url(u))
             cat = self._category_for_hint(u)
@@ -596,18 +665,56 @@ class Api(ProjectsApiMixin):
                 resolved = rule["folder"]
             if policy == "replace":
                 self._delete_destination_file(resolved, name_from_url(u))
+            label = name_from_url(u)
+            if policy == "rename" and label:
+                from core.utils import unique_filepath
+
+                candidate = Path(unique_filepath(Path(resolved), label)).name
+                stem, suffix = Path(candidate).stem, Path(candidate).suffix
+                counter = 1
+                key = (resolved, candidate.lower())
+                while key in reserved:
+                    candidate = f"{stem} ({counter}){suffix}"
+                    counter += 1
+                    key = (resolved, candidate.lower())
+                reserved.add(key)
+                label = candidate
             requests.append(DownloadRequest(
-                url=u, directory=resolved, category=cat,
+                url=u, directory=resolved, category=cat, label=label,
                 priority=int(rule["priority"]) if rule else 5,
                 connection_mode=rule["connection_mode"] if rule else "",
                 num_threads=int(rule["num_threads"]) if rule else 0,
                 project_id=project_id or "",
             ))
         if not requests:
-            return 0
-        self._manager.add_many(requests, autostart=False, allow_duplicate=allow_duplicate)
-        self._manager.start_all()
-        return len(requests)
+            return {"added": 0, "duplicates": 0, "skipped": skipped,
+                    "failed": 0, "ids": [], "total": 0}
+
+        # add_many returns an EXISTING task's id when the duplicate policy
+        # de-duplicates a request. Count only ids that did not exist before
+        # this call, otherwise a repeated submission is falsely "added".
+        existing_ids = {snap.id for snap in self._manager.snapshots()}
+        ids = self._manager.add_many(
+            requests, autostart=False, allow_duplicate=allow_duplicate)
+        seen = set(existing_ids)
+        added_ids = []
+        duplicates = 0
+        for task_id in ids:
+            if task_id in seen:
+                duplicates += 1
+            else:
+                seen.add(task_id)
+                added_ids.append(task_id)
+        if autostart:
+            self._manager.start_all()
+        return {
+            "added": len(added_ids),
+            "duplicates": duplicates,
+            "skipped": skipped,
+            "failed": 0,
+            "ids": added_ids,
+            "total": len(requests),
+        }
 
     # ── Download rules CRUD ──────────────────────────────────────────
 
@@ -845,16 +952,149 @@ class Api(ProjectsApiMixin):
     # ── Pattern Scan ─────────────────────────────────────────────
 
     def scan_pattern(self, pattern: str, directory: str = "", start: int = 1, padding: int = 2) -> Dict[str, Any]:
-        from batch.pattern import scan_pattern_urls
+        """Legacy compact scan result (URLs only). Discovery never creates tasks."""
+        report = self.scan_pattern_preview(pattern, start=start, padding=padding)
+        return {"urls": report.get("urls", []), "count": len(report.get("urls", []))}
+
+    def scan_pattern_preview(
+        self, pattern: str, start: int = 1, padding: int = 2
+    ) -> Dict[str, Any]:
+        """Discover files for review. No tasks, no queue changes, no downloads."""
+        from batch.pattern import scan_pattern_detailed
+
+        with self._scan_lock:
+            self._scan_cancel.clear()
+            cancel = self._scan_cancel.is_set
+            try:
+                outcome = scan_pattern_detailed(
+                    pattern, self._config, self._session,
+                    start_num=start, padding=padding, cancel=cancel,
+                )
+                return outcome.to_dict()
+            except Exception as e:
+                return {
+                    "items": [], "urls": [], "scanned": 0,
+                    "stop_reason": "failed", "cancelled": False,
+                    "discovered": 0, "available": 0, "unavailable": 0,
+                    "not_found": 0, "failed_probes": 0, "error": str(e),
+                }
+            finally:
+                self._scan_cancel.clear()
+
+    def cancel_scan(self) -> bool:
+        """Ask the running scan to stop at the next candidate."""
+        if not self._scan_lock.locked():
+            return False
+        self._scan_cancel.set()
+        return True
+
+    # ── Per-task scheduling ────────────────────────────────────────
+
+    def schedule_downloads(
+        self,
+        urls: List[str],
+        directory: str,
+        project_id: str = "",
+        local_time: str = "",
+        tz_name: str = "",
+        autostart: bool = True,
+    ) -> Dict[str, Any]:
+        """Persist one one-shot schedule per URL, due at a local wall time."""
+        from core.scheduled import resolve_due_at
+        from ui.common import name_from_url
+        import uuid
+
+        clean = [str(u).strip() for u in (urls or []) if str(u or "").strip()]
+        if not clean:
+            return {"ok": False, "error": "no_urls", "scheduled": 0}
         try:
-            urls = scan_pattern_urls(
-                pattern, self._config, self._session,
-                start_num=start, padding=padding,
-                quiet=True,
-            )
-            return {"urls": urls, "count": len(urls)}
-        except Exception as e:
-            return {"urls": [], "count": 0, "error": str(e)}
+            due_at, zone = resolve_due_at(local_time, tz_name)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "scheduled": 0}
+        batch_id = "batch_" + uuid.uuid4().hex[:10]
+        project_id = self._valid_project_id(project_id)
+        policy = getattr(self._config, "duplicate_policy", "ask")
+        count = 0
+        for url in clean:
+            payload = {
+                "url": url,
+                "directory": directory or "",
+                "project_id": project_id or "",
+                "label": name_from_url(url),
+                "checksum": "",
+                "autostart": bool(autostart),
+                "category": "",
+                "allow_duplicate": policy == "allow",
+            }
+            try:
+                self._scheduled_service.schedule(payload, due_at, zone, batch_id)
+                count += 1
+            except Exception as exc:
+                self._log.warning("Could not schedule %s: %s", url, exc)
+        if count:
+            self._scheduled_runner.start()
+        self._event_queue.put_nowait({"type": "scheduled_changed"})
+        return {
+            "ok": True, "scheduled": count, "batch_id": batch_id,
+            "due_at": due_at, "tz_name": zone, "local_time": local_time,
+        }
+
+    def list_scheduled(self, status: str = "") -> List[Dict[str, Any]]:
+        return self._scheduled_service.list_all(status)
+
+    def get_missed_schedules(self) -> List[Dict[str, Any]]:
+        """Schedules that expired while the app was closed — never auto-started."""
+        return list(self._missed_schedules)
+
+    def cancel_scheduled(self, sid: str) -> bool:
+        ok = self._scheduled_service.cancel(sid)
+        if ok:
+            self._event_queue.put_nowait({"type": "scheduled_changed"})
+        return ok
+
+    def reschedule_scheduled(self, sid: str, local_time: str, tz_name: str = "") -> Dict[str, Any]:
+        from core.scheduled import format_local, resolve_due_at
+
+        try:
+            due_at, zone = resolve_due_at(local_time, tz_name)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        ok = self._scheduled_service.reschedule(sid, due_at, zone)
+        if ok:
+            self._event_queue.put_nowait({"type": "scheduled_changed"})
+        return {"ok": ok, "due_at": due_at, "local_time": format_local(due_at, zone)}
+
+    def pause_scheduled(self, sid: str) -> bool:
+        return self._scheduled_service.pause(sid)
+
+    def resume_scheduled(self, sid: str) -> bool:
+        return self._scheduled_service.resume(sid)
+
+    def start_scheduled_now(self, sid: str) -> str:
+        """Explicitly run a schedule now. Cancels the stored schedule first."""
+        row = self._scheduled_service.get(sid)
+        if not row:
+            return ""
+        payload = dict(row.get("payload") or {})
+        self._scheduled_service.cancel(sid)
+        task_id = self._create_scheduled_task(payload)
+        if task_id:
+            self._manager.start_task(task_id)
+        return task_id
+
+    def _create_scheduled_task(self, payload: Dict[str, Any]) -> str:
+        return self.add_download(
+            str(payload.get("url", "")),
+            str(payload.get("directory", "")),
+            str(payload.get("label", "")),
+            str(payload.get("checksum", "")),
+            bool(payload.get("autostart", True)),
+            str(payload.get("category", "")),
+            bool(payload.get("allow_duplicate", False)),
+        )
+
+    def _fire_scheduled_download(self, item: Dict[str, Any]) -> str:
+        return self._create_scheduled_task(dict(item.get("payload") or {}))
 
     # ── Delete File ──────────────────────────────────────────────
 
@@ -887,6 +1127,29 @@ class Api(ProjectsApiMixin):
         probe would find.
         """
         return canonical_url(normalize_url(url or ""))
+
+    def parse_batch_urls(self, text: str) -> Dict[str, Any]:
+        """Parse a pasted multi-URL block without downloading anything.
+
+        Uses the same extractor the CLI uses, so the Batch page accepts URLs in
+        prose, behind quotes, and without a scheme just as the rest of the app
+        does.  Returns the canonicalised, deduplicated URLs plus counts for
+        duplicates and lines that contained no URL, so the UI can say exactly
+        what it accepted instead of reporting a single opaque number.
+        """
+        from core.urls import extract_urls
+
+        lines = [line.strip() for line in str(text or "").splitlines()]
+        filled = [line for line in lines if line]
+        urls = extract_urls("\n".join(filled), allow_bare_domains=True)
+        raw_total = sum(len(extract_urls(line, allow_bare_domains=True)) for line in filled)
+        skipped = sum(1 for line in filled if not extract_urls(line, allow_bare_domains=True))
+        return {
+            "urls": urls,
+            "accepted": len(urls),
+            "duplicates": max(0, raw_total - len(urls)),
+            "skipped": skipped,
+        }
 
     def validate_url(self, url: str) -> Dict[str, Any]:
         url = normalize_url(url)
@@ -1591,6 +1854,13 @@ class Api(ProjectsApiMixin):
         try:
             if getattr(self, "_scheduler", None) is not None:
                 self._scheduler.stop()
+        except Exception:
+            pass
+        # Stop firing schedules before the manager shuts down, so no due row
+        # can try to add a task while workers are being cancelled.
+        try:
+            if getattr(self, "_scheduled_runner", None) is not None:
+                self._scheduled_runner.stop()
         except Exception:
             pass
         # Graceful exit: pause transfers, persist their resumable state, then

@@ -144,6 +144,26 @@ class ApiDuplicateTest(unittest.TestCase):
                                    label="dup.zip", autostart=False, allow_duplicate=True)
         self.assertNotEqual(t1, t2)
 
+    def test_rename_policy_creates_a_distinct_filename(self):
+        # "rename" must not be silently downgraded to "allow": the second
+        # task must carry a unique destination name immediately.
+        target = self.tmp / "dup.zip"
+        target.write_bytes(b"original")
+        t1 = self.api.add_download("https://a.example/dup.zip", directory=str(self.tmp),
+                                   label="dup.zip", autostart=False)
+        t2 = self.api.add_download("https://a.example/dup.zip", directory=str(self.tmp),
+                                   label="dup.zip", autostart=False, resolve_conflict="rename")
+        self.assertNotEqual(t1, t2)
+        second = self.api._manager.get(t2)
+        self.assertEqual(second.filename, "dup (1).zip")
+        self.assertNotEqual(second.filename, "dup.zip")
+
+    def test_invalid_project_id_falls_back_to_default(self):
+        tid = self.api.add_download("https://a.example/orphan.zip", directory=str(self.tmp),
+                                    autostart=False, project_id="prj_does_not_exist")
+        snap = self.api._manager.get(tid)
+        self.assertEqual(snap.project_id, "default")
+
     def test_batch_policy_allow(self):
         self.cfg.duplicate_policy = "allow"
         n = self.api.add_batch(["https://a.example/a.zip", "https://a.example/a.zip"], str(self.tmp))
@@ -155,6 +175,44 @@ class ApiDuplicateTest(unittest.TestCase):
         target.write_bytes(b"old")
         self.api.add_batch(["https://a.example/a.zip"], str(self.tmp))
         self.assertFalse(target.exists(), "replace policy should delete the file")
+
+
+class BatchInputTests(unittest.TestCase):
+    """The Batch page must report what it actually queued."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AppConfig()
+        self.cfg.block_private_urls = False
+        self.cfg.duplicate_policy = "allow"
+        self.api = Api(self.cfg, SessionManager(self.cfg))
+
+    def test_parse_reports_accepted_duplicates_and_skipped_lines(self):
+        text = (
+            "https://a.example/one.zip\n"
+            "see https://a.example/one.zip#frag for details\n"
+            "b.example/two.zip\n"
+            "this line has no link\n"
+        )
+        parsed = self.api.parse_batch_urls(text)
+        self.assertEqual(parsed["accepted"], 2)
+        self.assertEqual(parsed["duplicates"], 1)
+        self.assertEqual(parsed["skipped"], 1)
+        self.assertEqual(len(parsed["urls"]), 2)
+        self.assertTrue(any("b.example" in u for u in parsed["urls"]))
+
+    def test_add_batch_count_is_distinct_tasks_not_inputs(self):
+        # With the "allow" policy two identical URLs become two tasks, so the
+        # count is genuinely 2. Under "ask" the manager de-duplicates and the
+        # count must then be 1 — the old code reported 2 in both cases.
+        n = self.api.add_batch(
+            ["https://a.example/a.zip", "https://a.example/a.zip"], str(self.tmp))
+        self.assertEqual(n, 2)
+        self.cfg.duplicate_policy = "ask"
+        api2 = Api(self.cfg, SessionManager(self.cfg))
+        n2 = api2.add_batch(
+            ["https://b.example/b.zip", "https://b.example/b.zip"], str(self.tmp))
+        self.assertEqual(n2, 1)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ const DownloadsActions = {
       onRowSelect(id, e) { app._onRowSelect(id, e); },
       // Resolve the action target list for a right-clicked task (context menu).
       targetsFor(id) { return app._actionTargetIds(id); },
+      // Let the context menu filter a mixed selection per action by state.
+      taskFor(id) { return (app.state.downloads && app.state.downloads[id]) || null; },
 
       onPause(x) { app._forEachId(app._asIds(x), (id) => API.pauseDownload(id)); },
       onResume(x) { app._forEachId(app._asIds(x), (id) => API.resumeDownload(id)); },
@@ -56,15 +58,44 @@ const DownloadsActions = {
       onOpenFolder(id) { API.openFolder(id); },
       onOpenFile(id) { API.openFile(id); },
       onRedownload(id) { API.redownload(id); },
+      /**
+       * `moveTask` takes a delta in the backend's full `_order`, which also
+       * contains running tasks.  The rows a user sees are waiting tasks only,
+       * so a plain ±1 can swap with an invisible active task and appear to do
+       * nothing.  Translate through the snapshots' `queue_index` when present.
+       */
+      _moveDelta(app, rows, id, delta) {
+        const current = rows.indexOf(id);
+        const target = current + delta;
+        if (current < 0 || target < 0 || target >= rows.length) return delta;
+        const byId = app.state.downloads || {};
+        const from = byId[id] && byId[id].queue_index;
+        const to = byId[rows[target]] && byId[rows[target]].queue_index;
+        return (typeof from === "number" && from >= 0 && typeof to === "number" && to >= 0)
+          ? to - from
+          : delta;
+      },
       onMove(x, delta) {
         const ids = app._asIds(x);
-        if (ids.length <= 1) { API.moveTask(ids[0], delta); return; }
+        if (!ids.length) return;
+        const order = Array.from(Utils.$qa("#downloadList .dl-row")).map((r) => r.dataset.id);
+        const cb = this;
+        const step = (id) => {
+          const d = cb._moveDelta(app, order, id, delta);
+          API.moveTask(id, d);
+          const i = order.indexOf(id);
+          const j = i + d;
+          if (i >= 0 && j >= 0 && j < order.length) {
+            order.splice(i, 1);
+            order.splice(delta < 0 ? j : Math.min(j, order.length), 0, id);
+          }
+        };
+        if (ids.length === 1) { step(ids[0]); return; }
         // Move the selected group together, preserving its internal order:
         // forward for up, reverse for down (relative to the displayed order).
-        const order = Array.from(Utils.$qa("#downloadList .dl-row")).map((r) => r.dataset.id);
         const sorted = ids.filter((id) => order.includes(id)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
         const seq = delta < 0 ? sorted : sorted.slice().reverse();
-        seq.forEach((id) => API.moveTask(id, delta));
+        seq.forEach(step);
       },
       // UI-facing wrapper: queue reordering is invisible under a date sort, so
       // flip to queue order first.  Kept separate from onMove so the pure

@@ -619,8 +619,12 @@ def test_details_panel_tabs_all_have_content(page):
 def test_ctrl_down_moves_the_selected_row_down_one_place(page):
     assert page["keyCalls"] == ["move_task_to"]
     moved = [a for a in page["keyArgs"] if a["method"] == "move_task_to"]
-    # Linux.iso sat at manual index 0; Ctrl+Down asks for index 1.
-    assert moved and moved[0]["args"] == ["w1", 1]
+    # Linux.iso was first in the visible waiting list. The backend's `position`
+    # is an index into its full `_order`, which also holds two running tasks,
+    # so moving to the second waiting slot means absolute index 3 (after
+    # run1, run2 and Image.png), not the raw visible index 1. Passing 1 here
+    # silently inserted the row between the two running tasks.
+    assert moved and moved[0]["args"] == ["w1", 3]
 
 
 # ── Drag & drop ─────────────────────────────────────────────────────────────

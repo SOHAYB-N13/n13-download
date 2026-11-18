@@ -14,6 +14,9 @@ const RuleEditorUI = {
     const fields = ["extension", "domain", "url_contains", "filename_contains", "mime", "min_size", "max_size"];
     const conds = (rule.conditions || []).length ? rule.conditions : [{ field: "extension", value: "" }];
     const L = (k, f) => I18N.t(k, f);
+    // Assigned inside the promise below. Escape/backdrop/X can only fire after
+    // the dialog is shown and the promise executor has run.
+    let settle = () => {};
     const dlg = ModalUI.showModal(`
       <div class="rule-edit">
         <div class="field">
@@ -62,7 +65,13 @@ const RuleEditorUI = {
             </div>
           </div>
         </div>
-      </div>`, { title: rule.id ? L("rules.edit_rule", "Edit rule") : L("rules.new_rule", "New rule"), width: 620 });
+      </div>`, {
+      title: rule.id ? L("rules.edit_rule", "Edit rule") : L("rules.new_rule", "New rule"),
+      width: 620,
+      // Escape, the backdrop and the X button all go through onClose. Without
+      // it the caller's `await` never settles and Settings appears frozen.
+      onClose: () => settle(null),
+    });
 
     dlg.setFooter(`
       <button class="btn btn-ghost" id="reCancel">${L("rules.cancel", "Cancel")}</button>
@@ -76,13 +85,15 @@ const RuleEditorUI = {
     this._wireCondRows(dlg.el);
 
     return new Promise((resolve) => {
-      qs("reCancel").addEventListener("click", () => { resolve(null); dlg.close(); });
+      let settled = false;
+      settle = (value) => { if (!settled) { settled = true; resolve(value); } };
+      qs("reCancel").addEventListener("click", () => { settle(null); dlg.close(); });
       qs("reSave").addEventListener("click", () => {
         const conditions = Utils.$qa(".re-cond-row", dlg.el).map((row) => ({
           field: row.querySelector("select").value,
           value: row.querySelector("input").value.trim(),
         })).filter((c) => c.value);
-        resolve({
+        settle({
           name: qs("reName").value.trim() || I18N.t("rules.untitled", "Untitled rule"),
           enabled: qs("reEnabled").checked,
           priority: +qs("rePriority").value || 0,

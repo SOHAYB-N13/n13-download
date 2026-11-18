@@ -51,6 +51,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\dist\N13\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
+[UninstallDelete]
+; The application keeps a writable copy of the browser extension beside the
+; bundle (browser\extension_locator.py syncs it into {app}\_internal\
+; chrome_extension at startup).  Inno only removes what it installed, so
+; without this the uninstaller left that folder behind.  It contains nothing
+; but the extension copy the app wrote there.
+Type: filesandordirs; Name: "{app}\_internal\chrome_extension"
+Type: dirifempty; Name: "{app}\_internal"
+Type: dirifempty; Name: "{app}"
+
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon

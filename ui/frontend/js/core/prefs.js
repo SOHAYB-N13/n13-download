@@ -37,6 +37,9 @@ const Prefs = {
       theme: app.state.theme,
       accent: app.state.accent,
       sidebarCollapsed: app.state.sidebarCollapsed,
+      // Mirrored for the pre-paint script only; the backend setting stays
+      // authoritative. This prevents an RTL flash on the next launch.
+      lang: (app.state.settings && app.state.settings.language) || "en",
     };
     localStorage.setItem(this.KEY, JSON.stringify(prefs));
     API.saveThemeConfig(prefs).catch(() => {});
@@ -48,6 +51,7 @@ const Prefs = {
       theme: app.state.theme,
       accent: app.state.accent,
       sidebarCollapsed: app.state.sidebarCollapsed,
+      lang: (app.state.settings && app.state.settings.language) || "en",
     }));
   },
 
@@ -55,11 +59,41 @@ const Prefs = {
   apply(app) {
     document.documentElement.dataset.theme = app.state.theme;
     const root = document.documentElement.style;
-    root.setProperty("--accent", app.state.accent);
-    root.setProperty("--accent-hi", this.mix(app.state.accent, 0.28));
-    root.setProperty("--accent-soft", this.alpha(app.state.accent, 0.14));
-    root.setProperty("--accent-ring", this.alpha(app.state.accent, 0.35));
+    // A very light custom accent is unreadable as text on white cards. Keep
+    // the user's hue but darken it only as far as needed for AA contrast in
+    // the light theme; dark theme keeps their exact choice.
+    const accent = app.state.theme === "light"
+      ? this.ensureTextContrast(app.state.accent)
+      : app.state.accent;
+    root.setProperty("--accent", accent);
+    root.setProperty("--accent-hi", this.mix(accent, 0.28));
+    root.setProperty("--accent-soft", this.alpha(accent, 0.14));
+    root.setProperty("--accent-ring", this.alpha(accent, 0.35));
     this.saveLocalOnly(app);
+  },
+
+  /** Relative luminance (WCAG) of a #rrggbb colour. */
+  luminance(hex) {
+    const [r, g, b] = this.hexToRgb(hex).map((v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  },
+
+  /** Darken a light accent until it reads against a white card (>= 4.5:1). */
+  ensureTextContrast(hex) {
+    let [r, g, b] = this.hexToRgb(hex);
+    // (L + 0.05) / 0.05 >= 4.5  =>  L <= 0.175
+    const toHex = () => "#" + [r, g, b]
+      .map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+    let guard = 0;
+    while (this.luminance(toHex()) > 0.175 && guard++ < 40) {
+      r = Math.max(0, r - 8);
+      g = Math.max(0, g - 8);
+      b = Math.max(0, b - 8);
+    }
+    return toHex();
   },
 
   hexToRgb(hex) {

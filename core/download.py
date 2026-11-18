@@ -68,12 +68,16 @@ from core.utils import (
 from ui.progress import create_download_progress
 
 # ---------------------------------------------------------------------------
-# Shared thread-pool — created once, resized as needed, shared across
-# all downloads to avoid ThreadPoolExecutor construction/destruction
-# overhead on every call to download_file().
+# Part-transfer thread-pool — one executor per download_file() call.
+#
+# A single process-wide pool was tried first, to avoid executor construction
+# on every call.  It turned one stalled transfer into a process-wide freeze:
+# part threads blocked on a socket that has stopped delivering keep their
+# worker, and because the pool is only ever grown, a download that needs the
+# same capacity waits in the queue forever instead of transferring.  The
+# executor is cheap next to a network transfer, so each download now owns its
+# own and releases it as soon as its futures are collected.
 # ---------------------------------------------------------------------------
-_SHARED_POOL: Optional[ThreadPoolExecutor] = None
-_POOL_LOCK = threading.Lock()
 
 # Progress flush threshold: local accumulation before hitting shared
 # state (reduces lock contention). 256 KB is a good balance — frequent
@@ -169,25 +173,16 @@ class DownloadTimeline:
             return " ".join(f"{n}={self._at[n]:.2f}s" for n in self._order)
 
 
-def _get_shared_pool(max_workers: int) -> ThreadPoolExecutor:
-    """Return the module-level shared thread-pool, resizing if necessary."""
-    global _SHARED_POOL
-    with _POOL_LOCK:
-        if _SHARED_POOL is None:
-            _SHARED_POOL = ThreadPoolExecutor(
-                max_workers=max_workers,
-                thread_name_prefix="n13-dl",
-            )
-        elif _SHARED_POOL._max_workers < max_workers:
-            # Resize by replacing the pool (can't change max_workers on
-            # an existing ThreadPoolExecutor).  Old pool will be GC'd
-            # after its running tasks finish.
-            _SHARED_POOL.shutdown(wait=False)
-            _SHARED_POOL = ThreadPoolExecutor(
-                max_workers=max_workers,
-                thread_name_prefix="n13-dl",
-            )
-        return _SHARED_POOL
+def _new_part_pool(max_workers: int) -> ThreadPoolExecutor:
+    """Create the executor that runs one download's part transfers.
+
+    Scoped to a single ``download_file`` call so a part thread that is stuck
+    on a dead peer can never occupy a worker another download needs.
+    """
+    return ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="n13-dl",
+    )
 
 
 # HTTP status codes that are worth retrying (transient/server-side).
@@ -1614,7 +1609,9 @@ class DownloadController:
                     self._notify_progress(progress_callback, already_bytes, total_size)
 
                     failed_parts: List[DownloadPart] = []
-                    pool = _get_shared_pool(max(len(pending_parts), self.config.num_threads))
+                    pool = _new_part_pool(
+                        max(len(pending_parts), self.config.num_threads)
+                    )
                     range_state = _RangeState()
 
                     def _run_part(part: DownloadPart) -> bool:
@@ -1659,15 +1656,20 @@ class DownloadController:
                             if governor is not None:
                                 governor.release()
 
-                    futures = {pool.submit(_run_part, p): p for p in pending_parts}
-                    for future in as_completed(futures):
-                        part = futures[future]
-                        try:
-                            if not future.result():
+                    try:
+                        futures = {pool.submit(_run_part, p): p for p in pending_parts}
+                        for future in as_completed(futures):
+                            part = futures[future]
+                            try:
+                                if not future.result():
+                                    failed_parts.append(part)
+                            except Exception as exc:
+                                self._print(f"[red]Part {part.index} error: {exc}")
                                 failed_parts.append(part)
-                        except Exception as exc:
-                            self._print(f"[red]Part {part.index} error: {exc}")
-                            failed_parts.append(part)
+                    finally:
+                        # Every future has been collected (or the transfer was
+                        # abandoned); the executor has nothing left to own.
+                        pool.shutdown(wait=False)
 
                     completed = sum(p.downloaded_size for p in parts)
                     with progress_lock:

@@ -48,6 +48,10 @@ const API = {
     return this._call("check_duplicate", url, directory || "", filename || "");
   },
   async addBatch(urls, directory, projectId) { return this._call("add_batch", urls, directory, projectId || ""); },
+  async addBatchReport(urls, directory, projectId, autostart = true) {
+    return this._call("add_batch_report", urls, directory || "", projectId || "", !!autostart);
+  },
+  async parseBatchUrls(text) { return this._call("parse_batch_urls", text || ""); },
   async pauseDownload(id) { return this._call("pause_download", id); },
   async resumeDownload(id) { return this._call("resume_download", id); },
   async cancelDownload(id) { return this._call("cancel_download", id); },
@@ -174,6 +178,26 @@ const API = {
   async scanPattern(pattern, directory, start, padding) {
     return this._call("scan_pattern", pattern, directory || "", start ?? 1, padding ?? 2);
   },
+  // Discovery-only preview: no tasks are created.
+  async scanPatternPreview(pattern, start, padding) {
+    return this._call("scan_pattern_preview", pattern, start ?? 1, padding ?? 2);
+  },
+  async cancelPatternScan() { return this._call("cancel_scan"); },
+
+  // ── One-shot schedules ──────────────────────────────────────────
+  async scheduleDownloads(urls, directory, projectId, localTime, tzName, autostart = true) {
+    return this._call("schedule_downloads", urls, directory || "", projectId || "",
+      localTime, tzName || "", !!autostart);
+  },
+  async listScheduled(status) { return this._call("list_scheduled", status || ""); },
+  async getMissedSchedules() { return this._call("get_missed_schedules"); },
+  async cancelScheduled(id) { return this._call("cancel_scheduled", id); },
+  async rescheduleScheduled(id, localTime, tzName) {
+    return this._call("reschedule_scheduled", id, localTime, tzName || "");
+  },
+  async pauseScheduled(id) { return this._call("pause_scheduled", id); },
+  async resumeScheduled(id) { return this._call("resume_scheduled", id); },
+  async startScheduledNow(id) { return this._call("start_scheduled_now", id); },
 
   // ── Window controls (frameless) ───────────────────────────────────
 

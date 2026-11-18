@@ -48,8 +48,14 @@ test("N13 closed -> launch -> wait -> retry -> 5/5 accepted", async () => {
   globalThis.chrome = {
     runtime: { getURL: (p) => "chrome-extension://test/" + p },
     tabs: {
-      create: (o, cb) => { launched.push(o.url); cb({ id: 9 }); },
-      remove: () => {},
+      query: () => Promise.resolve([{ id: 9, url: "https://example.com/page" }]),
+      // Silent launch: the hidden iframe path uses sendMessage, never create.
+      sendMessage: (id, msg, cb) => {
+        if (msg && msg.url) launched.push(msg.url);
+        if (cb) cb({ ok: true });
+      },
+      update: (id, info, cb) => { if (info && info.url) launched.push(info.url); if (cb) cb({ id }); },
+      goBack: (id, cb) => { if (cb) cb(); },
     },
   };
   routeFetch({
