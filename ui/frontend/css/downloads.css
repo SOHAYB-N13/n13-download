@@ -208,12 +208,20 @@
 .dl-pct {
   position: relative;
   z-index: 1;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 12px;
   letter-spacing: 0.03em;
   color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75), 0 0 3px rgba(0, 0, 0, 0.45);
+  /* The label is centred in the *track*, not in the fill, so at 38% it sits on
+     the empty part of the bar.  A soft drop shadow was enough on the dark
+     theme's track but left white glyphs on the light theme's near-white track
+     (about 1.3:1).  A crisp outline fixed the contrast but turned 10px digits
+     to mush; a small dark chip gives every background a predictable backdrop
+     and still fits inside the 14px bar. */
+  background: rgba(15, 23, 42, 0.55);
+  border-radius: 999px;
+  padding: 1px 6px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   pointer-events: none;
@@ -448,24 +456,36 @@
 }
 .sched-missed { color: var(--danger); font-weight: 600; }
 .sched-note { color: var(--text-3); margin-inline-start: auto; }
-.sched-rows { margin-top: 8px; max-height: 220px; overflow-y: auto; }
-.sched-row {
+/* One grid for the whole list, not one per row.
+   Each `.sched-row` used to be its own grid, so the `auto` action column was
+   measured per row: a row whose buttons happened to be a few pixels wider
+   ("Resume" vs "Pause") moved its own status label, and the middle column came
+   out ragged down the list.  `display: contents` promotes every cell into the
+   shared grid, so all rows agree on the column edges and the action column is
+   still sized by the widest row instead of a hard-coded width that would wrap
+   longer translations. */
+.sched-rows {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 90px auto;
-  gap: 8px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) 96px auto;
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sched-row { display: contents; }
+.sched-row > * {
   padding: 6px 0;
   border-top: 1px solid var(--border);
   font-size: 12px;
+  align-self: center;
 }
-.sched-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sched-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-inline-end: 8px; }
 .sched-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sched-when { color: var(--text-2); }
 .sched-err { color: var(--danger); font-size: 11px; }
-.sched-state { font-weight: 600; font-size: 11px; color: var(--text-2); }
+.sched-state { font-weight: 600; font-size: 11px; color: var(--text-2); padding-inline: 8px; }
 .sched-state.s-missed, .sched-state.s-failed { color: var(--danger); }
 .sched-state.s-scheduled { color: var(--warning); }
 .sched-state.s-completed { color: var(--success); }
-.sched-ops { display: flex; flex-wrap: wrap; gap: 4px; }
+.sched-ops { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; padding-inline-start: 8px; }
 .sched-edit { display: flex; flex-direction: column; gap: 10px; }
 .sched-edit-err { color: var(--danger); font-size: 12px; }

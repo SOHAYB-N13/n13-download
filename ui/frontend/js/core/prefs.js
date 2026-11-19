@@ -59,17 +59,45 @@ const Prefs = {
   apply(app) {
     document.documentElement.dataset.theme = app.state.theme;
     const root = document.documentElement.style;
+    const accent = this.normalizeAccent(app.state.accent);
+    // A stored accent that is not a hex colour (an empty value from a partial
+    // config, a name left by another version, a hand-edited file) used to be
+    // written straight into --accent.  Every `linear-gradient(... var(--accent))`
+    // then became invalid at computed-value time and fell back to `none`, so the
+    // primary "New download" button rendered as white text on a transparent
+    // background — invisible.  Ignoring an unusable value leaves the stylesheet
+    // defaults in place, which always render.
+    if (!accent) {
+      this.saveLocalOnly(app);
+      return;
+    }
     // A very light custom accent is unreadable as text on white cards. Keep
     // the user's hue but darken it only as far as needed for AA contrast in
     // the light theme; dark theme keeps their exact choice.
-    const accent = app.state.theme === "light"
-      ? this.ensureTextContrast(app.state.accent)
-      : app.state.accent;
-    root.setProperty("--accent", accent);
-    root.setProperty("--accent-hi", this.mix(accent, 0.28));
-    root.setProperty("--accent-soft", this.alpha(accent, 0.14));
-    root.setProperty("--accent-ring", this.alpha(accent, 0.35));
+    const resolved = app.state.theme === "light"
+      ? this.ensureTextContrast(accent)
+      : accent;
+    root.setProperty("--accent", resolved);
+    // "Hi" is the light end of the primary-button gradient.  On a dark theme
+    // that is a lighter tint; on a light theme a lighter tint puts white button
+    // text at ~2.6:1, so the highlight has to go the other way.
+    root.setProperty(
+      "--accent-hi",
+      app.state.theme === "light" ? this.shade(resolved, 0.18) : this.mix(resolved, 0.28),
+    );
+    root.setProperty("--accent-soft", this.alpha(resolved, 0.14));
+    root.setProperty("--accent-ring", this.alpha(resolved, 0.35));
     this.saveLocalOnly(app);
+  },
+
+  /** ``#rgb``/``#rrggbb`` as a normalised ``#rrggbb``, or ``""`` when unusable. */
+  normalizeAccent(value) {
+    const text = String(value == null ? "" : value).trim();
+    if (/^#[0-9a-f]{6}$/i.test(text)) return text;
+    if (/^#[0-9a-f]{3}$/i.test(text)) {
+      return "#" + text.slice(1).split("").map((c) => c + c).join("");
+    }
+    return "";
   },
 
   /** Relative luminance (WCAG) of a #rrggbb colour. */
@@ -110,6 +138,13 @@ const Prefs = {
     const [r, g, b] = this.hexToRgb(hex);
     const m = (c) => Math.round(c + (255 - c) * amt);
     return `#${[m(r), m(g), m(b)].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+  },
+
+  /** Darken *hex* toward black by *amt* (0..1). */
+  shade(hex, amt) {
+    const [r, g, b] = this.hexToRgb(hex);
+    const s = (c) => Math.round(c * (1 - amt));
+    return `#${[s(r), s(g), s(b)].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
   },
 
   toggleTheme(app) {

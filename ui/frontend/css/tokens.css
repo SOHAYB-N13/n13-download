@@ -34,10 +34,12 @@
   --violet: #8B5CF6;
   --violet-soft: rgba(139, 92, 246, 0.13);
 
-  /* Text */
+  /* Text.  --text-3 is used for real content (history durations and speeds,
+     hints, timestamps), not decoration, so it has to clear 4.5:1 against the
+     surfaces it sits on.  At #6B7686 it measured 3.8:1 on --bg-card. */
   --text-1: #FFFFFF;
   --text-2: #AAB2C0;
-  --text-3: #6B7686;
+  --text-3: #828D9E;
 
   /* Geometry */
   --r-xs: 8px;
@@ -88,6 +90,11 @@
      greens/ambers/red fall below 4.5:1 as text, so darken them here. They
      remain the same hues — only the lightness changes. */
   --accent: #B91C1C;
+  /* Pre-boot fallback only — `Prefs.apply()` computes the real highlight
+     (darker in light, lighter in dark) from whatever accent the user picked.
+     It has to point the same way, or the first paint shows a gradient that
+     flips once the script runs. */
+  --accent-hi: #991B1B;
   --success: #15803D;
   --warning: #B45309;
   --danger: #B91C1C;
@@ -101,7 +108,9 @@
 
   --text-1: #0E1522;
   --text-2: #54606F;
-  --text-3: #8A94A2;
+  /* Was #8A94A2 — 3.1:1 on white, which made the History row's duration and
+     speed line effectively unreadable. Now 4.9:1. */
+  --text-3: #616B7D;
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.07);
   --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.1);

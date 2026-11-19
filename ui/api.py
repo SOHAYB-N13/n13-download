@@ -38,6 +38,34 @@ log = logging.getLogger("n13")
 _PROBE_CACHE_TTL = 60.0
 
 
+def _disk_usage_anchor(directory: str) -> str:
+    """An existing path on the same volume as *directory*, or ``""``.
+
+    ``psutil.disk_usage`` raises ``FileNotFoundError`` when the path is not
+    there, and a download folder is frequently absent for ordinary reasons: it
+    was deleted, renamed, lives on a USB disk that is unplugged, or on a network
+    share that is offline.  The dashboard polls this every two seconds, so an
+    escaping exception killed the whole refresh — and, because the caller uses
+    ``Promise.all``, the download counters stopped updating too.
+
+    Walking up to the nearest existing directory reports the free space of the
+    volume the next download would actually land on.  ``""`` means no volume
+    could be identified at all, which the caller reports as "unknown".
+    """
+    try:
+        path = Path(directory).expanduser()
+    except (TypeError, ValueError, OSError):
+        return ""
+    for candidate in (path, *path.parents):
+        try:
+            if candidate.is_dir():
+                return str(candidate)
+        except OSError:
+            # A disconnected drive raises instead of returning False.
+            continue
+    return ""
+
+
 class Api(ProjectsApiMixin):
     """Python API exposed to JavaScript via pywebview bridge.
 
@@ -1532,15 +1560,23 @@ class Api(ProjectsApiMixin):
         cpu = ram = 0.0
         disk_free = disk_total = disk_used = 0
         disk_percent = 0.0
+        disk_path = _disk_usage_anchor(self._config.download_dir)
         try:
             import psutil
             cpu = psutil.cpu_percent(interval=None)
             ram = psutil.virtual_memory().percent
-            du = psutil.disk_usage(self._config.download_dir)
-            disk_free, disk_total, disk_used = du.free, du.total, du.used
-            disk_percent = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
+            if disk_path:
+                du = psutil.disk_usage(disk_path)
+                disk_free, disk_total, disk_used = du.free, du.total, du.used
+                disk_percent = round((disk_used / disk_total) * 100, 1) if disk_total else 0.0
         except ImportError:
             pass
+        except OSError:
+            # The volume went away between the anchor check and the query (an
+            # unplugged USB disk, a dropped network share).  Report "unknown"
+            # rather than failing the whole call.
+            disk_free = disk_total = disk_used = 0
+            disk_percent = 0.0
         return {
             "cpu_percent": round(cpu, 1),
             "ram_percent": round(ram, 1),
@@ -1551,6 +1587,7 @@ class Api(ProjectsApiMixin):
             "disk_used": disk_used,
             "disk_used_display": human_size(disk_used),
             "disk_percent": disk_percent,
+            "disk_known": bool(disk_total),
             "session_downloaded": self._session_downloaded,
             "session_downloaded_display": human_size(self._session_downloaded),
         }

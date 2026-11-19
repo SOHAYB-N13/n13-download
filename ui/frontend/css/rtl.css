@@ -40,8 +40,13 @@
    `.sched-days` is shared with Settings → Scheduler, which reuses the same
    weekday chips for `schedule_days`. */
 .sched-body { display: flex; flex-direction: column; gap: 16px; }
-.sched-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.sched-row .field-info { min-width: 0; }
+/* Form row inside the scheduler dialog.  This used to be `.sched-row`, which
+   is also the class of a *list* row in the downloads page's "Scheduled
+   downloads" panel — and because rtl.css loads last, this flex rule silently
+   replaced that panel's grid, throwing its status column into the middle of
+   the row.  Two different components, two different classes. */
+.sched-form-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sched-form-row .field-info { min-width: 0; }
 .sched-window { display: flex; align-items: center; gap: 10px; }
 .sched-window .input { flex: 1 1 0; min-width: 0; }
 .sched-dash { color: var(--text-3); flex: none; }

@@ -44,7 +44,10 @@
   box-shadow: var(--shadow-accent);
 }
 .cmd-primary:hover { background: linear-gradient(135deg, var(--accent-hi), var(--accent)); border-color: transparent; }
-.cmd-primary kbd { background: rgba(255, 255, 255, 0.2); color: var(--on-accent); border-color: transparent; }
+/* Must out-specify `.cmd-btn kbd` below — both are (0,1,1), and the generic
+   rule is written later, so the primary chip lost its white text and ended up
+   dark grey on translucent white over a red gradient (unreadable in light). */
+.cmd-btn.cmd-primary kbd { background: rgba(255, 255, 255, 0.22); color: var(--on-accent); border-color: transparent; }
 
 .cmd-btn kbd {
   font-family: inherit;

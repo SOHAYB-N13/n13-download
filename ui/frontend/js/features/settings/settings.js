@@ -76,7 +76,12 @@ _settingsDef() {
       fields: [
         { key: "auto_categorize", label: "Auto-detect category", hint: "Assign a category from the file type", type: "toggle" },
         { key: "_category_dirs", label: "Category folders", hint: "Save each category to its own folder", type: "catdirs" },
-        { key: "_category_exts", label: "Custom extensions", hint: "Extra extensions per category (advanced)", type: "catexts" },
+        // Pseudo-field keys are stripped of their leading underscore to form
+        // the i18n lookup (`set.<key>`), so these two must match the keys the
+        // dictionaries actually define.  They previously pointed at
+        // `set.category_exts` / `set.limit_enabled`, which do not exist, so
+        // both rows silently fell back to English in Persian.
+        { key: "_category_extensions", label: "Custom extensions", hint: "Extra extensions per category (advanced)", type: "catexts" },
       ],
     },
     {
@@ -129,7 +134,7 @@ _settingsDef() {
     {
       id: "bandwidth", group: "speed", icon: "gauge", title: st("bandwidth", "Bandwidth"),
       fields: [
-        { key: "_limit_enabled", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
+        { key: "_limit_download_speed", label: "Limit download speed", hint: "Cap the total bandwidth N13 may use", type: "toggle", of: "max_speed_bps" },
         { key: "max_speed_bps", label: "Speed limit", hint: "Applies to all downloads combined", type: "speed" },
         { key: "_speed_presets", label: "Quick presets", hint: "256 KB/s · 512 KB/s · 1 MB/s · 2 MB/s · 5 MB/s · 10 MB/s", type: "speedpresets" },
       ],
@@ -336,9 +341,14 @@ _fieldHtml(f, s, ctx) {
         <button class="btn btn-ghost" data-browse="${f.key}">${Utils.icon("folder", 15)} ${I18N.t("dlg.browse", "Browse")}</button>
       </div>`;
   } else if (f.type === "range") {
+    // A key that is absent from the settings payload (an older config file, a
+    // partial bridge reply) used to render `value="undefined"` and print
+    // "undefined" as the slider's readout.  Fall back to the field's own
+    // minimum so the control is always usable and never shows internals.
+    const val = (s[f.key] === undefined || s[f.key] === null || s[f.key] === "") ? f.min : s[f.key];
     ctl = `<div class="slider-wrap">
-        <input type="range" id="set-${f.key}" data-key="${f.key}" min="${f.min}" max="${f.max}" value="${s[f.key]}" aria-label="${Utils.escapeHtml(label)}">
-        <output>${s[f.key]}</output>
+        <input type="range" id="set-${f.key}" data-key="${f.key}" min="${f.min}" max="${f.max}" value="${Utils.escapeHtml(String(val))}" aria-label="${Utils.escapeHtml(label)}">
+        <output>${Utils.escapeHtml(String(val))}</output>
       </div>`;
   } else if (f.type === "toggle") {
     const enabled = f.of ? (ctx.speedMbps?.[f.of] > 0) : !!s[f.key];
@@ -401,7 +411,11 @@ _fieldHtml(f, s, ctx) {
         </div>`).join("")}
     </div>`;
   } else if (f.type === "catexts") {
-    const txt = JSON.stringify(s.category_extensions || {}, null, 1);
+    // With no custom extensions the stored value is `{}`, and printing that
+    // raw brace pair into the box reads like a rendering fault.  Show an empty
+    // field instead — the placeholder already shows the expected shape.
+    const exts = s.category_extensions || {};
+    const txt = Object.keys(exts).length ? JSON.stringify(exts, null, 1) : "";
     ctl = `<textarea class="input textarea mono" data-catexts rows="4" spellcheck="false" placeholder='{"${I18N.t("category.Videos", "Videos")}": ["mp4", "mkv"]}'>${Utils.escapeHtml(txt)}</textarea>`;
   } else if (f.type === "theme") {
     ctl = `<div class="seg" role="radiogroup" aria-label="${Utils.escapeHtml(label)}">

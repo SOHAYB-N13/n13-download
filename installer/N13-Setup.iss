@@ -31,8 +31,8 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName}
 VersionInfoProductName={#MyAppName}
@@ -50,6 +50,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\dist\N13\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+; An upgrade must not leave modules from the previous build behind.  Inno
+; overwrites the files it ships but never removes ones a newer PyInstaller
+; bundle dropped, and a stale extension module or DLL next to the new bundle
+; fails at import time — the app then refuses to start after a successful
+; install.  `_internal` is application payload only; user data lives in
+; %LOCALAPPDATA%\N13 and is never touched here.
+Type: filesandordirs; Name: "{app}\_internal"
 
 [UninstallDelete]
 ; The application keeps a writable copy of the browser extension beside the
@@ -207,6 +216,21 @@ begin
   end;
 end;
 
+procedure RemoveNativeHostRegistration();
+begin
+  { Starting the browser live relay registers a native-messaging host for Chrome
+    and Edge (browser/protocol.py:register_native_host) so the extension can
+    launch the app silently.  Inno knows nothing about those keys, so without
+    this the uninstaller left both behind, pointing at a manifest inside a
+    directory that no longer exists — the extension then fails with
+    "Specified native messaging host not found" instead of simply not being
+    installed. }
+  RegDeleteKeyIncludingSubkeys(HKCU,
+    'Software\Google\Chrome\NativeMessagingHosts\com.n13.download_manager');
+  RegDeleteKeyIncludingSubkeys(HKCU,
+    'Software\Microsoft\Edge\NativeMessagingHosts\com.n13.download_manager');
+end;
+
 procedure RemoveProtocolRegistration();
 var
   MachineWide: String;
@@ -223,16 +247,44 @@ begin
   end;
 end;
 
+function WebView2VersionAt(RootKey: Integer; const SubKey: String): String;
+var
+  Version: String;
+begin
+  Result := '';
+  if RegQueryStringValue(RootKey, SubKey, 'pv', Version) then
+    Result := Version;
+end;
+
 function IsWebView2Installed(): Boolean;
 var
-  RegPath: String;
+  Version: String;
 begin
-  RegPath := 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
-  Result := RegKeyExists(HKEY_LOCAL_MACHINE, RegPath);
+  { The Evergreen Runtime registers under HKLM when installed machine-wide and
+    under HKCU when installed per-user.  Checking only HKLM told a user with a
+    perfectly working per-user runtime that it was missing.  A key that exists
+    with version 0.0.0.0 is the leftover of a failed install, not a runtime. }
+  Result := False;
+
+  Version := WebView2VersionAt(HKEY_LOCAL_MACHINE,
+    'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+  if Version <> '' then
+    Result := (Version <> '0.0.0.0');
+
   if not Result then
   begin
-    RegPath := 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
-    Result := RegKeyExists(HKEY_LOCAL_MACHINE, RegPath);
+    Version := WebView2VersionAt(HKEY_LOCAL_MACHINE,
+      'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+    if Version <> '' then
+      Result := (Version <> '0.0.0.0');
+  end;
+
+  if not Result then
+  begin
+    Version := WebView2VersionAt(HKEY_CURRENT_USER,
+      'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+    if Version <> '' then
+      Result := (Version <> '0.0.0.0');
   end;
 end;
 
@@ -249,16 +301,24 @@ begin
 
   if not IsWebView2Installed() then
   begin
-    MsgResult := MsgBox(
-      'Microsoft Edge WebView2 Runtime was not detected on this computer.' + #13#10 +
-      'N13 Download Manager requires WebView2 to run.' + #13#10 +
-      'Would you like to open the WebView2 download page now?' + #13#10 +
-      '(Choose No to continue installation, but the application may not launch until WebView2 is installed.)',
-      mbConfirmation, MB_YESNO);
-    if MsgResult = IDYES then
+    { A silent install cannot answer a prompt, and blocking there hangs an
+      unattended deployment.  Record the finding and continue; the application
+      reports the missing runtime itself with a link to the installer. }
+    if WizardSilent then
+      Log('N13: WebView2 runtime not detected (silent install; continuing).')
+    else
     begin
-      ShellExec('open', 'https://go.microsoft.com/fwlink/p/?LinkId=2124703', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
-      Result := False;
+      MsgResult := MsgBox(
+        'Microsoft Edge WebView2 Runtime was not detected on this computer.' + #13#10 +
+        'N13 Download Manager requires WebView2 to run.' + #13#10 +
+        'Would you like to open the WebView2 download page now?' + #13#10 +
+        '(Choose No to continue installation, but the application may not launch until WebView2 is installed.)',
+        mbConfirmation, MB_YESNO);
+      if MsgResult = IDYES then
+      begin
+        ShellExec('open', 'https://go.microsoft.com/fwlink/p/?LinkId=2124703', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
+        Result := False;
+      end;
     end;
   end;
 end;
@@ -272,9 +332,14 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
     RemoveProtocolRegistration();
+    RemoveNativeHostRegistration();
+  end;
 
-  if CurUninstallStep = usPostUninstall then
+  { Never block an unattended uninstall.  A MsgBox here waits for a click that
+    `/SILENT` or `/VERYSILENT` will never deliver, so the uninstaller hung. }
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
   begin
     MsgBox(
       'Application files have been removed.' + #13#10 +

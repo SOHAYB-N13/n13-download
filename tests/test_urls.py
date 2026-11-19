@@ -8,12 +8,14 @@ the user typed, and identity must never merge two different resources.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.urls import (
+    MAX_FILENAME_UNITS,
     canonical_url,
     extract_urls,
     first_url,
@@ -24,6 +26,7 @@ from core.urls import (
     trim_url,
     url_filename,
 )
+from core.utils import MAX_PATH_BUDGET, unique_filepath
 
 
 class ExtractUrlsTest(unittest.TestCase):
@@ -259,6 +262,73 @@ class FilenameHygieneTest(unittest.TestCase):
         self.assertFalse(looks_like_filename("."))
         self.assertFalse(looks_like_filename(".."))
         self.assertFalse(looks_like_filename(".hidden"))
+
+
+class WindowsUnwritableNameTest(unittest.TestCase):
+    """Names Windows cannot create as files, repaired before they reach disk.
+
+    ``NUL`` resolves to the null device, so the write succeeds and the bytes
+    are silently discarded; ``CON``/``COM1`` address devices too.  These are not
+    cosmetic: a download that "completes" into ``NUL`` leaves no file at all.
+    """
+
+    def test_reserved_device_names_are_repaired(self):
+        for name in ("CON", "PRN", "AUX", "NUL", "COM1", "LPT9", "com4"):
+            fixed = sanitize_filename(name)
+            self.assertNotEqual(fixed, name, msg=name)
+            self.assertTrue(fixed.upper().startswith(name.upper()), msg=name)
+
+    def test_reserved_name_with_extension_is_repaired(self):
+        # ``CON.txt`` is equivalent to ``CON`` — the extension does not help.
+        self.assertEqual(sanitize_filename("CON.txt"), "CON_.txt")
+        self.assertEqual(sanitize_filename("nul.bin"), "nul_.bin")
+
+    def test_similar_but_legal_names_are_untouched(self):
+        for name in ("console.log", "com10.zip", "connection.json", "nullable"):
+            self.assertEqual(sanitize_filename(name), name, msg=name)
+
+    def test_over_long_component_is_truncated_but_keeps_extension(self):
+        name = "a" * 400 + ".zip"
+        fixed = sanitize_filename(name)
+        self.assertLessEqual(len(fixed.encode("utf-16-le")) // 2, MAX_FILENAME_UNITS)
+        self.assertTrue(fixed.endswith(".zip"))
+        self.assertGreater(len(fixed), 100)
+
+    def test_truncation_does_not_leave_a_trailing_dot(self):
+        # Windows strips a trailing dot, so the stored name would differ from
+        # the recorded one.  Truncation must not create that shape.
+        fixed = sanitize_filename("a" * 300 + ".   b")
+        self.assertFalse(fixed.endswith("."))
+        self.assertFalse(fixed.endswith(" "))
+
+
+class UniqueFilepathTest(unittest.TestCase):
+    def test_fits_the_full_path_not_just_the_component(self):
+        # A 240-unit name is legal on its own but overflows MAX_PATH inside a
+        # real download directory; open() then fails with FileNotFoundError.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / ("deep" * 8)
+            directory.mkdir(parents=True)
+            path = unique_filepath(directory, "b" * 240 + ".mkv")
+            self.assertLess(len(str(path)), MAX_PATH_BUDGET + 1)
+            with open(path, "wb") as handle:
+                handle.write(b"x")
+            self.assertEqual(path.stat().st_size, 1)
+
+    def test_collision_suffix_still_fits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            first = unique_filepath(directory, "c" * 260 + ".zip")
+            first.write_bytes(b"x")
+            second = unique_filepath(directory, "c" * 260 + ".zip")
+            self.assertNotEqual(first, second)
+            self.assertIn("(1)", second.name)
+            self.assertLess(len(str(second)), MAX_PATH_BUDGET + 1)
+
+    def test_normal_names_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = unique_filepath(Path(tmp), "holiday-video.mp4")
+            self.assertEqual(path.name, "holiday-video.mp4")
 
 
 if __name__ == "__main__":

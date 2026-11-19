@@ -231,6 +231,14 @@ const App = {
   _applyLanguage() {
     const lang = (this.state.settings && this.state.settings.language) || "en";
     I18N.setLang(lang);
+    // `setLang` only notifies listeners when the language actually changes,
+    // and that listener is what runs `I18N.apply`. On a normal English launch
+    // nothing changes, so `data-i18n-ph` / `-title` / `-tip` elements that
+    // have no hardcoded fallback in the markup were left empty — which is why
+    // the Batch and Pattern "Save to" inputs rendered as unlabelled blank
+    // boxes. Applying here unconditionally makes the first paint complete
+    // regardless of whether the language changed.
+    I18N.apply(document);
     // Cache for the pre-paint script in index.html so Persian starts RTL.
     try {
       const p = JSON.parse(localStorage.getItem("n13-prefs") || "{}");
@@ -691,7 +699,9 @@ const App = {
     set("stSpeed", Utils.formatSpeed(stats.total_speed_bps));
     set("stSpeedPeak", I18N.fmt("fmt.connections_live", { n: stats.running || 0, s: stats.running === 1 ? "" : "s" }));
     set("stNetwork", sys.session_downloaded_display || "0 B");
-    set("stDisk", sys.disk_free_display || I18N.t("fmt.unknown", "—"));
+    // A missing/unreachable download folder now reports "unknown" instead of
+    // zero, so "0 B free" is never shown for a disk we could not query.
+    set("stDisk", sys.disk_total ? sys.disk_free_display : I18N.t("fmt.unknown", "—"));
     set("stDiskSub", sys.disk_total ? I18N.fmt("fmt.of_used", { used: sys.disk_used_display, total: sys.disk_total_display }) : "");
 
     const ring = Utils.$id("diskRing");
@@ -873,6 +883,12 @@ const App = {
       if (h.avg_speed) metaBits.push(`~${Utils.formatSpeed(h.avg_speed)}`);
       const meta = metaBits.length ? `<span class="h-meta">${metaBits.join(" · ")}</span>` : "";
       const dir = h.directory || "";
+      // Every download usually lands in the same folder, so printing the full
+      // path here produced a column of identical "C:\Users\…\…" ellipses that
+      // told the user nothing. The folder name is what actually differs
+      // between rows ("Downloads", "Images", …); the full path stays in the
+      // tooltip for anyone who needs it.
+      const folder = dir.split(/[\\/]+/).filter(Boolean).pop() || dir;
       const path = `${dir}\\${h.name || ""}`;
       return `
       <tr>
@@ -885,7 +901,7 @@ const App = {
         <td class="h-cat"><span class="cat-pill">${Utils.escapeHtml(I18N.t("category." + (h.category || "General"), h.category || "General"))}</span></td>
         <td><span class="badge badge-${stCls}"><i class="badge-dot"></i>${Utils.statusLabel(h.status || "Failed")}</span></td>
         <td class="h-dir">
-          <span class="h-dir-t" title="${Utils.escapeHtml(dir)}">${Utils.escapeHtml(dir || "")}</span>
+          <span class="h-dir-t" title="${Utils.escapeHtml(dir)}">${Utils.escapeHtml(folder)}</span>
         </td>
         <td class="h-actions">
           <button class="icon-btn btn-xs" data-hact="file" data-tip="${I18N.t("act.open_file", "Open file")}" aria-label="${I18N.t("act.open_file", "Open file")}">${Utils.icon("external", 13)}</button>
@@ -1253,8 +1269,13 @@ const App = {
             "error", 6500);
         }
       } catch (e) {
+        // Keep the exception in the log where it is useful; a toast is not the
+        // place for a stack-trace-shaped string like "TypeError: ...".
         API.logJs("repair extension: " + String(e));
-        Components.toast(I18N.t("toast.ext_repair_failed", "Repair failed"), String(e), "error", 6500);
+        Components.toast(
+          I18N.t("toast.ext_repair_failed", "Repair failed"),
+          I18N.t("toast.ext_repair_failed_msg", "The extension folder could not be rebuilt."),
+          "error", 6500);
       } finally {
         btn.disabled = false;
       }

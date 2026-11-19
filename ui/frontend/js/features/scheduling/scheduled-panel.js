@@ -69,19 +69,71 @@ const ScheduledPanel = {
     });
   },
 
+  /**
+   * Compact "how long until it fires" text.
+   *
+   * The naive `Math.floor(s / 60)` produced "1439m 59s" for anything booked
+   * for tomorrow, which is unreadable — a user has to divide by 60 to learn
+   * it is a day away.  Hours and days are broken out instead, and the
+   * smallest unit is dropped once the span gets long enough that it is noise.
+   */
+  _duration(secs) {
+    const s = Math.max(0, Math.round(secs));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+    if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+    return `${m}m ${String(r).padStart(2, "0")}s`;
+  },
+
+  /**
+   * Local "HH:MM" (plus a day word when it is not today) for a scheduled row.
+   *
+   * The backend also sends a pre-formatted `local_time`, but it is built from
+   * English words — a Persian interface showed "tomorrow 09:30" verbatim.
+   * `due_at` is an absolute epoch, so formatting it here is both localized and
+   * still exactly "your local timezone" as the panel's note promises.
+   */
+  _whenText(row, now, t) {
+    const due = Number(row.due_at);
+    if (!isFinite(due) || due <= 0) return row.local_time || "";
+    const d = new Date(due * 1000);
+    if (isNaN(d.getTime())) return row.local_time || "";
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const time = `${hh}:${mm}`;
+    const today = new Date(now * 1000);
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (sameDay(d, today)) return time;
+    const tomorrow = new Date(today.getTime());
+    tomorrow.setDate(today.getDate() + 1);
+    if (sameDay(d, tomorrow)) return `${t("sched.task.tomorrow", "tomorrow")} ${time}`;
+    // Persian month names, but Latin digits like the rest of the interface.
+    const locale = (typeof I18N !== "undefined" && I18N.lang === "fa") ? "fa-IR-u-nu-latn" : undefined;
+    const day = d.toLocaleDateString(locale, { month: "short", day: "numeric" });
+    return `${day} ${time}`;
+  },
+
   _row(row, now, t) {
     const payload = row.payload || {};
     const name = payload.label || (payload.url || "").split("/").pop() || row.id;
     const statusLabel = t("sched.task.status." + row.status, row.status);
-    let when = row.local_time || "";
-    if (row.status === "scheduled" || row.status === "paused") {
-      const remaining = Math.ceil(row.due_at - now);
+    const when = this._whenText(row, now, t);
+    // The countdown is kept as a separate isolated run.  Concatenated into one
+    // string, the RTL paragraph reordered "13:57 · 119m 59s" into
+    // "119m 59s · 13:57" — the time and the remaining duration swapped places
+    // depending on the digits involved.
+    let countdown = "";
+    const due = Number(row.due_at);
+    if ((row.status === "scheduled" || row.status === "paused") && isFinite(due) && due > 0) {
+      const remaining = Math.ceil(due - now);
       if (remaining > 0) {
-        const mins = Math.floor(remaining / 60);
-        const secs = remaining % 60;
-        when += ` · ${mins}m ${String(secs).padStart(2, "0")}s`;
+        countdown = this._duration(remaining);
       } else {
-        when += ` · ${t("sched.task.due", "due")}`;
+        countdown = t("sched.task.due", "due");
       }
     }
     const canStart = ["scheduled", "paused", "missed", "failed"].includes(row.status);
@@ -89,7 +141,7 @@ const ScheduledPanel = {
     return `<div class="sched-row">
       <div class="sched-main">
         <span class="sched-name" title="${Utils.escapeHtml(payload.url || "")}">${Utils.escapeHtml(name)}</span>
-        <span class="sched-when">${Utils.escapeHtml(when)}</span>
+        <span class="sched-when"><bdi>${Utils.escapeHtml(when)}</bdi>${countdown ? ` <bdi dir="ltr">· ${Utils.escapeHtml(countdown)}</bdi>` : ""}</span>
         ${row.last_error ? `<span class="sched-err">${Utils.escapeHtml(row.last_error)}</span>` : ""}
       </div>
       <span class="sched-state s-${Utils.escapeHtml(row.status)}">${Utils.escapeHtml(statusLabel)}</span>

@@ -1,13 +1,49 @@
-"""Persistent download state for resume."""
+"""Persistent download state for resume.
+
+Beyond the byte layout, the state records the *identity* of the resource it
+belongs to (``ETag`` and ``Last-Modified``).  A resume that only compares the
+URL and the total size will happily append the first half of yesterday's file
+to the second half of today's when the publisher re-uploads a file of the same
+length — the result is the right size and the wrong content.  The validators
+are what make "these bytes are still the same bytes" a question the engine can
+actually answer.
+"""
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from core.parts import DownloadPart
+
+
+@dataclass
+class ResumeState:
+    """One saved download, as read back from disk."""
+
+    url: str
+    total_size: int
+    num_threads: int
+    parts: List[DownloadPart] = field(default_factory=list)
+    etag: str = ""
+    last_modified: str = ""
+
+    def identity_matches(self, etag: str, last_modified: str) -> Optional[bool]:
+        """Whether a freshly observed resource is the one this state belongs to.
+
+        ``None`` means "cannot tell" — the state predates validator capture, or
+        the server does not send them on ranged responses.  Callers treat that
+        as "proceed", because refusing every resume from an older state file
+        would strand perfectly good partial downloads.
+        """
+        if self.etag and etag:
+            return self.etag == etag
+        if self.last_modified and last_modified:
+            return self.last_modified == last_modified
+        return None
 
 
 class DownloadState:
@@ -20,6 +56,8 @@ class DownloadState:
         total_size: int,
         parts: List[DownloadPart],
         num_threads: int,
+        etag: str = "",
+        last_modified: str = "",
     ) -> None:
         """Persist state atomically.
 
@@ -33,6 +71,8 @@ class DownloadState:
             "url": url,
             "total_size": total_size,
             "num_threads": num_threads,
+            "etag": etag or "",
+            "last_modified": last_modified or "",
             "parts": [
                 {
                     "index": p.index,
@@ -59,7 +99,7 @@ class DownloadState:
                 pass
             raise
 
-    def load(self) -> Optional[Tuple[str, int, int, List[DownloadPart]]]:
+    def load(self) -> Optional[ResumeState]:
         try:
             with open(self.state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -74,7 +114,15 @@ class DownloadState:
                 for p in data["parts"]
             ]
             num_threads = int(data.get("num_threads", len(parts)))
-            return data["url"], int(data["total_size"]), num_threads, parts
+            return ResumeState(
+                url=data["url"],
+                total_size=int(data["total_size"]),
+                num_threads=num_threads,
+                parts=parts,
+                # Absent in state files written before validators were captured.
+                etag=str(data.get("etag") or ""),
+                last_modified=str(data.get("last_modified") or ""),
+            )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
 

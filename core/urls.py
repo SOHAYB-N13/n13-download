@@ -24,6 +24,7 @@ never take a download down.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import List, Optional
 from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
@@ -49,6 +50,76 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# Windows resolves these names to *devices*, not files, whatever directory they
+# appear in and whether or not an extension is attached.  ``CreateFile("NUL")``
+# opens the null device, so every write succeeds and the bytes are discarded —
+# a download named NUL "completes" and leaves nothing behind.  ``CON``/``AUX``
+# target the console, ``COM1``/``LPT1`` a serial/parallel port.  There is no way
+# to create such a file, so the name has to be changed before it reaches disk.
+RESERVED_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+    | {"COM\u00b9", "COM\u00b2", "COM\u00b3", "LPT\u00b9", "LPT\u00b2", "LPT\u00b3"}
+)
+
+# A single path component may not exceed 255 UTF-16 code units.  Names longer
+# than this fail at ``open()`` — and with ``FileNotFoundError``, not a message
+# that mentions length, so a server sending a long ``Content-Disposition``
+# filename used to look like a missing directory.
+MAX_FILENAME_UNITS = 255
+
+
+def _utf16_units(text: str) -> int:
+    """Length of *text* the way Windows counts it (UTF-16 code units)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _truncate_component(name: str, limit: int) -> str:
+    """Shorten *name* to *limit* UTF-16 units, keeping its extension.
+
+    The extension is what makes a file openable, so the stem gives way first.
+    Truncation never splits a surrogate pair, and never leaves the trailing dot
+    or space Windows silently strips (which would make the on-disk name differ
+    from the one we recorded).
+    """
+    if limit <= 0:
+        return ""
+    if _utf16_units(name) <= limit:
+        return name
+
+    stem, suffix = os.path.splitext(name)
+    budget = limit - _utf16_units(suffix)
+    if budget < 1:
+        # The extension alone is over budget — nothing sensible to preserve.
+        stem, suffix, budget = name, "", limit
+
+    kept = []
+    used = 0
+    for ch in stem:
+        width = 2 if ord(ch) > 0xFFFF else 1
+        if used + width > budget:
+            break
+        kept.append(ch)
+        used += width
+    trimmed = "".join(kept).rstrip(". ")
+    return (trimmed + suffix) if trimmed else suffix.lstrip(".")
+
+
+def _avoid_device_name(name: str) -> str:
+    """Rename a Windows device name so it can actually be written to disk.
+
+    ``CON.txt`` is as unusable as ``CON``, so the check is on the stem with
+    trailing dots/spaces removed (Windows trims those before resolving the
+    name).  A single trailing underscore is the least surprising repair: the
+    file keeps its readable name and its extension.
+    """
+    stem, suffix = os.path.splitext(name)
+    if stem.rstrip(" .").upper() in RESERVED_DEVICE_NAMES:
+        return stem + "_" + suffix
+    return name
+
 
 # Extension lookup for common MIME types — used as a last-resort hint when the
 # server gives no filename (common with dynamic / download.php?id=... links).
@@ -118,9 +189,17 @@ def sanitize_filename(name: str) -> str:
     """Make *name* safe to join onto a directory.
 
     Strips every separator and reserved character, so the result can never
-    escape its destination folder, and never returns an empty string.
+    escape its destination folder, and never returns an empty string.  Also
+    repairs the two Windows shapes that cannot be created at all — device names
+    (``NUL``, ``CON.txt``) and over-long components — because both otherwise
+    surface much later as a confusing failure at ``open()``.
     """
-    return INVALID_CHARS.sub("_", name or "").strip(". ") or "downloaded_file"
+    cleaned = INVALID_CHARS.sub("_", name or "").strip(". ")
+    if not cleaned:
+        return "downloaded_file"
+    cleaned = _avoid_device_name(cleaned)
+    cleaned = _truncate_component(cleaned, MAX_FILENAME_UNITS)
+    return cleaned or "downloaded_file"
 
 
 def looks_like_filename(name: str) -> bool:

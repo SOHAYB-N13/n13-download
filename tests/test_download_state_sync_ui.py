@@ -76,7 +76,7 @@ STUB = """
     get_history: fn("get_history", []),
     get_settings: fn("get_settings", SETTINGS),
     get_theme_config: fn("get_theme_config", {}),
-    get_version: fn("get_version", "1.4.5"),
+    get_version: fn("get_version", "1.4.6"),
     get_stats: fn("get_stats", {}),
     get_system_stats: fn("get_system_stats", {}),
     get_analytics: fn("get_analytics", {}),

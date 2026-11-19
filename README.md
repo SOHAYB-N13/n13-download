@@ -36,9 +36,9 @@ The value is simple: **copy a link → hand it to N13 → N13 handles the rest**
 
 | | Windows desktop | Android |
 |---|---|---|
-| Version | **1.4.3** | **1.1.2** (versionCode 4) |
+| Version | **1.4.6** | **1.1.5** (versionCode 7) |
 | Interface | WebView GUI + terminal UI | Jetpack Compose UI |
-| Minimum OS | Windows 10/11 (x64) | Android 8.0 (API 26) |
+| Minimum OS | Windows 10 1809 (build 17763) or Windows 11 — x64 | Android 8.0 (API 26) |
 | Engine | Python (`core/`) | Kotlin + OkHttp (`data/engine/`) |
 
 ---
@@ -193,8 +193,9 @@ The Android app mirrors the same split with platform-appropriate pieces: `ui/` (
 
 ### Runtime — Windows desktop
 
-- **Windows 10/11 (x64)** — the installer, system tray, `dldm://` registration and clipboard polling are Windows-specific.
-- **Microsoft Edge WebView2 Runtime** for the GUI (preinstalled on Windows 11; the installer detects it and offers the download page when missing).
+- **Windows 10 version 1809 (build 17763) or later, or Windows 11 — x64.** The installer enforces this minimum (`MinVersion=10.0.17763`). The installer, system tray, `dldm://` registration and clipboard polling are Windows-specific.
+- **ARM64 Windows is not a supported target** — the installer requires an x64 OS. Windows 11 on ARM can run the x64 build under emulation, but that configuration is untested and not claimed to work.
+- **Microsoft Edge WebView2 Runtime** for the GUI. Preinstalled on Windows 11 and on most up-to-date Windows 10 machines. The installer checks for it (machine-wide *and* per-user installs) and offers the download page when it is missing; the application itself reports the missing runtime instead of failing silently.
 - **Python 3.10+** only when running from source (the installer bundles its own runtime).
 
 ### Runtime — Android

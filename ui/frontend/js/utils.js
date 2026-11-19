@@ -46,20 +46,58 @@ const Utils = {
   formatDate(ts) {
     if (!ts) return "";
     const d = new Date(ts * 1000);
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-      " · " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const locale = this.dateLocale();
+    return d.toLocaleDateString(locale, { month: "short", day: "numeric" }) +
+      " · " + this.ltr(d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }));
+  },
+
+  /**
+   * Locale used for dates and times.
+   *
+   * Dates used `undefined` (the OS locale), so a Persian interface still
+   * showed "Nov 18" and "11:07 AM". Following the interface language keeps
+   * the wording consistent; `-u-nu-latn` keeps Latin digits, which is what
+   * every other number in the app uses.
+   */
+  dateLocale() {
+    return (typeof I18N !== "undefined" && I18N.lang === "fa") ? "fa-IR-u-nu-latn" : undefined;
+  },
+
+  /**
+   * Wrap a run of text in a left-to-right isolate.
+   *
+   * Without it an RTL paragraph reorders a time like "11:07 AM" into
+   * "AM 11:07" — the marker detaches and reads as a different value.
+   */
+  ltr(s) {
+    return `\u2066${s}\u2069`;
   },
 
   formatDateTime(str) {
     // history entries arrive as "YYYY-MM-DD HH:MM:SS"
     if (!str) return "";
+    // A non-string (a legacy numeric timestamp from an imported history file)
+    // used to throw here, and because the caller renders inside one map pass
+    // the exception took the whole History page down. Degrade to a blank cell
+    // for that one row instead.
+    if (typeof str !== "string") return "";
     const d = new Date(str.replace(" ", "T"));
     if (isNaN(d)) return str;
+    const locale = this.dateLocale();
     const today = new Date();
     const sameDay = d.toDateString() === today.toDateString();
-    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    // 24-hour, deliberately.  The rest of the app prints times it formats
+    // itself as 24-hour — the scheduled panel ("19:09"), the scheduler window
+    // ("01:00–06:00") and the stored `HH:MM` settings.  Letting the OS locale
+    // pick here produced "04:10 PM" in the same window as "19:09", which
+    // reads like two different clocks.
+    // `hourCycle: "h23"` rather than `hour12: false`: the latter renders
+    // midnight as "24:10" in several ICU versions.
+    const time = this.ltr(d.toLocaleTimeString(locale, {
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }));
     if (sameDay) return I18N.t("fmt.today", "Today") + " · " + time;
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " · " + time;
+    return d.toLocaleDateString(locale, { month: "short", day: "numeric" }) + " · " + time;
   },
 
   isToday(str) {
@@ -126,6 +164,10 @@ const Utils = {
 
   statusLabel(state) {
     const key = {
+      // "Downloading" is the state a user sees most often, so a missing entry
+      // here is the most visible localization hole there is: every active row
+      // would fall back to the English word while its neighbours translated.
+      "Downloading": "status.downloading",
       "Pausing": "status.pausing",
       "Analyzing": "status.analyzing",
       "Starting": "status.starting",

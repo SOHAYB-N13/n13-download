@@ -197,7 +197,7 @@ const DialogsUI = {
     return new Promise((resolve) => {
       const dlg = ModalUI.showModal(`
         <div class="sched-body">
-          <div class="sched-row">
+          <div class="sched-form-row">
             <div class="field-info">
               <label class="field-label" for="scEnabled">${L("sched.enable", "Enable scheduler")}</label>
               <p class="field-hint">${L("sched.enable_hint", "Only start downloads inside the window below.")}</p>

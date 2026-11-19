@@ -184,6 +184,16 @@
 .ring.warn { background: conic-gradient(var(--danger) calc(var(--p) * 1%), var(--bg-active) 0); }
 
 /* ── Responsive: 2 columns on medium, 1 on narrow ───────────────────────── */
+/* The four-tile row needs roughly 620px for "Active downloads" to sit on one
+   line.  The downloads card is only ~410px wide in a 1440px window because it
+   shares the row with the throughput and storage cards, so a viewport-based
+   breakpoint never fired there and the label was clipped to "Active down…".
+   The card is the thing that is narrow, so measure the card. */
+.ov-group { container-type: inline-size; }
+@container (max-width: 620px) {
+  .ov-tiles--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 1200px) {
   .ov-group--downloads { grid-column: span 12; }
   .ov-group--transfer { grid-column: span 6; }

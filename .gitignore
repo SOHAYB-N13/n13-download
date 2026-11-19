@@ -22,3 +22,6 @@ Thumbs.db
 # Tool-generated project marker
 .freebuff/
 .workbuddy-ai/
+
+# Screenshots produced by tools/ui_shot.py
+ui-shots/

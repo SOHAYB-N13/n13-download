@@ -122,7 +122,14 @@
 
 .nd-grid { display: flex; flex-direction: column; gap: 13px; }
 
-.nd-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Eight fixed categories, four per row.  Free-flowing flex left the last chip
+   ("Other") alone on a second row, which read as a layout bug rather than a
+   choice; an even grid keeps both rows identical at every dialog width. */
+.nd-cats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
 .cat-chip {
   position: relative;
   overflow: hidden;
@@ -134,6 +141,10 @@
   color: var(--text-2);
   font-size: 12px;
   font-weight: 550;
+  /* The grid cell is fixed-width, so a long label must ellipsize rather than
+     overflow it. Shared with the Downloads category strip. */
+  white-space: nowrap;
+  text-overflow: ellipsis;
   transition: all var(--dur-2);
 }
 .cat-chip:hover { border-color: var(--border-strong); color: var(--text-1); }

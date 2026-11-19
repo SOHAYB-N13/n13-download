@@ -36,11 +36,13 @@ import logging
 import random
 import threading
 import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional
+from urllib.parse import urlparse
 
 import requests
 from rich.progress import Progress
@@ -103,6 +105,21 @@ _PROGRESS_FLUSH_INTERVAL = 0.10
 # unaffected while accounting becomes smooth and resume granularity finer.
 # ---------------------------------------------------------------------------
 _READ_SLICE = 512 * 1024
+
+# Per-part write buffer.
+#
+# This is user-space memory held by *every* part thread until it fills, so the
+# cost multiplies by the part count: the previous 8 MB per part meant a
+# 16-part download (the default thread count) pinned 128 MB of buffers before
+# anything reached the disk, and three concurrent downloads could hold ~384 MB.
+# Measured on this machine, 8 parts at 8 MB grew the working set by 71 MB
+# versus 9 MB for a single stream.
+#
+# Reads arrive in `_READ_SLICE` chunks, so 1 MB still coalesces them into large
+# sequential writes; the Windows file cache does the rest.  Benchmarked before
+# and after: no throughput change on loopback (which is the only link this
+# harness can measure honestly).
+_PART_WRITE_BUFFER = 1024 * 1024
 
 # Wall-clock cap for "connected but no body byte yet".  Without it, six startup
 # attempts at a 15 s read timeout left a dead-but-accepting server frozen for
@@ -171,6 +188,98 @@ class DownloadTimeline:
     def summary(self) -> str:
         with self._lock:
             return " ".join(f"{n}={self._at[n]:.2f}s" for n in self._order)
+
+    def as_dict(self) -> dict:
+        """Phase offsets keyed by name, for structured diagnostics."""
+        with self._lock:
+            return {n: round(self._at[n], 3) for n in self._order}
+
+
+@dataclass
+class SegmentReport:
+    """What one byte-range segment actually achieved.
+
+    ``written`` is read back from the part file rather than taken from a
+    running counter, so a buffered-but-unflushed write cannot be counted as
+    delivered.
+    """
+
+    index: int
+    start: int
+    end: int
+    expected: int
+    written: int
+    complete: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "index": self.index,
+            "start": self.start,
+            "end": self.end,
+            "expected": self.expected,
+            "written": self.written,
+            "complete": self.complete,
+        }
+
+
+@dataclass
+class DownloadReport:
+    """Structured, redaction-safe account of one download attempt.
+
+    Answers, for a single transfer: which strategy ran, what the server
+    claimed, how many bytes each segment really holds, where the time went,
+    and — the part that matters most — whether completion was *verified* or
+    merely *assumed*.
+
+    ``integrity`` is deliberately three-valued, because collapsing it to a
+    boolean is how a truncated media file gets reported as a success:
+
+    ``verified``
+        Every segment held its exact byte count, the assembled file matched
+        the declared length, and the checksum matched when one was supplied.
+    ``unverifiable``
+        The server never declared a length.  The bytes are consistent with
+        what was received, but nothing independent confirms the file is whole.
+    ``failed``
+        Not completed, or a check rejected the result.
+
+    ``url`` is redacted: a signed link carries its authorisation in the query
+    string, and this record is meant to be safe to log or attach to a bug
+    report.
+    """
+
+    url: str = ""
+    host: str = ""
+    strategy: str = ""            # "ranged" | "single-stream"
+    range_supported: bool = False
+    length_known: bool = False
+    expected_length: int = 0
+    bytes_written: int = 0
+    segments: List[SegmentReport] = field(default_factory=list)
+    ttfb: Optional[float] = None
+    duration: float = 0.0
+    integrity: str = "failed"     # verified | unverifiable | failed
+    validation: str = ""          # the completion gate's own verdict
+    failure_reason: str = ""
+    timeline: Dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self.url,
+            "host": self.host,
+            "strategy": self.strategy,
+            "range_supported": self.range_supported,
+            "length_known": self.length_known,
+            "expected_length": self.expected_length,
+            "bytes_written": self.bytes_written,
+            "segments": [s.to_dict() for s in self.segments],
+            "ttfb": self.ttfb,
+            "duration": round(self.duration, 3),
+            "integrity": self.integrity,
+            "validation": self.validation,
+            "failure_reason": self.failure_reason,
+            "timeline": dict(self.timeline),
+        }
 
 
 def _new_part_pool(max_workers: int) -> ThreadPoolExecutor:
@@ -364,6 +473,53 @@ class _RangeState:
         return self._event.is_set()
 
 
+class _EntityGuard:
+    """Watches the identity of the resource being fetched.
+
+    ``ETag`` / ``Last-Modified`` are the only way to tell "the same file, still
+    the same file" from "a different file that happens to be the same length".
+    Without them a resume silently splices two versions together, which is
+    exactly the sort of corruption that survives every size check.
+
+    Seeded with the validators from a previous session it *compares*; seeded
+    empty it *records* the first ones it sees, so a fresh download can persist
+    them for the next resume.  A server that omits them simply leaves the guard
+    with nothing to compare, which is reported honestly as "cannot tell".
+    """
+
+    __slots__ = ("_lock", "etag", "last_modified", "_mismatch")
+
+    def __init__(self, etag: str = "", last_modified: str = "") -> None:
+        self._lock = threading.Lock()
+        self.etag = etag or ""
+        self.last_modified = last_modified or ""
+        self._mismatch = threading.Event()
+
+    def observe(self, headers) -> bool:
+        """Record or compare validators; ``False`` means the entity changed."""
+        try:
+            etag = (headers.get("ETag") or "").strip()
+            modified = (headers.get("Last-Modified") or "").strip()
+        except Exception:  # pragma: no cover — defensive against odd mocks
+            return True
+        with self._lock:
+            if not self.etag and not self.last_modified:
+                self.etag = etag
+                self.last_modified = modified
+                return True
+            if self.etag and etag and etag != self.etag:
+                self._mismatch.set()
+                return False
+            if self.last_modified and modified and modified != self.last_modified:
+                self._mismatch.set()
+                return False
+        return True
+
+    @property
+    def changed(self) -> bool:
+        return self._mismatch.is_set()
+
+
 def _content_range_total(header: str) -> int:
     """The total entity size from a ``Content-Range`` header (``0`` if absent).
 
@@ -387,6 +543,36 @@ def _content_range_start(header: str) -> Optional[int]:
         rng, _, _total = rest.partition("/")
         start_text, _, _end_text = rng.partition("-")
         return int(start_text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _content_range_span(header: str) -> Optional[tuple]:
+    """Parse ``bytes START-END/TOTAL`` into ``(start, end, total)``.
+
+    ``total`` is ``0`` when the server wrote ``*`` (unknown).  Returns ``None``
+    when the header is absent, uses another unit, or is malformed — in every
+    one of those cases the response cannot be checked against the range that
+    was requested, so the caller must not trust it.
+    """
+    try:
+        unit, _, rest = (header or "").partition(" ")
+        if unit.strip().lower() != "bytes":
+            return None
+        rng, sep, total_text = rest.partition("/")
+        if not sep:
+            return None
+        start_text, _, end_text = rng.partition("-")
+        start = int(start_text)
+        end = int(end_text)
+        if start < 0 or end < start:
+            return None
+        total = 0
+        if total_text.strip() != "*":
+            total = int(total_text)
+            if total <= 0:
+                return None
+        return start, end, total
     except (ValueError, TypeError):
         return None
 
@@ -464,6 +650,10 @@ class DownloadController:
         # Reset at the start of every download_file() call, because one
         # controller instance may serve several downloads (CLI, tests).
         self._timeline: Optional[DownloadTimeline] = None
+        # Structured diagnostics for the most recent download_file() call.
+        # None until a download has run.
+        self._report: Optional[DownloadReport] = None
+        self._report_state: Dict[str, Any] = {}
         self._first_byte = threading.Event()
         self._first_byte_hook: Optional[Callable[[], None]] = None
 
@@ -498,6 +688,77 @@ class DownloadController:
         "failed", "blocked", "merge-failed", "checksum-mismatch",
     })
 
+    def _build_report(self, url: str) -> "DownloadReport":
+        """Assemble this attempt's :class:`DownloadReport`.
+
+        Called from a ``finally``, so it must never raise: diagnostics are
+        worth having but never worth breaking a download over.  Every field
+        comes from state the transfer already maintains, so there is no second
+        source of truth to drift out of sync.
+        """
+        timeline = self._timeline
+        marks = timeline.as_dict() if timeline is not None else {}
+        state = getattr(self, "_report_state", None) or {}
+        parts = state.get("parts") or []
+        succeeded = bool(state.get("ok"))
+
+        # A successful transfer deletes its part files, so their sizes cannot be
+        # read afterwards.  Use the snapshot taken while they still existed and
+        # only fall back to live stats for paths that never reached that point
+        # (failures and cancellations, where the parts are still on disk).
+        snapshot = state.get("segments")
+        if snapshot is not None:
+            segments = list(snapshot)
+        else:
+            segments = [
+                SegmentReport(
+                    index=p.index,
+                    start=p.start,
+                    end=p.end,
+                    expected=p.size,
+                    written=p.downloaded_size,
+                    complete=p.is_complete,
+                )
+                for p in parts
+            ]
+        written = sum(s.written for s in segments)
+        expected = int(state.get("expected_length") or 0)
+        length_known = bool(state.get("length_known"))
+        gate = str(state.get("validation") or "")
+
+        if not succeeded:
+            integrity = "failed"
+        elif not length_known:
+            # No declared length: nothing independent can confirm the file is
+            # whole.  Saying "verified" here would be a lie.
+            integrity = "unverifiable"
+        elif gate or self.config.verify_size:
+            integrity = "verified"
+        else:
+            integrity = "unverifiable"
+
+        return DownloadReport(
+            url=redact_secrets(url),
+            host=(urlparse(url).hostname or ""),
+            strategy=str(state.get("strategy") or ""),
+            range_supported=bool(state.get("range_supported")),
+            length_known=length_known,
+            expected_length=expected,
+            bytes_written=written,
+            segments=segments,
+            ttfb=marks.get("first_byte"),
+            duration=timeline.elapsed if timeline is not None else 0.0,
+            integrity=integrity,
+            validation=gate,
+            failure_reason=("" if succeeded else redact_secrets(self.last_error or "")),
+            timeline=marks,
+        )
+
+    @property
+    def last_report(self) -> Optional["DownloadReport"]:
+        """Structured record of the most recent download attempt, or None."""
+        return self._report
+
     def _log_timeline(self, url: str, outcome: str) -> None:
         """Emit one INFO line describing where this download spent its time.
 
@@ -531,7 +792,8 @@ class DownloadController:
         )
 
     def _save_resume_state(self, state_mgr, url: str, total_size: int,
-                           parts: List[DownloadPart], threads: int) -> bool:
+                           parts: List[DownloadPart], threads: int,
+                           entity_guard=None) -> bool:
         """Persist resume state, never letting a sidecar failure abort a transfer.
 
         ``DownloadState.save`` deliberately raises so callers *can* notice, but
@@ -542,7 +804,16 @@ class DownloadController:
         its own if the disk is genuinely full.
         """
         try:
-            state_mgr.save(url, total_size, parts, threads)
+            state_mgr.save(
+                url,
+                total_size,
+                parts,
+                threads,
+                etag=entity_guard.etag if entity_guard is not None else "",
+                last_modified=(
+                    entity_guard.last_modified if entity_guard is not None else ""
+                ),
+            )
             return True
         except Exception as exc:  # noqa: BLE001 — auxiliary metadata only
             log.warning(
@@ -735,6 +1006,7 @@ class DownloadController:
         control=None,
         optimizer=None,
         range_state: Optional["_RangeState"] = None,
+        entity_guard: Optional["_EntityGuard"] = None,
     ) -> bool:
         """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
 
@@ -837,6 +1109,22 @@ class DownloadController:
                             response=response,
                         )
 
+                    # The resource must still be the one this transfer started
+                    # on.  A publisher that replaces a file mid-download keeps
+                    # the same URL and often the same length, so the validator
+                    # is the only signal that the bytes changed underneath us.
+                    if entity_guard is not None and not entity_guard.observe(
+                        response.headers
+                    ):
+                        if range_state is not None:
+                            range_state.mark_unusable()
+                        self._print(
+                            "[yellow]⚠ The file changed on the server during the "
+                            "download — restarting from scratch rather than mixing "
+                            "two versions.[/yellow]"
+                        )
+                        return False
+
                     # Content-Type check: only on first attempt (probe already
                     # caught the fast-path case; this is a safety net for
                     # token-expiry mid-stream).
@@ -868,10 +1156,40 @@ class DownloadController:
                             range_state.mark_unusable()
                         return False
 
-                    if ranged_request and response.status_code == 206:
-                        cr_total = _content_range_total(
+                    if response.status_code == 206:
+                        # ---- Prove these bytes belong at this offset ------
+                        # A 206 is only meaningful if it says *which* bytes it
+                        # is carrying.  Without this check a server (or an
+                        # intermediary cache) that answers every range from
+                        # byte 0 produced a file of exactly the right length
+                        # built from the same leading bytes repeated once per
+                        # part: the download reported success, the size looked
+                        # right, and the media file was unplayable past the
+                        # first segment.
+                        span = _content_range_span(
                             response.headers.get("Content-Range", "")
                         )
+                        if span is None:
+                            if range_state is not None:
+                                range_state.mark_unusable()
+                            self._print(
+                                f"[yellow]⚠ Part {part.index}: 206 without a usable "
+                                "Content-Range — restarting as a single stream."
+                                "[/yellow]"
+                            )
+                            return False
+
+                        cr_start, cr_end, cr_total = span
+                        if cr_start != range_start:
+                            if range_state is not None:
+                                range_state.mark_unusable()
+                            self._print(
+                                f"[yellow]⚠ Part {part.index}: asked for byte "
+                                f"{range_start}, server sent {cr_start} — "
+                                "restarting as a single stream.[/yellow]"
+                            )
+                            return False
+
                         if cr_total and cr_total != total_size:
                             # The entity changed size between the probe and the
                             # transfer, so the planned offsets no longer
@@ -881,9 +1199,30 @@ class DownloadController:
                                 range_state.mark_unusable()
                             return False
 
+                        # The announced body length must match the span it
+                        # just declared.  A mismatch means the connection is
+                        # going to be short (or padded) — either way the part
+                        # cannot be trusted to fill its range exactly.
+                        declared = response.headers.get("Content-Length")
+                        if declared is not None:
+                            try:
+                                declared_len = int(declared)
+                            except (TypeError, ValueError):
+                                declared_len = -1
+                            if declared_len != cr_end - cr_start + 1:
+                                if range_state is not None:
+                                    range_state.mark_unusable()
+                                self._print(
+                                    f"[yellow]⚠ Part {part.index}: Content-Length "
+                                    f"{declared_len} does not match the declared "
+                                    f"range {cr_start}-{cr_end} — restarting as a "
+                                    "single stream.[/yellow]"
+                                )
+                                return False
+
                     mode = "wb" if existing == 0 and range_start == part.start else "ab"
 
-                    with open(part.path, mode, buffering=8 * 1024 * 1024) as dest:
+                    with open(part.path, mode, buffering=_PART_WRITE_BUFFER) as dest:
                         # Local byte accumulator — reduces lock frequency
                         # by batching small writes into larger flushes.
                         local_bytes = 0
@@ -1174,7 +1513,7 @@ class DownloadController:
                         )
                         downloaded = resume_from
                         mode = "ab" if resume_from > 0 else "wb"
-                        with open(tmp_path, mode, buffering=8 * 1024 * 1024) as dest:
+                        with open(tmp_path, mode, buffering=_PART_WRITE_BUFFER) as dest:
                             # Local byte accumulator for batched progress updates.
                             local_bytes = 0
                             last_cb_time = 0.0
@@ -1292,7 +1631,179 @@ class DownloadController:
 
     # ------------------------------------------------------------------ #
     # Scheduling
+    def _validate_output(
+        self,
+        file_path: Path,
+        expected_size: int,
+        expected_hash: str = "",
+    ) -> tuple:
+        """Final gate: is the file on disk actually the file that was asked for?
+
+        Called once, immediately before a download reports success, so the
+        definition of "complete" lives in one place instead of being spread
+        across every early-return on the way here.  A download becomes
+        ``Completed`` only if this returns ``True``.
+        """
+        if not file_path.exists():
+            return False, "The finished file is missing from disk."
+        actual = file_path.stat().st_size
+        if actual <= 0:
+            return False, "The finished file is empty."
+        if expected_size > 0 and actual != expected_size:
+            return (
+                False,
+                f"Integrity check failed: the finished file is {actual} bytes "
+                f"but the server declared {expected_size}.",
+            )
+        if expected_hash:
+            try:
+                algorithm = detect_hash_algorithm(expected_hash)
+            except ValueError as exc:
+                return False, str(exc)
+            actual_hash = calculate_checksum(file_path, algorithm)
+            if actual_hash.lower() != expected_hash.strip().lower():
+                return (
+                    False,
+                    f"Checksum mismatch: expected {expected_hash}, got {actual_hash}.",
+                )
+        return True, ""
+
     # ------------------------------------------------------------------ #
+    def _fetch_validators(self, url: str) -> tuple:
+        """Return ``(ETag, Last-Modified)`` for *url*, or ``("", "")``.
+
+        One byte is enough: the validators live in the response headers.  Any
+        failure returns empty strings, which the caller reads as "cannot tell"
+        — never as "changed", because refusing every resume after a transient
+        network blip would be worse than the risk it avoids.
+        """
+        headers = build_browser_headers(
+            url,
+            self.config.user_agent,
+            range_header="bytes=0-0",
+            accept="*/*",
+        )
+        try:
+            with self.smart_request(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(
+                    float(self.config.probe_connect_timeout),
+                    float(self.config.probe_read_timeout),
+                ),
+                session=self.session.probe_session,
+            ) as response:
+                return (
+                    (response.headers.get("ETag") or "").strip(),
+                    (response.headers.get("Last-Modified") or "").strip(),
+                )
+        except requests.RequestException:
+            return "", ""
+
+    def _verify_part_layout(
+        self,
+        url: str,
+        parts: List[DownloadPart],
+        total_size: int,
+    ) -> tuple:
+        """Cross-check the assembled byte layout against the server itself.
+
+        Header validation proves a 206 *claims* to carry the requested range;
+        it cannot prove the body is really those bytes.  A server that honours
+        the header but always sends from offset 0 produces a file of exactly
+        the right length made of repeated leading bytes — right size, wrong
+        content, which is precisely the failure that made finished movies stop
+        playing partway through.
+
+        The check is one small ranged request straddling the first part
+        boundary, compared byte-for-byte against what the parts actually hold.
+        That catches a body/offset mismatch, a part written in the wrong order,
+        and a gap at the seam, for the cost of ~64 bytes and one round trip.
+
+        Deliberately best-effort: if the probe itself cannot be made (server
+        refuses the range, network hiccup, rate limit) the download is *not*
+        failed on suspicion — we simply cannot prove it either way, and saying
+        so is better than inventing a verdict.
+        """
+        if len(parts) < 2 or total_size <= 0:
+            return True, ""
+
+        ordered = sorted(parts, key=lambda p: p.start)
+        seam = ordered[0].end
+        window = 64
+        start = max(0, seam - window // 2)
+        end = min(total_size - 1, start + window - 1)
+        if end <= start:
+            return True, ""
+
+        headers = build_browser_headers(
+            url,
+            self.config.user_agent,
+            range_header=f"bytes={start}-{end}",
+            accept="*/*",
+        )
+        try:
+            response = self.smart_request(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(
+                    float(self.config.probe_connect_timeout),
+                    float(self.config.probe_read_timeout),
+                ),
+                session=self.session.probe_session,
+            )
+        except requests.RequestException as exc:
+            log.debug("layout probe skipped (%s)", redact_secrets(str(exc)))
+            return True, ""
+
+        try:
+            if response.status_code != 206:
+                # The server will not serve this range on demand; the transfer
+                # itself already validated every part it did serve.
+                return True, ""
+            span = _content_range_span(response.headers.get("Content-Range", ""))
+            if span is None or span[0] != start:
+                return True, ""
+            probe = response.content[: end - start + 1]
+        except requests.RequestException:
+            return True, ""
+        finally:
+            response.close()
+
+        if len(probe) != end - start + 1:
+            return True, ""
+
+        # Compare against the bytes the parts actually hold at that offset.
+        assembled = bytearray()
+        position = start
+        for part in ordered:
+            if position > end:
+                break
+            if not (part.start <= position <= part.end):
+                continue
+            offset = position - part.start
+            take = min(part.size - offset, end - position + 1)
+            try:
+                with open(part.path, "rb") as handle:
+                    handle.seek(offset)
+                    assembled += handle.read(take)
+            except OSError:
+                return True, ""
+            position += take
+
+        if len(assembled) != len(probe):
+            return True, ""
+        if bytes(assembled) != probe:
+            return (
+                False,
+                "Integrity check failed: the downloaded bytes around offset "
+                f"{start} do not match what the server returns for that range. "
+                "The file would have been the right size but the wrong content.",
+            )
+        return True, ""
+
     def wait_for_schedule(self, control=None) -> None:
         target = self.config.get_schedule_datetime()
         if not target:
@@ -1324,8 +1835,51 @@ class DownloadController:
         path_callback: Optional[Callable[[str], None]] = None,
         smart_callback: Optional[Callable[[str], None]] = None,
     ) -> bool:
+        """Download one URL, always leaving a diagnostics record behind.
+
+        This is a thin wrapper so the record is produced for *every* exit —
+        including the early returns (cancellation, probe failure, the
+        single-stream path) that happen before the transfer's own ``try``
+        block begins and would otherwise leave ``last_report`` at ``None``.
+        """
+        self._report = None
+        self._report_state = {
+            "strategy": "", "range_supported": False, "expected_length": 0,
+            "length_known": False, "parts": [], "validation": "",
+        }
+        try:
+            outcome = self._download_file_impl(
+                url, directory, verify_checksum, expected_hash,
+                progress_callback, control, pre_analysis, status_callback,
+                path_callback, smart_callback,
+            )
+            return outcome
+        finally:
+            # The return value is the only authoritative success signal: the
+            # timeline's "done" mark also fires on a failed single-stream
+            # attempt, so inferring success from it would mislabel failures.
+            self._report_state["ok"] = bool(outcome)
+            try:
+                self._report = self._build_report(url)
+            except Exception:  # pragma: no cover - diagnostics are best-effort
+                log.debug("could not build download report", exc_info=True)
+
+    def _download_file_impl(
+        self,
+        url: str,
+        directory: Path,
+        verify_checksum: bool = False,
+        expected_hash: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        control=None,
+        pre_analysis=None,
+        status_callback: Optional[Callable[[str], None]] = None,
+        path_callback: Optional[Callable[[str], None]] = None,
+        smart_callback: Optional[Callable[[str], None]] = None,
+    ) -> bool:
         # Per-download diagnostics and the first-byte signal start here, so a
         # reused controller instance never inherits the previous run's state.
+        # (_report / _report_state are reset by the download_file wrapper.)
         self._timeline = DownloadTimeline()
         self._first_byte = threading.Event()
         self._first_byte_hook = (
@@ -1411,6 +1965,13 @@ class DownloadController:
             self._log_timeline(url, "cancelled")
             return False
 
+        self._report_state.update(
+            range_supported=bool(supports_range),
+            expected_length=int(total_size or 0),
+            length_known=bool(total_size),
+            strategy="ranged" if supports_range and total_size else "single-stream",
+        )
+
         # Redirect-chain reuse: when the probe resolved the URL to a final
         # destination, transfer against THAT URL directly instead of walking
         # the redirect chain a second time.  Task-scoped and strictly
@@ -1467,6 +2028,7 @@ class DownloadController:
         self._timeline.mark("connect")
 
         if not can_resume:
+            self._report_state["strategy"] = "single-stream"
             try:
                 ok = self.single_thread_download(
                     transfer_url, file_path, progress_callback, control=control
@@ -1487,6 +2049,33 @@ class DownloadController:
 
         state_mgr = DownloadState(state_path)
         loaded = state_mgr.load()
+        if loaded is not None and (
+            loaded.url != url or loaded.total_size != total_size
+        ):
+            # A state file for a different URL or a different length describes a
+            # different entity; its offsets mean nothing here.
+            loaded = None
+        entity_guard = _EntityGuard(
+            etag=loaded.etag if loaded is not None else "",
+            last_modified=loaded.last_modified if loaded is not None else "",
+        )
+        if loaded is not None and (loaded.etag or loaded.last_modified):
+            # The resource may have been re-published since the state was
+            # written.  One tiny range request answers that before a single
+            # byte is appended to yesterday's data.
+            current_etag, current_modified = self._fetch_validators(transfer_url)
+            verdict = loaded.identity_matches(current_etag, current_modified)
+            if verdict is False:
+                self._print(
+                    "[yellow]⚠ The file on the server has changed since this "
+                    "download was paused — discarding the partial data and "
+                    "starting over.[/yellow]"
+                )
+                for stale in loaded.parts:
+                    stale.path.unlink(missing_ok=True)
+                state_mgr.delete()
+                loaded = None
+                entity_guard = _EntityGuard()
         parts: Optional[List[DownloadPart]] = None
         effective_threads = self.config.num_threads
         optimizer = None
@@ -1508,8 +2097,9 @@ class DownloadController:
         else:
             effective_threads = self.config.num_threads
 
-        if loaded and loaded[0] == url and loaded[1] == total_size:
-            _, _, saved_threads, old_parts = loaded
+        if loaded is not None:
+            saved_threads = loaded.num_threads
+            old_parts = loaded.parts
             if not _parts_within_directory(old_parts, directory):
                 self._print(
                     "[yellow]Resume state rejected (invalid part paths). "
@@ -1533,7 +2123,7 @@ class DownloadController:
                     file_path,
                     self.config.min_part_size,
                 )
-                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
         else:
             parts = None
 
@@ -1553,7 +2143,12 @@ class DownloadController:
                     f"[yellow]⚠ Reduced threads to {effective_threads} "
                     f"for file size {format_size(total_size)}[/yellow]"
                 )
-            self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+            self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+
+        # Expose the segment plan to the diagnostics record while the parts are
+        # still live: after a merge they are deleted, so reading their sizes
+        # later would report zero.
+        self._report_state["parts"] = parts
 
         # NOTE: DOWNLOADING is deliberately *not* announced here.  The engine
         # announces it from _fire_first_byte() when the first body byte lands,
@@ -1631,6 +2226,7 @@ class DownloadController:
                                 control,
                                 optimizer=optimizer,
                                 range_state=range_state,
+                                entity_guard=entity_guard,
                             )
                         finally:
                             # Re-derive the counter from what is actually on
@@ -1682,7 +2278,7 @@ class DownloadController:
                     self._timeline.mark("transferred")
 
                 if self._ctl_cancelled(control):
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
                     self.last_error = "Cancelled"
                     self._print(
                         "[yellow]Download cancelled. State saved for resume.[/yellow]"
@@ -1703,6 +2299,9 @@ class DownloadController:
                     for stale in parts:
                         stale.path.unlink(missing_ok=True)
                     state_mgr.delete()
+                    # The ranged plan is void; the record must say what actually
+                    # produced the file.
+                    self._report_state.update(strategy="single-stream", parts=[])
                     try:
                         ok = self.single_thread_download(
                             transfer_url, file_path, progress_callback, control=control
@@ -1714,7 +2313,7 @@ class DownloadController:
                         DownloadContext.clear()
 
                 if failed_parts:
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
                     self.last_error = (
                         self.last_error
                         or f"{len(failed_parts)} part(s) failed — will resume on retry"
@@ -1726,19 +2325,48 @@ class DownloadController:
                     return False
 
                 if not all(p.is_complete for p in parts):
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
                     self.last_error = self.last_error or "Some parts incomplete — will resume on retry"
                     self._print("[bold red]Some parts incomplete. Re-run to resume.")
                     return False
 
+            # Every part claims to be full.  Prove the layout before assembling
+            # it: the parts are the only place a byte can be at the wrong
+            # offset while the total still adds up.
+            if self.config.verify_size and len(parts) > 1:
+                self._notify_status(status_callback, "VERIFYING")
+                layout_ok, layout_err = self._verify_part_layout(
+                    transfer_url, parts, total_size
+                )
+                if not layout_ok:
+                    self._save_resume_state(
+                        state_mgr, url, total_size, parts, effective_threads,
+                        entity_guard,
+                    )
+                    self.last_error = layout_err
+                    self._print(f"[bold red]{layout_err}")
+                    self._log_timeline(url, "layout-mismatch")
+                    return False
+
             self._notify_status(status_callback, "MERGING")
             self._timeline.mark("merge")
+            # Freeze the per-segment accounting here: a successful merge deletes
+            # the part files, and their sizes are the only record of what each
+            # segment actually delivered.
+            self._report_state["segments"] = [
+                SegmentReport(
+                    index=p.index, start=p.start, end=p.end,
+                    expected=p.size, written=p.downloaded_size,
+                    complete=p.is_complete,
+                )
+                for p in parts
+            ]
             merge_expected = total_size if self.config.verify_size else 0
             ok, merge_err = merge_parts(
                 parts, file_path, self.config.buffer_size, expected_size=merge_expected
             )
             if not ok:
-                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads)
+                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
                 self.last_error = merge_err
                 self._print(f"[red]{merge_err}. Parts preserved for retry.")
                 self._log_timeline(url, "merge-failed")
@@ -1747,6 +2375,8 @@ class DownloadController:
             if verify_checksum and expected_hash:
                 self._notify_status(status_callback, "VERIFYING")
                 self._timeline.mark("verify")
+                # A malformed hash is the *user's* problem, not the file's:
+                # report it and leave the download in place.
                 try:
                     algorithm = detect_hash_algorithm(expected_hash)
                 except ValueError as exc:
@@ -1755,16 +2385,38 @@ class DownloadController:
                     self._log_timeline(url, "hash-unsupported")
                     return False
                 self._print(f"[cyan]Verifying {algorithm.upper()} checksum...")
-                actual_hash = calculate_checksum(file_path, algorithm)
-                if actual_hash.lower() != expected_hash.strip().lower():
-                    self.last_error = "Checksum mismatch — downloaded file is corrupted"
-                    self._print(
-                        f"[bold red]Checksum mismatch! Expected {expected_hash}, "
-                        f"got {actual_hash}"
-                    )
+
+            # Single completion gate.  Everything above proved that the parts
+            # are complete and correctly placed; this proves the *file on disk*
+            # is what the server declared before the download is allowed to
+            # report success.  The checksum (when the user supplied one) is
+            # folded into the same gate so there is exactly one place that
+            # decides "trustworthy".
+            output_ok, output_err = self._validate_output(
+                file_path,
+                total_size if self.config.verify_size else 0,
+                expected_hash if (verify_checksum and expected_hash) else "",
+            )
+            self._report_state["validation"] = (
+                "passed" if output_ok else (output_err or "rejected")
+            )
+            if not output_ok:
+                self.last_error = output_err
+                self._print(f"[bold red]{output_err}")
+                # The parts are still on disk, so a retry can resume; the
+                # failed output is removed so it cannot be mistaken for a
+                # finished download later.
+                try:
                     file_path.unlink(missing_ok=True)
-                    self._log_timeline(url, "checksum-mismatch")
-                    return False
+                except OSError:
+                    pass
+                self._save_resume_state(
+                    state_mgr, url, total_size, parts, effective_threads,
+                    entity_guard,
+                )
+                self._log_timeline(url, "output-invalid")
+                return False
+            if verify_checksum and expected_hash:
                 self._print("[green]✓ Checksum verified!")
 
             for part in parts:

@@ -9,6 +9,7 @@ is response-header handling and the generic formatters.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 from pathlib import Path
@@ -152,16 +153,61 @@ def is_valid_directory(path: str | Path) -> bool:
         return False
 
 
+# Windows allows 260 characters in a path unless long paths are enabled
+# process-wide, and the frozen build does not opt into that.  A download also
+# appends suffixes to the name after this point (".part15", the resume-state
+# extension, ".merging"), so the budget reserves room for them.
+MAX_PATH_BUDGET = 255
+_PATH_SUFFIX_HEADROOM = 16
+
+
+def _utf16_units(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def fit_filename(directory: Path, filename: str, extra: int = 0) -> str:
+    """Shorten *filename* until ``directory / filename`` fits the path budget.
+
+    ``sanitize_filename`` caps a component at the 255-unit Windows limit, but
+    the *full path* is what ``open()`` refuses: a 240-character name inside
+    ``C:\\Users\\Name\\Downloads`` is still too long, and the failure arrives as
+    ``FileNotFoundError`` with no hint that length was the problem.  The
+    extension is preserved; the stem is what gives way.
+    """
+    room = MAX_PATH_BUDGET - _utf16_units(str(directory)) - 1 - _PATH_SUFFIX_HEADROOM - extra
+    room = max(room, 32)
+    if _utf16_units(filename) <= room:
+        return filename
+
+    stem, suffix = os.path.splitext(filename)
+    budget = room - _utf16_units(suffix)
+    if budget < 1:
+        stem, suffix, budget = filename, "", room
+    kept, used = [], 0
+    for ch in stem:
+        width = 2 if ord(ch) > 0xFFFF else 1
+        if used + width > budget:
+            break
+        kept.append(ch)
+        used += width
+    trimmed = "".join(kept).rstrip(". ")
+    return (trimmed + suffix) if trimmed else (suffix.lstrip(".") or "downloaded_file")
+
+
 def unique_filepath(directory: Path, filename: str) -> Path:
     """Avoid overwriting existing files by appending a numeric suffix."""
+    filename = fit_filename(directory, filename)
     base = directory / filename
     if not base.exists():
         return base
-    stem = Path(filename).stem
-    suffix = Path(filename).suffix
+    stem, suffix = os.path.splitext(filename)
+    room = MAX_PATH_BUDGET - _utf16_units(str(directory)) - 1 - _PATH_SUFFIX_HEADROOM
+    room = max(room, 32)
     counter = 1
     while True:
-        candidate = directory / f"{stem} ({counter}){suffix}"
+        tail = f" ({counter})"
+        keep = max(1, room - _utf16_units(suffix) - len(tail))
+        candidate = directory / (stem[:keep].rstrip(". ") + tail + suffix)
         if not candidate.exists():
             return candidate
         counter += 1
