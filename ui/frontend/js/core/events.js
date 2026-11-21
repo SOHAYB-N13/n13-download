@@ -71,6 +71,7 @@ const Events = {
       }
       app._updateBadge();
       app._updateCounts();
+      app._renderLiveSpeed();
       this._scheduleDashboard(app);
       if (evt.event === "finished") {
         if (t.state === "Complete") {

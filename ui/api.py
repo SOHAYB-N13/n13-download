@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from config.loader import config_dir, save_config
 from config.settings import AppConfig
 from core.errors import friendly_error_message, redact_secrets
+from core.optimizer import normalise_mode
 from core.session import SessionManager
 from core.updater import UpdateController
 from core.urls import canonical_url
@@ -36,6 +37,26 @@ log = logging.getLogger("n13")
 # Probe hand-off: how long a UI-probe result stays reusable for the queue's
 # ANALYZING step (duplicate-probe elimination fast path).
 _PROBE_CACHE_TTL = 60.0
+
+
+def _mode_bucket(value) -> str:
+    """Group a stored ``connection_mode`` for the usage statistics.
+
+    History written before the modes were renamed still says ``smart``, and an
+    empty value means "inherit the default" rather than a mode of its own.
+    Normalising here keeps old history out of the ``inherit`` bucket instead of
+    quietly reporting that nobody ever used the adaptive engine.
+    """
+    key = str(value or "").strip().lower()
+    if not key:
+        return "inherit"
+    key = normalise_mode(key)
+    return key if key in _MODE_BUCKETS else "inherit"
+
+
+_MODE_BUCKETS = frozenset(
+    {"auto", "balanced", "high_performance", "conservative", "manual"}
+)
 
 
 def _disk_usage_anchor(directory: str) -> str:
@@ -1515,15 +1536,18 @@ class Api(ProjectsApiMixin):
         by_day: Dict[str, int] = {}
         by_category: Dict[str, int] = {}
         by_type: Dict[str, int] = {}
-        by_mode: Dict[str, int] = {"smart": 0, "manual": 0, "inherit": 0}
+        by_mode: Dict[str, int] = {
+            "auto": 0, "balanced": 0, "high_performance": 0,
+            "conservative": 0, "manual": 0, "inherit": 0,
+        }
 
         for h in hist:
             cat = h.get("category") or "General"
             by_category[cat] = by_category.get(cat, 0) + 1
             ext = Path(h.get("name") or "").suffix.lstrip(".").lower() or "none"
             by_type[ext] = by_type.get(ext, 0) + 1
-            mode = h.get("connection_mode") or ""
-            by_mode[mode if mode in by_mode else "inherit"] += 1
+            mode = _mode_bucket(h.get("connection_mode"))
+            by_mode[mode] += 1
             try:
                 day = datetime.strptime(str(h.get("finished", ""))[:10], "%Y-%m-%d")
                 key = day.strftime("%Y-%m-%d")
@@ -1533,8 +1557,7 @@ class Api(ProjectsApiMixin):
 
         # Live tasks also count toward mode usage.
         for s in self._manager.snapshots():
-            mode = s.connection_mode or ""
-            by_mode[mode if mode in by_mode else "inherit"] += 1
+            by_mode[_mode_bucket(s.connection_mode)] += 1
 
         top_categories = sorted(by_category.items(), key=lambda kv: -kv[1])[:8]
         top_types = sorted(by_type.items(), key=lambda kv: -kv[1])[:10]

@@ -36,7 +36,7 @@ The value is simple: **copy a link → hand it to N13 → N13 handles the rest**
 
 | | Windows desktop | Android |
 |---|---|---|
-| Version | **1.4.6** | **1.1.5** (versionCode 7) |
+| Version | **1.4.7** | **1.1.5** (versionCode 7) |
 | Interface | WebView GUI + terminal UI | Jetpack Compose UI |
 | Minimum OS | Windows 10 1809 (build 17763) or Windows 11 — x64 | Android 8.0 (API 26) |
 | Engine | Python (`core/`) | Kotlin + OkHttp (`data/engine/`) |

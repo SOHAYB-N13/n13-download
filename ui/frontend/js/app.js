@@ -677,6 +677,46 @@ const App = {
     }, 1000);
   },
 
+  /**
+   * Combined throughput of everything currently transferring.
+   *
+   * Derived from the live task snapshots the event loop already receives
+   * (~5 Hz), not from the 2 s statistics poll.  The polled figure was correct
+   * but arrived up to two seconds late, so the header speed visibly lagged the
+   * per-row speeds beside it.
+   */
+  _liveTotalSpeed() {
+    let total = 0;
+    const tasks = this.state.downloads || {};
+    for (const id in tasks) {
+      const t = tasks[id];
+      if (t && t.state === "Downloading") total += t.speed_bps || 0;
+    }
+    return total;
+  },
+
+  /**
+   * Repaint the two combined-speed readouts from live task data.
+   *
+   * Throttled to ~4 Hz: the event loop can deliver several updates per frame
+   * when many downloads are active, and the number only needs to look live.
+   */
+  _renderLiveSpeed() {
+    if (this._speedTimer) return;
+    this._speedTimer = setTimeout(() => {
+      this._speedTimer = null;
+      const total = this._liveTotalSpeed();
+      const set = (id, val) => {
+        const el = Utils.$id(id);
+        if (el && el.textContent !== String(val)) el.textContent = val;
+      };
+      set("stSpeed", Utils.formatSpeed(total));
+      const sb = Utils.$id("sidebarSpeedVal");
+      if (sb) sb.textContent = Utils.formatSpeed(total);
+      if (this._lastStats) this._lastStats.total_speed_bps = total;
+    }, 250);
+  },
+
   _renderStats(stats, sys) {
     const today = this.state.history.filter((h) => Utils.isToday(h.finished));
     const todayBytes = today.reduce((s, h) => s + (h.size_bytes || 0), 0);
@@ -696,7 +736,9 @@ const App = {
     }
     set("stTodaySub", I18N.fmt("fmt.downloaded", { size: Utils.formatSize(todayBytes) }));
     set("stActiveSub", I18N.fmt("fmt.in_queue", { n: stats.queued || 0 }));
-    set("stSpeed", Utils.formatSpeed(stats.total_speed_bps));
+    // Combined speed comes from the live task snapshots rather than the polled
+    // total, so it matches the per-row numbers instead of trailing them.
+    set("stSpeed", Utils.formatSpeed(this._liveTotalSpeed()));
     set("stSpeedPeak", I18N.fmt("fmt.connections_live", { n: stats.running || 0, s: stats.running === 1 ? "" : "s" }));
     set("stNetwork", sys.session_downloaded_display || "0 B");
     // A missing/unreachable download folder now reports "unknown" instead of
@@ -711,7 +753,7 @@ const App = {
       ring.classList.toggle("warn", pct > 90);
     }
     const sbSpeed = Utils.$id("sidebarSpeedVal");
-    if (sbSpeed) sbSpeed.textContent = Utils.formatSpeed(stats.total_speed_bps);
+    if (sbSpeed) sbSpeed.textContent = Utils.formatSpeed(this._liveTotalSpeed());
   },
 
   _renderDashboardLists() {

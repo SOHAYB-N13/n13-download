@@ -21,6 +21,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional
 
+from core.speed import RateEstimator, SpeedSnapshot
+
 
 class TaskStatus(str, enum.Enum):
     """Canonical download lifecycle states.
@@ -214,6 +216,11 @@ class DownloadTask:
             self.connections = max(1, int(self.connections))
         except (TypeError, ValueError):
             self.connections = 1
+        # Throughput estimation is time-based, so it lives in a helper that is
+        # not part of the dataclass fields (``asdict`` must stay serialisable).
+        # ``object.__setattr__`` keeps this working even if a caller froze the
+        # instance later on.
+        object.__setattr__(self, "_rate", RateEstimator())
 
     # ------------------------------------------------------------------ #
     # State machine
@@ -335,44 +342,89 @@ class DownloadTask:
         start = self.started_at or self.created_at
         return max(0.0, end - start)
 
-    def update_speed(self, downloaded: int, now_mono: Optional[float] = None) -> None:
-        """Set ``downloaded_size`` and refresh speed/ETA from the increment.
+    #: Seconds of *active transfer* required before an ETA is published.
+    #: Before that the smoothed rate is still climbing from zero, so any
+    #: remaining-time figure would be a wild overestimate.
+    ETA_WARMUP_SECONDS = 1.5
 
-        ``current_speed`` is an exponentially-weighted moving average (stable
-        during bursts) and ``average_speed`` is the whole-transfer average so
-        both the "current" and "Average:" readouts are meaningful.
+    def update_speed(self, downloaded: int, now_mono: Optional[float] = None) -> None:
+        """Set ``downloaded_size`` and refresh the rate-based readouts.
+
+        ``downloaded`` is the number of bytes **successfully written**, fed by
+        :class:`core.progress.ProgressLedger`.  Three deliberate properties:
+
+        *   The value is clamped monotonic.  A lower number can only be an
+            out-of-order delivery from a concurrent part (the ledger prevents
+            those, and this clamp keeps a stray caller from rewinding the bar).
+            Treating it as a restart — which the old code did — wiped the
+            speed and the lifetime average mid-transfer.
+        *   Rates come from a time-based estimator, so the smoothing is
+            independent of how often this method is called.
+        *   ``now_mono`` is accepted for deterministic tests; the estimator
+            owns the clock, so it is only used to seed ``started_at`` here.
         """
-        now_mono = now_mono if now_mono is not None else time.monotonic()
+        if now_mono is not None and self.started_at is None:
+            # Tests drive the clock; keep elapsed-time accounting consistent.
+            self.started_at = time.time()
         downloaded = max(0, int(downloaded))
         if downloaded < self.downloaded_size:
-            # A reset (retry) — treat as a fresh sample window.
-            self.average_speed = 0.0
-            self.current_speed = 0.0
-        else:
-            delta = downloaded - self.downloaded_size
-            last = getattr(self, "_last_speed_at", now_mono)
-            elapsed = now_mono - last
-            if elapsed >= 0.05 and delta >= 0:
-                instant = delta / elapsed if elapsed > 0 else 0.0
-                if instant > 0:
-                    self.current_speed = (
-                        instant if self.current_speed <= 0
-                        else 0.35 * instant + 0.65 * self.current_speed
-                    )
-            self._last_speed_at = now_mono
+            downloaded = self.downloaded_size
+        delta = downloaded - self.downloaded_size
+        if delta:
+            self._rate.add(delta)
         self.downloaded_size = downloaded
+        self._apply_rates(self._rate.snapshot())
 
-        elapsed_total = self.elapsed_seconds
-        if elapsed_total > 0 and downloaded > 0:
-            self.average_speed = downloaded / elapsed_total
+    def refresh_speed(self) -> None:
+        """Re-evaluate the rate without new bytes.
 
-        remaining = self.total_size - downloaded
-        if self.total_size > 0 and remaining > 0 and self.current_speed > 1.0:
-            self.eta_seconds = remaining / self.current_speed
-        elif self.total_size > 0 and downloaded >= self.total_size:
-            self.eta_seconds = 0.0
-        else:
-            self.eta_seconds = None
+        Called when a snapshot is taken, which is what makes an idle transfer
+        decay to zero: with no progress callbacks the estimator would otherwise
+        keep reporting its last value forever.  Only a task that is genuinely
+        transferring may show a speed.
+        """
+        if self.status is not TaskStatus.DOWNLOADING:
+            return
+        self._apply_rates(self._rate.snapshot())
+
+    def reset_progress(self) -> None:
+        """Restart byte accounting after the engine abandons its plan.
+
+        Only the single-stream fallback does this: the ranged parts are
+        discarded and the file is fetched from byte 0 again.
+        """
+        self.downloaded_size = 0
+        self._rate.reset()
+        self.current_speed = 0.0
+        self.average_speed = 0.0
+        self.eta_seconds = None
+
+    def reset_speed(self) -> None:
+        """Forget the rate history but keep the byte position (retry/requeue)."""
+        self._rate.reset(already_bytes=self.downloaded_size)
+        self.current_speed = 0.0
+        self.average_speed = 0.0
+        self.eta_seconds = None
+
+    def _apply_rates(self, snap: SpeedSnapshot) -> None:
+        self.current_speed = snap.fast
+        if snap.lifetime > 0:
+            self.average_speed = snap.lifetime
+        self.eta_seconds = self._eta_from(snap)
+
+    def _eta_from(self, snap: SpeedSnapshot) -> Optional[float]:
+        if self.total_size <= 0:
+            # Unknown length: a percentage of "unknown" cannot produce a time.
+            return None
+        remaining = self.total_size - self.downloaded_size
+        if remaining <= 0:
+            return 0.0
+        if self._rate.active_seconds < self.ETA_WARMUP_SECONDS:
+            return None
+        rate = snap.best_estimate
+        if rate <= 0:
+            return None
+        return remaining / rate
 
     # ------------------------------------------------------------------ #
     # Serialisation

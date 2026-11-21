@@ -120,7 +120,9 @@ SETTINGS = {
     "download_dir": r"C:\Users\N13\Downloads", "max_concurrent": 3, "max_speed_bps": 0,
     "scheduler_enabled": False, "schedule_days": [], "schedule_start_time": "",
     "schedule_stop_time": "", "language": "en", "num_threads": 8,
-    "connection_mode": "smart", "verify_size": True, "auto_categorize": True,
+    "connection_mode": "auto", "smart_max_connections": 8, "smart_adaptive": True,
+    "max_total_connections": 32, "stall_timeout": 20.0, "probe_head_timeout": 2.5,
+    "verify_size": True, "auto_categorize": True,
     "block_private_urls": True, "theme": "dark", "accent": "#EF4444",
     "clipboard_monitor": True, "notify_on_complete": True,
 }
@@ -182,8 +184,8 @@ SYSTEM_STATS = {"cpu": 12.4, "memory_used": 5_368_709_120, "memory_total": 17_17
 AUTO_SHUTDOWN = {"state": "Disabled", "enabled": False, "seconds_remaining": 0,
                  "countdown_seconds": 60}
 
-UPDATE_STATE = {"state": "idle", "available": False, "current": "1.4.6",
-                "latest": "1.4.6", "progress": 0}
+UPDATE_STATE = {"state": "idle", "available": False, "current": "1.4.7",
+                "latest": "1.4.7", "progress": 0}
 
 SCHEDULED = [
     {"id": "s1", "status": "scheduled", "due_at": NOW + 7200,
@@ -242,7 +244,7 @@ def _stub(theme: str, lang: str) -> str:
     get_history: fn("get_history", D.history),
     get_settings: fn("get_settings", D.settings),
     get_theme_config: fn("get_theme_config", D.theme),
-    get_version: fn("get_version", "1.4.6"),
+    get_version: fn("get_version", "1.4.7"),
     get_stats: fn("get_stats", D.stats),
     get_system_stats: fn("get_system_stats", D.sys),
     get_analytics: fn("get_analytics", D.analytics),

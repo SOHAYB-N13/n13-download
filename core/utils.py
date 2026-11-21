@@ -297,12 +297,19 @@ def build_browser_headers(
     *,
     range_header: str | None = None,
     accept: str = "*/*",
+    omit_referer: bool = False,
 ) -> dict:
     """Build a realistic browser-like header set.
 
     Many CDNs / file hosts (Cloudflare, MediaFire-style, etc.) reject requests
     that lack common browser headers, so we send a complete set. Referer is
     derived from the URL origin which is usually accepted.
+
+    ``omit_referer`` drops ``Referer`` and ``Origin`` for hosts that *reject*
+    them.  Both behaviours exist in the wild — hotlink-gated CDNs require a
+    Referer, and some plain file servers answer a request carrying one with
+    ``403`` — so the caller decides per host, and only after a rejection has
+    been observed.  See ``SessionManager.should_omit_referer``.
     """
     headers = {
         "User-Agent": user_agent,
@@ -318,7 +325,7 @@ def build_browser_headers(
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
     }
-    referer = best_referer_for(url)
+    referer = None if omit_referer else best_referer_for(url)
     if referer:
         headers["Referer"] = referer
         try:

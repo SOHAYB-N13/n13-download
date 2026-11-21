@@ -37,15 +37,19 @@ import time
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import logging
+
 import requests
 
-from core.errors import BlockedURLError
+from core.errors import BlockedURLError, redact_secrets
 from core.security import validate_download_url
 from core.utils import (
     build_browser_headers,
     get_filename_from_response,
     is_html_error_response,
 )
+
+log = logging.getLogger("n13")
 
 if TYPE_CHECKING:
     from config.settings import AppConfig
@@ -187,6 +191,7 @@ def _verify_range_support(
     url: str,
     config: "AppConfig",
     timeout_tuple: Tuple[float, float],
+    omit_referer: bool = False,
 ) -> Optional[int]:
     """Spend one byte to learn whether ranges work.  ``None`` = they do not.
 
@@ -198,7 +203,8 @@ def _verify_range_support(
         r = session.get(
             url,
             headers=build_browser_headers(
-                url, config.user_agent, range_header="bytes=0-0", accept="*/*"
+                url, config.user_agent, range_header="bytes=0-0", accept="*/*",
+                omit_referer=omit_referer,
             ),
             stream=True,
             timeout=timeout_tuple,
@@ -260,21 +266,60 @@ def _probe_impl(
 
     # ---- Strategy A: HEAD request ---------------------------------------
     head: Optional[requests.Response] = None
-    # The HEAD attempt gets the same configured timeout as everything else,
-    # clamped by the remaining budget.  It used to be a hard-coded 3 s — shorter
-    # than the default 8 s setting — so a server that needed 4 s to answer a
-    # HEAD was declared unreachable even though it was working perfectly.
-    head_timeout = _budgeted(connect, read)
+    # How long HEAD is allowed to take before the ranged GET takes over.
+    #
+    # HEAD used to get the full read timeout, which made a slow-but-alive HEAD
+    # a hard gate on the whole download: measured against a server that stalls
+    # its HEAD for 9 s but serves the body instantly, the first byte arrived
+    # after 8.08 s — 97 % of the total download time.  The ranged GET answers
+    # everything HEAD can (status, Content-Range total, Content-Length,
+    # Content-Disposition, ETag) *and* proves range support, so there is no
+    # reason to wait longer for the weaker source.
+    try:
+        patience = float(getattr(config, "probe_head_timeout", 0) or 0)
+    except (TypeError, ValueError):
+        patience = 0.0
+    head_timeout = _budgeted(connect, min(read, patience) if patience > 0 else read)
+
+    def _headers(**kwargs) -> dict:
+        """Browser headers, honouring a host that has already refused a Referer."""
+        return build_browser_headers(
+            url,
+            config.user_agent,
+            omit_referer=session_manager.should_omit_referer(url),
+            **kwargs,
+        )
+
     try:
         if head_timeout is None:
             raise requests.exceptions.Timeout("probe budget exhausted")
         candidate = session.head(
             url,
-            headers=build_browser_headers(url, config.user_agent, accept="*/*"),
+            headers=_headers(accept="*/*"),
             allow_redirects=True,
             timeout=head_timeout,
             verify=config.verify_ssl,
         )
+        # A host can gate on the Referer itself: some answer 403 to any request
+        # that carries one, while an ordinary client gets 200.  That is cheap to
+        # disprove — one extra HEAD without Referer/Origin, once per host — and
+        # only when the rejected attempt actually sent a Referer.
+        if (
+            candidate.status_code in (401, 403)
+            and not session_manager.should_omit_referer(url)
+            and session_manager.mark_no_referer(url)
+        ):
+            log.info(
+                "PROBE %s answered %d with a Referer; retrying without one",
+                redact_secrets(url), candidate.status_code,
+            )
+            candidate = session.head(
+                url,
+                headers=_headers(accept="*/*"),
+                allow_redirects=True,
+                timeout=head_timeout,
+                verify=config.verify_ssl,
+            )
         if candidate.status_code < 400 and candidate.status_code != 405:
             ct = candidate.headers.get("Content-Type", "")
             # An HTML interstitial is not the file; fall through to the ranged
@@ -315,7 +360,8 @@ def _probe_impl(
             probe_timeout = _budgeted(connect, read)
             if probe_timeout is not None:
                 proven_size = _verify_range_support(
-                    session, url, config, probe_timeout
+                    session, url, config, probe_timeout,
+                    omit_referer=session_manager.should_omit_referer(url),
                 )
                 if proven_size:
                     # The 206 Content-Range is authoritative and also repairs a
@@ -329,21 +375,35 @@ def _probe_impl(
         timeout_tuple = _budgeted(connect, read) or (1.0, 1.0)
         r = session.get(
             url,
-            headers=build_browser_headers(
-                url, config.user_agent, range_header="bytes=0-0", accept="*/*"
-            ),
+            headers=_headers(range_header="bytes=0-0", accept="*/*"),
             stream=True,
             timeout=timeout_tuple,
             allow_redirects=True,
             verify=config.verify_ssl,
         )
 
+        # Same Referer rejection as the HEAD path, one layer down.
+        if (
+            r.status_code in (401, 403)
+            and not session_manager.should_omit_referer(url)
+            and session_manager.mark_no_referer(url)
+        ):
+            r.close()
+            r = session.get(
+                url,
+                headers=_headers(range_header="bytes=0-0", accept="*/*"),
+                stream=True,
+                timeout=timeout_tuple,
+                allow_redirects=True,
+                verify=config.verify_ssl,
+            )
+
         if r.status_code >= 400:
             r.close()
             try:
                 r = session.get(
                     url,
-                    headers=build_browser_headers(url, config.user_agent, accept="*/*"),
+                    headers=_headers(accept="*/*"),
                     stream=True,
                     timeout=timeout_tuple,
                     allow_redirects=True,

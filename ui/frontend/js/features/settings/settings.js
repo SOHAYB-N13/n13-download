@@ -63,11 +63,14 @@ _settingsDef() {
       fields: [
         { key: "max_concurrent", label: "Simultaneous downloads", hint: "How many files download at once", type: "range", min: 1, max: 10 },
         { key: "num_threads", label: "Connections per download", hint: "Parallel segments per file (higher = faster on good networks)", type: "range", min: 1, max: 64 },
-        { key: "connection_mode", label: "Connection mode", hint: "Smart picks the connection count automatically; Manual uses your fixed value", type: "select", options: [
-          { value: "smart", label: "Smart (recommended)" },
-          { value: "manual", label: "Manual" },
+        { key: "connection_mode", label: "Download mode", hint: "Auto adapts to the link and the server; the other modes trade peak speed for stability, or stability for peak speed", type: "select", options: [
+          { value: "auto", label: "Auto (recommended)" },
+          { value: "balanced", label: "Balanced" },
+          { value: "high_performance", label: "High performance" },
+          { value: "conservative", label: "Conservative" },
+          { value: "manual", label: "Manual (fixed connections)" },
         ] },
-        { key: "smart_max_connections", label: "Smart max connections", hint: "Ceiling Smart mode may use", type: "range", min: 1, max: 32 },
+        { key: "smart_max_connections", label: "Connection ceiling", hint: "Upper limit the adaptive modes may use", type: "range", min: 1, max: 32 },
         { key: "smart_adaptive", label: "Adaptive scaling", hint: "Gradually increase connections while the server stays stable", type: "toggle" },
       ],
     },

@@ -1,7 +1,7 @@
 # N13 Download Manager — Project Map (Phase 0 Discovery)
 
 **Generated**: 2026-11-18  
-**Version**: 1.4.6  
+**Version**: 1.4.7
 **Purpose**: Complete architecture inventory before transformation
 
 ---

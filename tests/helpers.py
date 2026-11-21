@@ -188,6 +188,61 @@ class SlowHandler(RangeHandler):
             pass
 
 
+class StallHandler(RangeHandler):
+    """Sends part of a range, then goes silent, then finishes.
+
+    A *silent* socket is not a rejection: the server accepted the request and
+    delivered bytes, then stopped.  The engine must treat this as a transport
+    hiccup — resume from the offset already on disk and keep the connection
+    count — rather than as an error that halves concurrency.
+    """
+
+    stall_after = 1024 * 1024        # bytes into the first response
+    stall_seconds = 2.0
+    stalls_left = 1
+    stall_events = 0                 # how many times a stall was served
+
+    def do_GET(self):
+        import time as _time
+        cls = type(self)
+        rng = self.headers.get("Range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+        else:
+            start = 0
+        chunk = DATA[start:]
+        if rng:
+            self.send_response(206)
+            self.send_header(
+                "Content-Range", f"bytes {start}-{len(DATA) - 1}/{len(DATA)}"
+            )
+        else:
+            self.send_response(200)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(chunk)))
+        self.end_headers()
+
+        try:
+            if cls.stalls_left > 0 and start == 0:
+                cls.stalls_left -= 1
+                cls.stall_events += 1
+                self.wfile.write(chunk[: cls.stall_after])
+                self.wfile.flush()
+                # Go silent with the connection still open.  The client's
+                # post-first-byte read timeout is what fires; the socket is
+                # never reset, so this is a stall and not a rejection.
+                _time.sleep(cls.stall_seconds)
+                # Resume where we stopped.  Re-sending from the start here
+                # would duplicate bytes, which the engine's seam check rightly
+                # rejects as corruption.
+                self.wfile.write(chunk[cls.stall_after:])
+            else:
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
 class BigRangeHandler(RangeHandler):
     """Serves LARGE_DATA (~9 MB) with correct Range support."""
 
@@ -219,6 +274,37 @@ class BigRangeHandler(RangeHandler):
             pass
 
 
+class RefererGateHandler(RangeHandler):
+    """Rejects any request that carries a ``Referer``.
+
+    The inverse of a hotlink gate: some plain file servers answer 403 to a
+    request that carries a Referer while serving the identical request without
+    one.  ``rejected`` counts how many were refused, so a test can prove the
+    fallback was actually exercised rather than the header never being sent.
+    """
+
+    rejected: int = 0
+
+    def _gate(self) -> bool:
+        if self.headers.get("Referer"):
+            RefererGateHandler.rejected += 1
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return True
+        return False
+
+    def do_HEAD(self):
+        if self._gate():
+            return
+        super().do_HEAD()
+
+    def do_GET(self):
+        if self._gate():
+            return
+        super().do_GET()
+
+
 class NotFoundHandler(RangeHandler):
     def do_HEAD(self):
         self.send_response(404)
@@ -238,6 +324,9 @@ class TestServer:
 
     def __enter__(self):
         RangeHandler.fail_requests = 0
+        RefererGateHandler.rejected = 0
+        StallHandler.stalls_left = 1
+        StallHandler.stall_events = 0
         self._thread.start()
         self.url = f"http://127.0.0.1:{self._srv.server_address[1]}/file.bin"
         return self

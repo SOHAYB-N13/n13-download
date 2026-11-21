@@ -608,6 +608,10 @@ class TaskManager(ProjectAdmissionMixin):
 
     def _snap(self, rec: _TaskRecord) -> TaskSnapshot:
         t = rec.task
+        # Evaluate the rate at snapshot time.  This is what makes an idle
+        # transfer read 0 B/s instead of holding its last value: the estimator
+        # only needs to be *read* to notice that no bytes are arriving.
+        t.refresh_speed()
         return TaskSnapshot(
             id=t.id,
             request=self._request_for(t),
@@ -1416,9 +1420,7 @@ class TaskManager(ProjectAdmissionMixin):
             if rec and rec.task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.COMPLETED):
                 rec.task.retry_count = (rec.task.retry_count or 0) + 1
                 rec.task.requeue(reason="")
-                rec.task.current_speed = 0.0
-                rec.task.average_speed = 0.0
-                rec.task.eta_seconds = None
+                rec.task.reset_speed()
                 rec.control = TaskControl()
                 self._save_task_locked(rec)
                 event = ("updated", self._snap(rec))
@@ -1537,14 +1539,25 @@ class TaskManager(ProjectAdmissionMixin):
     # ------------------------------------------------------------------
 
     def update_progress(self, task_id: str, completed: int, total: int) -> None:
-        """Coalesced progress update — emits an event at most every 120 ms."""
+        """Coalesced progress update — emits an event at most every 120 ms.
+
+        ``completed`` comes from :class:`core.progress.ProgressLedger`, which
+        never reports a value lower than one it already delivered.  A reported
+        ``0`` therefore means one thing only: the engine explicitly reset the
+        counter (it abandoned the ranged plan and restarted as a single
+        stream).  Every other value is forward-only.
+        """
         snap: Optional[TaskSnapshot] = None
         with self._lock:
             rec = self._tasks.get(task_id)
             if not rec or rec.removed:
                 return
-            rec.task.total_size = max(0, int(total))
-            rec.task.update_speed(completed)
+            if total:
+                rec.task.total_size = max(0, int(total))
+            if completed == 0 and rec.task.downloaded_size > 0:
+                rec.task.reset_progress()
+            else:
+                rec.task.update_speed(completed)
             now = time.monotonic()
             done = rec.task.total_size > 0 and rec.task.downloaded_size >= rec.task.total_size
             if done or (now - rec.last_emit >= self._PROGRESS_EMIT_INTERVAL):

@@ -47,6 +47,10 @@ class Analysis:
     # Lets the transfer start at the resolved URL instead of re-traversing the
     # redirect chain.  Task-scoped; never trusted without re-validation.
     final_url: str = ""
+    # Wall-clock seconds this analysis spent on the network.  The transfer
+    # subtracts it from its own pre-first-byte budget so the two phases share
+    # one overall deadline instead of adding up to ~33 s in the worst case.
+    probe_seconds: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -81,13 +85,16 @@ def analyze_url(
     from core.probe import probe_with_headers
 
     result = Analysis(url=url, probed_at=time.time())
+    started = time.monotonic()
     try:
         reachable, total, supports, filename, err, headers, final_url = probe_with_headers(
             url, config, session_manager, timeout, read_timeout
         )
     except Exception as exc:  # never leak a traceback to the UI
         result.error = str(exc)
+        result.probe_seconds = time.monotonic() - started
         return result
+    result.probe_seconds = time.monotonic() - started
 
     if not reachable:
         result.error = err or "Analysis failed"

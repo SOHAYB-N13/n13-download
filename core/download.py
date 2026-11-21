@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import random
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -49,9 +50,17 @@ from rich.progress import Progress
 
 from config.settings import AppConfig
 from core.context import DownloadContext
+from core.budget import ConnectionMeter, sync_connection_budget
 from core.merge import merge_parts
-from core.parts import DownloadPart, build_parts, remap_parts_for_resume
+from core.optimizer import MANUAL_MODE, is_adaptive
+from core.parts import (
+    DownloadPart,
+    build_direct_parts,
+    build_parts,
+    remap_parts_for_resume,
+)
 from core.probe import probe_url
+from core.progress import ProgressLedger
 from core.session import SessionManager
 from core.speed import SpeedTracker
 from core.state import DownloadState
@@ -62,6 +71,7 @@ from core.utils import (
     build_browser_headers,
     calculate_checksum,
     detect_hash_algorithm,
+    fit_filename,
     format_size,
     is_html_error_response,
     safe_rename,
@@ -256,6 +266,7 @@ class DownloadReport:
     expected_length: int = 0
     bytes_written: int = 0
     segments: List[SegmentReport] = field(default_factory=list)
+    peak_connections: int = 0       # measured client-side, not a server counter
     ttfb: Optional[float] = None
     duration: float = 0.0
     integrity: str = "failed"     # verified | unverifiable | failed
@@ -273,6 +284,7 @@ class DownloadReport:
             "expected_length": self.expected_length,
             "bytes_written": self.bytes_written,
             "segments": [s.to_dict() for s in self.segments],
+            "peak_connections": self.peak_connections,
             "ttfb": self.ttfb,
             "duration": round(self.duration, 3),
             "integrity": self.integrity,
@@ -316,9 +328,99 @@ _STARTUP_RETRY_BASE = 0.5
 _STARTUP_RETRY_CAP = 2.0
 
 # Pre-first-byte request timeouts (connect, read) — short so a dead-but-
-# accepting endpoint fails within a bounded time.  After the first byte the
-# regular (30, 120) download timeout applies.
+# accepting endpoint fails within a bounded time.
 _DOWNLOAD_TIMEOUT = (30, 120)
+
+#: Longest a healthy transfer may go without receiving a single byte before the
+#: connection is abandoned and re-issued from the offset already on disk.
+#:
+#: This is a *stall* threshold, not an inactivity timeout for the whole
+#: download: it only fires when the socket itself delivers nothing.  The old
+#: value (the 120 s read timeout above) meant a connection that went silent
+#: mid-transfer kept a governor slot for two minutes, which is exactly what
+#: "the speed drops to zero and then jumps back" looks like.  Twenty seconds is
+#: long enough that no healthy link trips it — bytes arriving at 10 KB/s still
+#: reset the clock every second.
+STALL_TIMEOUT = 20.0
+
+#: A stall is a transport hiccup, not a server rejection, so the retry is
+#: immediate-ish instead of walking the exponential backoff ladder.
+_STALL_RETRY_DELAY = 0.5
+
+
+def _response_socket(response):
+    """Find the live socket behind a streamed response, or ``None``.
+
+    urllib3 2.x clears ``HTTPConnection.sock`` as soon as a streamed response is
+    handed to the caller, so the only reliable route is the ``http.client``
+    response underneath: ``raw._fp`` (``HTTPResponse``) -> ``.fp``
+    (``BufferedReader``) -> ``.raw`` (``SocketIO``) -> ``._sock``.
+
+    Both layouts are tried because the older one is still valid for
+    non-streamed responses.  Returning ``None`` is not an error: the caller
+    then leaves the request's own timeout in place.
+    """
+    raw = getattr(response, "raw", None)
+    if raw is None:
+        return None
+    candidates = []
+    try:
+        conn = getattr(raw, "_connection", None)
+        if conn is not None:
+            candidates.append(getattr(conn, "sock", None))
+    except Exception:
+        pass
+    try:
+        inner = getattr(getattr(raw, "_fp", None), "fp", None)
+        inner = getattr(inner, "raw", None)
+        candidates.append(getattr(inner, "_sock", None))
+    except Exception:
+        pass
+    for sock in candidates:
+        if sock is not None:
+            return sock
+    return None
+
+
+def _is_timeout_like(exc: BaseException) -> bool:
+    """True when *exc* is, or wraps, a read timeout.
+
+    ``requests`` does not always surface a read timeout as
+    ``requests.exceptions.Timeout``: a timeout that urllib3 has already retried
+    inside the adapter arrives as a ``ConnectionError`` whose ``reason`` is the
+    original ``ReadTimeoutError``.  Classifying by type alone therefore misses
+    exactly the case the stall watchdog exists for, so the cause chain is
+    walked as well.
+
+    Only the *timeout* family counts.  A reset, a refused connection or an
+    HTTP error is a rejection and must keep its existing handling.
+    """
+    seen: set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (requests.exceptions.Timeout, socket.timeout)):
+            return True
+        if type(current).__name__ in ("ReadTimeoutError", "TimeoutError", "Timeout"):
+            return True
+        # urllib3 puts the real cause in ``reason``; requests and Python use
+        # the chaining attributes; and ``requests`` wraps the adapter's
+        # ``MaxRetryError`` positionally, so ``args[0]`` is walked too.
+        nxt: Optional[BaseException] = None
+        for candidate in (
+            getattr(current, "reason", None),
+            getattr(current, "__cause__", None),
+            getattr(current, "__context__", None),
+        ):
+            if isinstance(candidate, BaseException):
+                nxt = candidate
+                break
+        if nxt is None:
+            args = getattr(current, "args", ())
+            if args and isinstance(args[0], BaseException):
+                nxt = args[0]
+        current = nxt
+    return False
 
 
 def _retry_after_seconds(exc: BaseException) -> Optional[float]:
@@ -588,6 +690,45 @@ def _parts_within_directory(parts: List[DownloadPart], directory: Path) -> bool:
     return True
 
 
+def _carry_direct_coverage(
+    old_parts: List[DownloadPart], new_parts: List[DownloadPart],
+    file_tail: int,
+) -> None:
+    """Copy proven byte coverage into a new direct-write range plan.
+
+    Direct parts share the destination, so the bytes are already at their
+    absolute offsets.  Only the *knowledge* of which prefixes are complete
+    has to move: a new range keeps the contiguous prefix that the old ranges
+    prove was written.  Anything not proven is re-downloaded.
+    """
+    intervals: list[tuple[int, int]] = []
+    for part in old_parts:
+        written = min(part.written, part.size)
+        start = part.start
+        end = min(start + written, part.end + 1, file_tail)
+        if end > start:
+            intervals.append((start, end))
+    intervals.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    for part in new_parts:
+        position = part.start
+        while position <= part.end:
+            covering = next(
+                (span for span in merged if span[0] <= position < span[1]),
+                None,
+            )
+            if covering is None:
+                break
+            position = covering[1]
+        part.written = max(0, min(part.size, position - part.start))
+
+
 def _fallback_filename(url: str) -> str:
     """Best-effort file name from a URL when the probe supplied none.
 
@@ -637,6 +778,10 @@ class DownloadController:
         # Share one process-wide limiter so UI speed-cap changes apply immediately.
         sync_limiter_from_config(config)
         self._limiter: Optional[BandwidthLimiter] = get_global_limiter()
+        # Bound the *total* number of transfer sockets across every download,
+        # not just this one's.  See core/budget.py for why the product of
+        # per-download ceilings needs an explicit cap.
+        self._budget = sync_connection_budget(config)
         if self._limiter and self._limiter.enabled:
             self._print(
                 f"[dim]Speed limit: {format_size(self._limiter.max_rate)}/s[/dim]"
@@ -656,6 +801,9 @@ class DownloadController:
         self._report_state: Dict[str, Any] = {}
         self._first_byte = threading.Event()
         self._first_byte_hook: Optional[Callable[[], None]] = None
+        # Seconds the metadata probe already spent on this download, subtracted
+        # from the pre-first-byte budget so the two phases cannot add up.
+        self._startup_credit: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Per-download phase reporting
@@ -746,6 +894,7 @@ class DownloadController:
             expected_length=expected,
             bytes_written=written,
             segments=segments,
+            peak_connections=int(state.get("peak_connections") or 0),
             ttfb=marks.get("first_byte"),
             duration=timeline.elapsed if timeline is not None else 0.0,
             integrity=integrity,
@@ -793,7 +942,7 @@ class DownloadController:
 
     def _save_resume_state(self, state_mgr, url: str, total_size: int,
                            parts: List[DownloadPart], threads: int,
-                           entity_guard=None) -> bool:
+                           entity_guard=None, layout: str = "parts") -> bool:
         """Persist resume state, never letting a sidecar failure abort a transfer.
 
         ``DownloadState.save`` deliberately raises so callers *can* notice, but
@@ -813,6 +962,7 @@ class DownloadController:
                 last_modified=(
                     entity_guard.last_modified if entity_guard is not None else ""
                 ),
+                layout=layout,
             )
             return True
         except Exception as exc:  # noqa: BLE001 — auxiliary metadata only
@@ -832,12 +982,40 @@ class DownloadController:
         self-defeating: the first attempt would be cut off before the server
         could legitimately answer, and the retry would restart the wait from
         zero, failing a healthy server that was about to respond.
+
+        The time the *probe* already spent is subtracted (see
+        ``_startup_credit``), so metadata discovery and the transfer share one
+        overall deadline.  Before that they were additive — 13 s of probe plus
+        20 s of transfer — which is how a dead host reached the reported 35 s
+        before the user saw anything.
         """
         try:
             read = float(getattr(self.config, "startup_read_timeout", 0) or 0)
         except (TypeError, ValueError):
             read = 0.0
-        return max(_STARTUP_TOTAL_BUDGET, read + _STARTUP_BUDGET_MARGIN)
+        budget = max(_STARTUP_TOTAL_BUDGET, read + _STARTUP_BUDGET_MARGIN)
+        return max(_STARTUP_TOTAL_BUDGET * 0.4, budget - self._startup_credit)
+
+    def _tighten_read_timeout(self, response, timeout: float) -> None:
+        """Shorten this connection's read timeout once the body has started.
+
+        ``requests`` takes a single ``(connect, read)`` pair per request and
+        applies it to every read on the connection, so the timeout cannot be
+        changed through the public API mid-stream.  Setting it on the socket
+        takes effect on the very next read — which is what lets a stall be
+        noticed in seconds instead of waiting out the startup budget.
+
+        Every failure path is silent on purpose: if urllib3's internals move,
+        the original timeout stands and the transfer is merely slower to give
+        up, never wrong.
+        """
+        sock = _response_socket(response)
+        if sock is None:
+            return
+        try:
+            sock.settimeout(timeout)
+        except OSError:
+            pass
 
     def _startup_timeouts(self, first_byte_seen: bool,
                           deadline: Optional[float]) -> Optional[tuple]:
@@ -854,9 +1032,18 @@ class DownloadController:
         STARTING indefinitely.  Retries still matter for failures that are
         *fast* (a refused connection, an immediate 5xx, a reset), which is
         exactly where the remaining attempts and the 1 s backoff are spent.
+
+        After the first byte the read timeout becomes :data:`STALL_TIMEOUT`
+        (or the user's ``stall_timeout``), so a connection that goes silent
+        mid-transfer is abandoned in seconds instead of waiting out the generic
+        two-minute read timeout.
         """
         if first_byte_seen:
-            return _DOWNLOAD_TIMEOUT
+            try:
+                stall = float(getattr(self.config, "stall_timeout", 0) or 0)
+            except (TypeError, ValueError):
+                stall = 0.0
+            return (_DOWNLOAD_TIMEOUT[0], max(1.0, stall or STALL_TIMEOUT))
         remaining = None if deadline is None else deadline - time.monotonic()
         if remaining is not None and remaining <= 0.5:
             return None
@@ -998,15 +1185,14 @@ class DownloadController:
         part: DownloadPart,
         progress: Optional[Progress],
         task_id: Optional[int],
-        progress_lock: threading.Lock,
+        ledger: ProgressLedger,
         speed_tracker: SpeedTracker,
         total_size: int,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        shared_progress: Optional[dict] = None,
         control=None,
         optimizer=None,
         range_state: Optional["_RangeState"] = None,
         entity_guard: Optional["_EntityGuard"] = None,
+        meter: Optional[ConnectionMeter] = None,
     ) -> bool:
         """Download one byte-range part with retry, rate-limiting, and perf-optimised progress.
 
@@ -1014,11 +1200,11 @@ class DownloadController:
         ----------------------
         *   **Lock-free cancellation** — ``DownloadContext._cancel_event.is_set()``
             instead of ``is_cancelled()`` (which acquired a class-level mutex).
-        *   **Local byte accumulation** — each thread stores bytes internally and
-            flushes to shared progress + speed state only after every
-            ``_PROGRESS_FLUSH_THRESHOLD`` bytes (~256 KB).
-        *   **Throttled callbacks** — the external ``progress_callback`` is called
-            at most 20 times per second regardless of chunk size.
+        *   **Single progress source** — bytes go to a
+            :class:`core.progress.ProgressLedger`, which coalesces delivery and
+            guarantees the sink never sees a decreasing counter.  The old
+            per-part local accumulator plus a shared dict could deliver values
+            out of order, which the task layer misread as a restart.
         *   **Redundant Content-Type check** — reserved for the *first* attempt
             only; subsequent retries skip it because the probe already validated
             the response type.
@@ -1085,6 +1271,7 @@ class DownloadController:
                 self.config.user_agent,
                 range_header=f"bytes={range_start}-{part.end}",
                 accept="*/*",
+                omit_referer=self.session.should_omit_referer(url),
             )
             headers["Sec-Fetch-Dest"] = "empty"
             headers["Sec-Fetch-Mode"] = "no-cors"
@@ -1092,10 +1279,14 @@ class DownloadController:
             headers.pop("Sec-Fetch-User", None)
             headers.pop("Upgrade-Insecure-Requests", None)
 
-            # Bound before the request so the handler below can always flush
-            # whatever this attempt managed to write.
-            local_bytes = 0
-
+            # Take a slot in the process-wide connection budget for the life of
+            # this request.  Acquired *inside* the per-download governor slot so
+            # the two limits compose: the governor decides how much of this
+            # download runs at once, the budget decides how much of the machine
+            # is in use overall.
+            self._budget.acquire()
+            if meter is not None:
+                meter.enter()
             try:
                 with self.smart_request(url, headers=headers, stream=True,
                                         timeout=timeouts,
@@ -1220,31 +1411,34 @@ class DownloadController:
                                 )
                                 return False
 
-                    mode = "wb" if existing == 0 and range_start == part.start else "ab"
+                    if part.shared:
+                        # Direct layout: write this range at its absolute
+                        # offset in the destination.  The file is opened once
+                        # per worker (not per chunk); several workers can hold
+                        # independent handles on disjoint ranges safely on
+                        # Windows because each write is explicitly positioned.
+                        dest_mode = "r+b" if part.path.exists() else "w+b"
+                        dest = open(
+                            part.path, dest_mode, buffering=_PART_WRITE_BUFFER
+                        )
+                        dest.seek(range_start)
+                    else:
+                        mode = (
+                            "wb"
+                            if existing == 0 and range_start == part.start
+                            else "ab"
+                        )
+                        dest = open(part.path, mode, buffering=_PART_WRITE_BUFFER)
 
-                    with open(part.path, mode, buffering=_PART_WRITE_BUFFER) as dest:
-                        # Local byte accumulator — reduces lock frequency
-                        # by batching small writes into larger flushes.
-                        local_bytes = 0
-                        last_cb_time = 0.0
-                        last_flush_time = 0.0
-
+                    with dest:
                         for raw_chunk in response.iter_content(chunk_size):
                             if cancel_event.is_set() or self._ctl_cancelled(control):
-                                # Flush remaining local progress before exit.
-                                if local_bytes > 0 and shared_progress is not None:
-                                    with progress_lock:
-                                        shared_progress["completed"] += local_bytes
                                 return False
 
                             # Pause barrier #1: stop at this chunk boundary.
                             # Blocks efficiently (event wait, no busy loop) until
                             # the task is resumed or cancelled.
                             if not self._ctl_wait(control):
-                                # Flush remaining local progress before exit.
-                                if local_bytes > 0 and shared_progress is not None:
-                                    with progress_lock:
-                                        shared_progress["completed"] += local_bytes
                                 return False
 
                             if not raw_chunk:
@@ -1264,60 +1458,39 @@ class DownloadController:
                             # transfer cannot keep writing megabytes while the
                             # task reports PAUSED.
                             if not self._ctl_wait(control):
-                                # Flush remaining local progress before exit.
-                                if local_bytes > 0 and shared_progress is not None:
-                                    with progress_lock:
-                                        shared_progress["completed"] += local_bytes
                                 return False
 
                             chunk_len = len(raw_chunk)
                             dest.write(raw_chunk)
+                            if part.shared:
+                                part.advance(chunk_len)
                             if not first_byte_seen:
                                 first_byte_seen = True
+                                # ``requests`` applies one timeout to every read
+                                # on a connection, so a stall inside the *first*
+                                # attempt would otherwise wait out the whole
+                                # pre-first-byte budget (15 s by default) before
+                                # the stall path could see it.  Now that the body
+                                # has started, drop the socket to the stall
+                                # timeout so a silent connection is abandoned in
+                                # seconds.
+                                self._tighten_read_timeout(
+                                    response, self._startup_timeouts(True, None)[1]
+                                )
                                 self._fire_first_byte()
                             bytes_remaining -= chunk_len
-                            local_bytes += chunk_len
 
-                            # Flush local state to shared counters on a byte OR
-                            # time basis: bytes bound the lock traffic, time
-                            # bounds how stale the UI can get.
-                            now = time.monotonic()
-                            if (local_bytes >= _PROGRESS_FLUSH_THRESHOLD
-                                    or now - last_flush_time >= _PROGRESS_FLUSH_INTERVAL):
-                                with progress_lock:
-                                    if progress is not None and task_id is not None:
-                                        progress.update(task_id, advance=local_bytes)
-                                    if shared_progress is not None:
-                                        shared_progress["completed"] += local_bytes
-                                        completed_val = shared_progress["completed"]
-                                speed_tracker.add(local_bytes)
-                                local_bytes = 0
-                                last_flush_time = now
-
-                                # Throttled progress callback (max ~20 Hz).
-                                if progress_callback and shared_progress is not None:
-                                    if now - last_cb_time >= _CALLBACK_INTERVAL:
-                                        self._notify_progress(
-                                            progress_callback, completed_val, total_size
-                                        )
-                                        last_cb_time = now
+                            # One counter, one delivery path.  The ledger
+                            # coalesces by time and by byte threshold, and
+                            # serialises delivery so the sink can never observe
+                            # a value lower than one it already saw.
+                            ledger.add(chunk_len)
+                            speed_tracker.add(chunk_len)
+                            if progress is not None and task_id is not None:
+                                progress.update(task_id, advance=chunk_len)
 
                             if bytes_remaining <= 0:
                                 break
-
-                        # Final flush of any remaining local bytes.
-                        if local_bytes > 0:
-                            with progress_lock:
-                                if progress is not None and task_id is not None:
-                                    progress.update(task_id, advance=local_bytes)
-                                if shared_progress is not None:
-                                    shared_progress["completed"] += local_bytes
-                                    completed_val = shared_progress["completed"]
-                            speed_tracker.add(local_bytes)
-                            if progress_callback and shared_progress is not None:
-                                self._notify_progress(
-                                    progress_callback, completed_val, total_size
-                                )
 
                 if part.is_complete:
                     part.done = True
@@ -1325,19 +1498,44 @@ class DownloadController:
 
             except (requests.RequestException, OSError, ConnectionError) as exc:
                 retryable, status = _is_retryable_exception(exc)
-                # Count this attempt's unflushed tail before deciding whether to
-                # retry.  Those bytes are already in the file (the handle closes
-                # on the way out) and the retry resumes from them, so dropping
-                # them from the counter would make the displayed progress jump
-                # forward later.  Never allowed to go backwards.
-                if local_bytes and shared_progress is not None:
-                    with progress_lock:
-                        if progress is not None and task_id is not None:
-                            progress.update(task_id, advance=local_bytes)
-                        shared_progress["completed"] += local_bytes
-                    speed_tracker.add(local_bytes)
-                    local_bytes = 0
+                # A 401/403 on a request that carried a Referer may be *caused*
+                # by that Referer: some servers reject any request bearing one
+                # while answering the identical request without it.  Disprove it
+                # once per host, immediately and without spending the retry
+                # ladder — the attempt counter still advances, so this can never
+                # loop.
+                if (
+                    status in (401, 403)
+                    and not self.session.should_omit_referer(url)
+                    and self.session.mark_no_referer(url)
+                ):
+                    self._print(
+                        "[yellow]Server rejected the request while a Referer "
+                        "was sent; retrying without one.[/yellow]"
+                    )
+                    continue
+                # Every retry — stall, reset, timeout — is evidence that the
+                # sockets this plan holds are not being served.  The controller
+                # halves on a storm; a stable-but-slow link never collapses, so
+                # this is the only signal that can shrink the plan there.
                 if optimizer is not None:
+                    try:
+                        optimizer.note_retry()
+                    except Exception:  # pragma: no cover
+                        pass
+                # Every byte the ledger counted is already in the part file (the
+                # handle closes on the way out) and the retry resumes from it,
+                # so there is nothing to reconcile here any more — the old
+                # "flush the local tail" step existed only because the counter
+                # was batched in user space.
+                #
+                # A read timeout *after* the first byte means the connection
+                # went silent: the server is not rejecting us, so this is not a
+                # reason to halve concurrency (which on_server_error does for
+                # status codes and refusals).  Re-issue the range from the
+                # offset already on disk and keep the connection count.
+                stalled = first_byte_seen and _is_timeout_like(exc)
+                if optimizer is not None and not stalled:
                     try:
                         optimizer.on_server_error(status)
                     except Exception:
@@ -1370,6 +1568,17 @@ class DownloadController:
                     started=first_byte_seen,
                     retry_after=_retry_after_seconds(exc),
                 )
+                if stalled:
+                    # A silent socket is a transport hiccup, not a rejection:
+                    # do not walk the exponential ladder, and say what happened
+                    # so a user who sees a dip understands it.
+                    delay = min(delay, _STALL_RETRY_DELAY)
+                    self._print(
+                        f"[yellow]Part {part.index}: no data for "
+                        f"{self._startup_timeouts(True, None)[1]:.0f}s — "
+                        f"resuming from byte {part.start + part.downloaded_size}"
+                        "[/yellow]"
+                    )
                 if not first_byte_seen:
                     # No body byte yet: these attempts are cheap, so never sleep
                     # the exponential ladder's long tail and never sleep past the
@@ -1386,6 +1595,10 @@ class DownloadController:
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
+            finally:
+                if meter is not None:
+                    meter.exit()
+                self._budget.release()
 
         return False
 
@@ -1396,8 +1609,9 @@ class DownloadController:
         self,
         url: str,
         file_path: Path,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
+        ledger: ProgressLedger,
         control=None,
+        meter: Optional[ConnectionMeter] = None,
     ) -> bool:
         tmp_path = file_path.with_suffix(file_path.suffix + self.config.temp_extension)
         speed_tracker = SpeedTracker(
@@ -1446,8 +1660,12 @@ class DownloadController:
                 self.config.user_agent,
                 range_header=range_header,
                 accept="*/*",
+                omit_referer=self.session.should_omit_referer(url),
             )
 
+            self._budget.acquire()
+            if meter is not None:
+                meter.enter()
             try:
                 with self.smart_request(url, headers=headers, stream=True,
                                         timeout=timeouts,
@@ -1513,12 +1731,11 @@ class DownloadController:
                         )
                         downloaded = resume_from
                         mode = "ab" if resume_from > 0 else "wb"
+                        # The single-stream path shares the caller's ledger so a
+                        # fallback restart is an explicit, ordered reset rather
+                        # than a counter that silently rewinds.
+                        ledger.set_total(total)
                         with open(tmp_path, mode, buffering=_PART_WRITE_BUFFER) as dest:
-                            # Local byte accumulator for batched progress updates.
-                            local_bytes = 0
-                            last_cb_time = 0.0
-                            last_flush_time = 0.0
-
                             for raw_chunk in response.iter_content(chunk_size):
                                 if cancel_event.is_set() or self._ctl_cancelled(control):
                                     return False
@@ -1537,43 +1754,21 @@ class DownloadController:
                                     return False
 
                                 dest.write(raw_chunk)
-                                downloaded += len(raw_chunk)
-                                local_bytes += len(raw_chunk)
+                                chunk_len = len(raw_chunk)
+                                downloaded += chunk_len
                                 if not first_byte_seen:
                                     first_byte_seen = True
                                     self._fire_first_byte()
 
-                                # Flush on bytes OR on time: the read slice
-                                # bounds how stale the byte counter can get, and
-                                # the interval keeps a fast link from flooding
-                                # the UI with events.
-                                now = time.monotonic()
-                                if (local_bytes >= _PROGRESS_FLUSH_THRESHOLD
-                                        or now - last_flush_time >= _PROGRESS_FLUSH_INTERVAL):
-                                    if progress is not None and task_id is not None:
-                                        progress.update(
-                                            task_id, advance=local_bytes
-                                        )
-                                    speed_tracker.add(local_bytes)
-                                    local_bytes = 0
-                                    last_flush_time = now
-
-                                    if progress_callback and now - last_cb_time >= _CALLBACK_INTERVAL:
-                                        self._notify_progress(
-                                            progress_callback, downloaded, total
-                                        )
-                                        last_cb_time = now
-
-                            # Final flush.
-                            if local_bytes > 0:
+                                ledger.add(chunk_len)
+                                speed_tracker.add(chunk_len)
                                 if progress is not None and task_id is not None:
-                                    progress.update(task_id, advance=local_bytes)
-                                speed_tracker.add(local_bytes)
-                                if progress_callback:
-                                    self._notify_progress(
-                                        progress_callback, downloaded, total
-                                    )
+                                    progress.update(task_id, advance=chunk_len)
 
+                            # Publish the exact final count: the per-chunk
+                            # reports are coalesced, so without this the last
+                            # few hundred kilobytes never reach the UI.
+                            ledger.report(force=True)
                             dest.flush()
 
                 if (
@@ -1591,6 +1786,17 @@ class DownloadController:
 
             except (requests.RequestException, OSError) as exc:
                 retryable, status = _is_retryable_exception(exc)
+                # Same Referer-rejection fallback as the part path.
+                if (
+                    status in (401, 403)
+                    and not self.session.should_omit_referer(url)
+                    and self.session.mark_no_referer(url)
+                ):
+                    self._print(
+                        "[yellow]Server rejected the request while a Referer "
+                        "was sent; retrying without one.[/yellow]"
+                    )
+                    continue
                 if not retryable or attempt >= max_retries or (
                     not first_byte_seen and attempt >= startup_attempts
                 ):
@@ -1626,6 +1832,10 @@ class DownloadController:
                 if not _interruptible_sleep(delay, control):
                     return False
                 continue
+            finally:
+                if meter is not None:
+                    meter.exit()
+                self._budget.release()
 
         return False
 
@@ -1682,6 +1892,7 @@ class DownloadController:
             self.config.user_agent,
             range_header="bytes=0-0",
             accept="*/*",
+            omit_referer=self.session.should_omit_referer(url),
         )
         try:
             with self.smart_request(
@@ -1742,6 +1953,7 @@ class DownloadController:
             self.config.user_agent,
             range_header=f"bytes={start}-{end}",
             accept="*/*",
+            omit_referer=self.session.should_omit_referer(url),
         )
         try:
             response = self.smart_request(
@@ -1787,7 +1999,10 @@ class DownloadController:
             take = min(part.size - offset, end - position + 1)
             try:
                 with open(part.path, "rb") as handle:
-                    handle.seek(offset)
+                    # A direct-write part shares the destination file, so its
+                    # intra-part offset must be translated to the file's
+                    # absolute offset.  Legacy .partN files stay at zero.
+                    handle.seek(part.start + offset if part.shared else offset)
                     assembled += handle.read(take)
             except OSError:
                 return True, ""
@@ -1843,10 +2058,23 @@ class DownloadController:
         block begins and would otherwise leave ``last_report`` at ``None``.
         """
         self._report = None
+        # One meter per attempt.  It counts real simultaneous requests, which
+        # is the honest replacement for the harness's server-side peak counter.
+        self._meter = ConnectionMeter()
         self._report_state = {
             "strategy": "", "range_supported": False, "expected_length": 0,
             "length_known": False, "parts": [], "validation": "",
         }
+        # Register this transfer so every download sees the same fair share of
+        # the process-wide connection budget (see ConnectionBudget.fair_share).
+        try:
+            self._budget.enter_task()
+        except Exception:  # pragma: no cover - bookkeeping must never fail a download
+            pass
+        # Bound before the call: if the implementation raises, the ``finally``
+        # below still needs a value, and an UnboundLocalError there would mask
+        # the real exception.
+        outcome = False
         try:
             outcome = self._download_file_impl(
                 url, directory, verify_checksum, expected_hash,
@@ -1855,6 +2083,14 @@ class DownloadController:
             )
             return outcome
         finally:
+            try:
+                self._budget.exit_task()
+            except Exception:  # pragma: no cover
+                pass
+            try:
+                self._report_state["peak_connections"] = self._meter.peak
+            except Exception:  # pragma: no cover - diagnostics only
+                pass
             # The return value is the only authoritative success signal: the
             # timeline's "done" mark also fires on a failed single-stream
             # attempt, so inferring success from it would mislabel failures.
@@ -1888,12 +2124,28 @@ class DownloadController:
             else None
         )
         self._timeline.mark("requested")
+        self._startup_credit = float(
+            getattr(pre_analysis, "probe_seconds", 0.0) or 0.0
+        )
         self.wait_for_schedule(control)
         if self._ctl_cancelled(control):
             self._print("[yellow]Download cancelled before it started.[/yellow]")
             DownloadContext.clear()
             return False
-        directory.mkdir(parents=True, exist_ok=True)
+        # An unusable destination must fail this download, not raise out of it.
+        # ``mkdir`` raises NotADirectoryError when a path component is a file,
+        # PermissionError for a read-only folder, and OSError for a bad drive —
+        # all of which are the user's situation to fix, not a crash to surface
+        # as a traceback.  ``last_error`` carries the reason to the UI.
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.last_error = (
+                f"Cannot use the destination folder {directory}: {exc.strerror or exc}"
+            )
+            self._print(f"[red]{self.last_error}[/red]")
+            DownloadContext.clear()
+            return False
 
         # Use a fresh pre-analysis (ANALYZING step) when available to avoid a
         # second network probe; otherwise probe here as before.  A FAILED probe
@@ -2006,7 +2258,18 @@ class DownloadController:
                 "single-thread mode[/yellow]"
             )
 
-        file_path = unique_filepath(directory, filename)
+        # A direct-layout resume keeps its partial bytes in the destination
+        # itself.  If the matching .dlstate exists, that file belongs to this
+        # download and must be reused; the normal "avoid overwriting" rename
+        # would strand it as file (1).bin and silently restart the transfer.
+        resume_candidate = directory / fit_filename(directory, filename)
+        resume_candidate_state = resume_candidate.with_suffix(
+            resume_candidate.suffix + self.config.state_extension
+        )
+        if resume_candidate_state.exists():
+            file_path = resume_candidate
+        else:
+            file_path = unique_filepath(directory, filename)
         if file_path.name != filename:
             self._print(f"[yellow]⚠ Using unique path: {file_path.name}[/yellow]")
         self._notify_status(path_callback, str(file_path))
@@ -2014,7 +2277,16 @@ class DownloadController:
         state_path = file_path.with_suffix(file_path.suffix + self.config.state_extension)
         can_resume = supports_range and total_size > 0
 
-        if file_path.exists() and total_size > 0 and file_path.stat().st_size == total_size:
+        # A direct-layout partial file can reach its full logical length once
+        # the last range has written its tail, before validation has proved all
+        # ranges present.  Its .dlstate is authoritative in that case, so a
+        # full-sized file with a live state must never be treated as complete.
+        if (
+            file_path.exists()
+            and total_size > 0
+            and file_path.stat().st_size == total_size
+            and not state_path.exists()
+        ):
             self._print(f"[green]✓ Already complete: {file_path}")
             self._timeline.mark("done")
             self._log_timeline(url, "already-complete")
@@ -2027,11 +2299,18 @@ class DownloadController:
         self._notify_status(status_callback, "CONNECTING")
         self._timeline.mark("connect")
 
+        # One progress ledger per download attempt, shared by the ranged and
+        # the single-stream paths so a fallback restart is an explicit reset.
+        ledger = ProgressLedger(
+            total=total_size, initial=0, callback=progress_callback
+        )
+
         if not can_resume:
             self._report_state["strategy"] = "single-stream"
             try:
                 ok = self.single_thread_download(
-                    transfer_url, file_path, progress_callback, control=control
+                    transfer_url, file_path, ledger, control=control,
+                    meter=self._meter,
                 )
                 self._timeline.mark("done")
                 self._log_timeline(url, "ok" if ok else "failed")
@@ -2080,18 +2359,33 @@ class DownloadController:
         effective_threads = self.config.num_threads
         optimizer = None
         governor = None
+        layout = "parts"            # "parts" = .partN + merge; "direct" = final file
 
-        # ---- Smart / Manual connection mode ---------------------------
-        if getattr(self.config, "connection_mode", "manual") == "smart":
-            from core.optimizer import SmartOptimizer
+        # ---- Adaptive / Manual connection mode ------------------------
+        # "manual" keeps the fixed thread count; every other value selects a
+        # mode policy that changes how the adaptive controller behaves, not
+        # just how many connections it is allowed.
+        if is_adaptive(getattr(self.config, "connection_mode", MANUAL_MODE)):
+            from core.optimizer import SmartOptimizer, policy_for
 
+            mode = getattr(self.config, "connection_mode", "auto")
             optimizer = SmartOptimizer(
                 max_connections=getattr(self.config, "smart_max_connections", 8),
                 adaptive=getattr(self.config, "smart_adaptive", True),
                 on_status=smart_callback,
                 log=self._print,
+                policy=policy_for(mode),
             )
-            effective_threads, governor = optimizer.start(total_size, supports_range)
+            # Fair share first: the plan width and the starting connection
+            # count must already respect the other downloads in flight, or the
+            # first thing this transfer does is take every slot.
+            try:
+                optimizer.set_fair_ceiling(self._budget.fair_share())
+            except Exception:  # pragma: no cover
+                pass
+            effective_threads, governor = optimizer.start(
+                total_size, supports_range, self.config.min_part_size
+            )
             if self._limiter is not None and self._limiter.enabled:
                 optimizer.set_speed_limited(True)
         else:
@@ -2100,6 +2394,7 @@ class DownloadController:
         if loaded is not None:
             saved_threads = loaded.num_threads
             old_parts = loaded.parts
+            layout = loaded.layout
             if not _parts_within_directory(old_parts, directory):
                 self._print(
                     "[yellow]Resume state rejected (invalid part paths). "
@@ -2108,6 +2403,30 @@ class DownloadController:
                 state_mgr.delete()
                 loaded = None
                 parts = None
+            elif layout == "direct":
+                # The final file is the resume medium.  A state file written
+                # before a crash can be behind what actually reached disk, but
+                # never ahead if we clamp each prefix to the file's real tail;
+                # re-downloading a few bytes is safe, trusting a stale offset
+                # is not.
+                available_tail = file_path.stat().st_size if file_path.exists() else 0
+                for part in old_parts:
+                    reachable = max(0, min(part.end + 1, available_tail) - part.start)
+                    part.written = min(part.written, reachable)
+                if saved_threads == effective_threads:
+                    parts = old_parts
+                    self._print("[cyan]Resuming previous download...[/cyan]")
+                else:
+                    self._print(
+                        "[yellow]Thread count changed "
+                        f"({saved_threads}→{effective_threads}); "
+                        "remapping ranges...[/yellow]"
+                    )
+                    parts = build_direct_parts(
+                        total_size, effective_threads, file_path,
+                        self.config.min_part_size,
+                    )
+                    _carry_direct_coverage(old_parts, parts, available_tail)
             elif saved_threads == effective_threads:
                 parts = old_parts
                 self._print("[cyan]Resuming previous download...[/cyan]")
@@ -2123,27 +2442,56 @@ class DownloadController:
                     file_path,
                     self.config.min_part_size,
                 )
-                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+            if parts is not None and parts is not old_parts:
+                self._save_resume_state(
+                    state_mgr, url, total_size, parts, effective_threads,
+                    entity_guard, layout=layout,
+                )
         else:
             parts = None
 
         if parts is None:
-            parts = build_parts(
-                total_size,
-                effective_threads,
-                file_path,
-                self.config.min_part_size,
-            )
+            use_direct = supports_range and total_size > 0 and effective_threads > 1
+            if use_direct:
+                # Write each range straight into its final offset.  There is no
+                # whole-file merge to run afterwards, so post processing is
+                # validation only.  Resume state keeps per-range prefixes.
+                parts = build_direct_parts(
+                    total_size, effective_threads, file_path,
+                    self.config.min_part_size,
+                )
+                layout = "direct"
+                try:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.touch(exist_ok=True)
+                except OSError as exc:
+                    self.last_error = (
+                        f"Cannot create the destination file {file_path}: {exc}"
+                    )
+                    self._print(f"[red]{self.last_error}[/red]")
+                    DownloadContext.clear()
+                    return False
+            else:
+                parts = build_parts(
+                    total_size,
+                    effective_threads,
+                    file_path,
+                    self.config.min_part_size,
+                )
+                layout = "parts"
             effective_threads = len(parts)
             if (
-                getattr(self.config, "connection_mode", "manual") != "smart"
+                not is_adaptive(getattr(self.config, "connection_mode", MANUAL_MODE))
                 and effective_threads < self.config.num_threads
             ):
                 self._print(
                     f"[yellow]⚠ Reduced threads to {effective_threads} "
                     f"for file size {format_size(total_size)}[/yellow]"
                 )
-            self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+            self._save_resume_state(
+                state_mgr, url, total_size, parts, effective_threads,
+                entity_guard, layout=layout,
+            )
 
         # Expose the segment plan to the diagnostics record while the parts are
         # still live: after a merge they are deleted, so reading their sizes
@@ -2154,7 +2502,9 @@ class DownloadController:
         # announces it from _fire_first_byte() when the first body byte lands,
         # so the task stays in STARTING while the parts are still connecting.
         # Announcing it here made a silent server look like a running transfer.
-        DownloadContext.begin(state_mgr, url, total_size, parts, effective_threads)
+        DownloadContext.begin(
+            state_mgr, url, total_size, parts, effective_threads, layout=layout
+        )
 
         already_bytes = sum(p.downloaded_size for p in parts)
         pending_parts = [p for p in parts if not p.is_complete]
@@ -2165,7 +2515,30 @@ class DownloadController:
         )
         speed_tracker.seed(already_bytes)
 
-        progress_lock = threading.Lock()
+        # A direct layout has no .partN files whose length can recover progress
+        # after SIGKILL.  Checkpoint the per-range prefixes periodically; a
+        # crash can lose at most one interval, and conservative clamping on
+        # resume makes even a stale snapshot safe to continue from.
+        checkpoint_stop = threading.Event()
+        checkpoint_thread: Optional[threading.Thread] = None
+
+        def _stop_checkpoint() -> None:
+            checkpoint_stop.set()
+            if checkpoint_thread is not None:
+                checkpoint_thread.join(timeout=2)
+
+        if layout == "direct" and pending_parts:
+            def _checkpoint_loop() -> None:
+                while not checkpoint_stop.wait(5.0):
+                    self._save_resume_state(
+                        state_mgr, url, total_size, parts, effective_threads,
+                        entity_guard, layout=layout,
+                    )
+
+            checkpoint_thread = threading.Thread(
+                target=_checkpoint_loop, name="n13-checkpoint", daemon=True
+            )
+            checkpoint_thread.start()
 
         try:
             if pending_parts:
@@ -2184,10 +2557,9 @@ class DownloadController:
                         if progress is not None
                         else None
                     )
-                    shared_progress = {"completed": already_bytes}
 
-                    # Smart mode: feed the optimizer from the throttled progress
-                    # path and (when adaptive) pace segment concurrency.
+                    # Smart mode: feed the optimizer from the (coalesced)
+                    # progress path so it observes aggregate throughput.
                     if optimizer is not None:
                         _base_cb = progress_callback
 
@@ -2201,7 +2573,15 @@ class DownloadController:
 
                         progress_callback = _smart_cb
 
-                    self._notify_progress(progress_callback, already_bytes, total_size)
+                    # The single source of truth for "bytes written" during
+                    # this transfer.  Monotonic by construction, coalesced, and
+                    # serialised so the UI can never see it go backwards.
+                    # Reuse the attempt's ledger so a later single-stream
+                    # fallback resets the same counter the UI is watching.
+                    ledger.set_callback(progress_callback)
+                    ledger.set_total(total_size)
+                    ledger.raise_to(already_bytes)
+                    ledger.report(force=True)
 
                     failed_parts: List[DownloadPart] = []
                     pool = _new_part_pool(
@@ -2218,37 +2598,23 @@ class DownloadController:
                                 part,
                                 progress,
                                 task_id,
-                                progress_lock,
+                                ledger,
                                 speed_tracker,
                                 total_size,
-                                progress_callback,
-                                shared_progress,
                                 control,
                                 optimizer=optimizer,
                                 range_state=range_state,
                                 entity_guard=entity_guard,
+                                meter=self._meter,
                             )
                         finally:
-                            # Re-derive the counter from what is actually on
-                            # disk.  A failed attempt loses the bytes it had
-                            # buffered but not yet flushed, so the running
-                            # counter could sit below the truth and then jump
-                            # forward at the end.  Reading the parts back is
-                            # O(parts) stats — negligible, and it makes the
-                            # displayed number monotonic and honest.
-                            if shared_progress is not None:
-                                with progress_lock:
-                                    # ``downloaded_size`` stats the file, and the
-                                    # part handles are 8 MB-buffered, so the sum
-                                    # can LAG the byte counter the part threads
-                                    # have been adding.  Reconcile upwards only:
-                                    # assigning it outright made progress go
-                                    # backwards whenever a part finished while
-                                    # another still had buffered data.
-                                    shared_progress["completed"] = max(
-                                        shared_progress["completed"],
-                                        sum(p.downloaded_size for p in parts),
-                                    )
+                            # Reconcile upwards against what is actually on
+                            # disk: the part handles are buffered, so the sum of
+                            # part sizes can lag the ledger.  Never lower it —
+                            # that would make the bar jump backwards when one
+                            # part finishes while another still has data in
+                            # flight.
+                            ledger.raise_to(sum(p.downloaded_size for p in parts))
                             if governor is not None:
                                 governor.release()
 
@@ -2267,18 +2633,19 @@ class DownloadController:
                         # abandoned); the executor has nothing left to own.
                         pool.shutdown(wait=False)
 
-                    completed = sum(p.downloaded_size for p in parts)
-                    with progress_lock:
-                        if progress is not None and task_id is not None:
-                            progress.update(
-                                task_id, completed=completed, total=total_size
-                            )
+                    completed = max(
+                        ledger.completed, sum(p.downloaded_size for p in parts)
+                    )
+                    if progress is not None and task_id is not None:
+                        progress.update(
+                            task_id, completed=completed, total=total_size
+                        )
 
-                    self._notify_progress(progress_callback, completed, total_size)
+                    ledger.report(force=True)
                     self._timeline.mark("transferred")
 
                 if self._ctl_cancelled(control):
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard, layout=layout)
                     self.last_error = "Cancelled"
                     self._print(
                         "[yellow]Download cancelled. State saved for resume.[/yellow]"
@@ -2296,6 +2663,7 @@ class DownloadController:
                         "[yellow]⚠ Server does not honour byte ranges for this "
                         "file — switching to a single stream.[/yellow]"
                     )
+                    _stop_checkpoint()
                     for stale in parts:
                         stale.path.unlink(missing_ok=True)
                     state_mgr.delete()
@@ -2303,8 +2671,13 @@ class DownloadController:
                     # produced the file.
                     self._report_state.update(strategy="single-stream", parts=[])
                     try:
+                        # The plan was abandoned: reset the shared counter so the
+                        # bar restarts at zero instead of sitting at the bytes
+                        # the discarded parts had collected.
+                        ledger.reset(0)
                         ok = self.single_thread_download(
-                            transfer_url, file_path, progress_callback, control=control
+                            transfer_url, file_path, ledger, control=control,
+                            meter=self._meter,
                         )
                         self._timeline.mark("done")
                         self._log_timeline(url, "ok (single-stream fallback)")
@@ -2313,7 +2686,7 @@ class DownloadController:
                         DownloadContext.clear()
 
                 if failed_parts:
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard, layout=layout)
                     self.last_error = (
                         self.last_error
                         or f"{len(failed_parts)} part(s) failed — will resume on retry"
@@ -2325,7 +2698,7 @@ class DownloadController:
                     return False
 
                 if not all(p.is_complete for p in parts):
-                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
+                    self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard, layout=layout)
                     self.last_error = self.last_error or "Some parts incomplete — will resume on retry"
                     self._print("[bold red]Some parts incomplete. Re-run to resume.")
                     return False
@@ -2341,18 +2714,16 @@ class DownloadController:
                 if not layout_ok:
                     self._save_resume_state(
                         state_mgr, url, total_size, parts, effective_threads,
-                        entity_guard,
+                        entity_guard, layout=layout,
                     )
                     self.last_error = layout_err
                     self._print(f"[bold red]{layout_err}")
                     self._log_timeline(url, "layout-mismatch")
                     return False
 
-            self._notify_status(status_callback, "MERGING")
-            self._timeline.mark("merge")
-            # Freeze the per-segment accounting here: a successful merge deletes
-            # the part files, and their sizes are the only record of what each
-            # segment actually delivered.
+            # Freeze the per-segment accounting here: after a legacy merge the
+            # part files are deleted, and their sizes are the only record of
+            # what each segment actually delivered.
             self._report_state["segments"] = [
                 SegmentReport(
                     index=p.index, start=p.start, end=p.end,
@@ -2361,16 +2732,28 @@ class DownloadController:
                 )
                 for p in parts
             ]
-            merge_expected = total_size if self.config.verify_size else 0
-            ok, merge_err = merge_parts(
-                parts, file_path, self.config.buffer_size, expected_size=merge_expected
-            )
-            if not ok:
-                self._save_resume_state(state_mgr, url, total_size, parts, effective_threads, entity_guard)
-                self.last_error = merge_err
-                self._print(f"[red]{merge_err}. Parts preserved for retry.")
-                self._log_timeline(url, "merge-failed")
-                return False
+            if layout == "direct":
+                # Bytes already live at their final offsets.  The completion
+                # gate below reads the destination itself, so no extra
+                # full-file copy is needed.
+                ok, merge_err = True, ""
+            else:
+                self._notify_status(status_callback, "MERGING")
+                self._timeline.mark("merge")
+                merge_expected = total_size if self.config.verify_size else 0
+                ok, merge_err = merge_parts(
+                    parts, file_path, self.config.buffer_size,
+                    expected_size=merge_expected,
+                )
+                if not ok:
+                    self._save_resume_state(
+                        state_mgr, url, total_size, parts, effective_threads,
+                        entity_guard, layout=layout,
+                    )
+                    self.last_error = merge_err
+                    self._print(f"[red]{merge_err}. Parts preserved for retry.")
+                    self._log_timeline(url, "merge-failed")
+                    return False
 
             if verify_checksum and expected_hash:
                 self._notify_status(status_callback, "VERIFYING")
@@ -2403,24 +2786,34 @@ class DownloadController:
             if not output_ok:
                 self.last_error = output_err
                 self._print(f"[bold red]{output_err}")
-                # The parts are still on disk, so a retry can resume; the
-                # failed output is removed so it cannot be mistaken for a
-                # finished download later.
+                # Legacy parts are still on disk, so a retry can resume.  A
+                # direct file that failed the completion gate is not safe to
+                # resume: its checksum or length is already known to be wrong,
+                # so discard both it and its sidecar and start clean next time.
+                _stop_checkpoint()
                 try:
                     file_path.unlink(missing_ok=True)
                 except OSError:
                     pass
-                self._save_resume_state(
-                    state_mgr, url, total_size, parts, effective_threads,
-                    entity_guard,
-                )
+                if layout == "parts":
+                    self._save_resume_state(
+                        state_mgr, url, total_size, parts, effective_threads,
+                        entity_guard, layout=layout,
+                    )
+                else:
+                    state_mgr.delete()
                 self._log_timeline(url, "output-invalid")
                 return False
             if verify_checksum and expected_hash:
                 self._print("[green]✓ Checksum verified!")
 
-            for part in parts:
-                part.path.unlink(missing_ok=True)
+            # Stop checkpointing before the resume sidecar is removed, or a
+            # timer firing in the next few milliseconds could recreate it for
+            # a download that is already complete.
+            _stop_checkpoint()
+            if layout == "parts":
+                for part in parts:
+                    part.path.unlink(missing_ok=True)
             state_mgr.delete()
             self._print(f"[bold green]✓ Saved: {file_path}")
             self._timeline.mark("done")
@@ -2428,6 +2821,23 @@ class DownloadController:
             return True
 
         finally:
+            _stop_checkpoint()
+            # A direct layout pre-creates the destination so workers can open
+            # disjoint offsets.  If no byte ever landed (disk error, immediate
+            # cancellation, probe fallback), that zero-length file is a temp
+            # artefact, not a download worth resuming.
+            if layout == "direct":
+                try:
+                    if (
+                        file_path.exists()
+                        and file_path.stat().st_size == 0
+                        and not state_path.exists()
+                    ):
+                        # No resume sidecar was written either.  A real failed
+                        # download keeps its sidecar so Remove can clean it up.
+                        file_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             DownloadContext.clear()
 
 

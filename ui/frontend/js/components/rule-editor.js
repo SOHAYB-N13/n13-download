@@ -55,7 +55,10 @@ const RuleEditorUI = {
               <label class="field-label">${L("rules.connection_mode", "Connection mode")}</label>
               <select class="input" id="reConn">
                 <option value="" ${!rule.connection_mode ? "selected" : ""}>${L("setopt.inherit", "Inherit")}</option>
-                <option value="smart" ${rule.connection_mode === "smart" ? "selected" : ""}>${L("setopt.smart", "Smart")}</option>
+                <option value="auto" ${rule.connection_mode === "auto" || rule.connection_mode === "smart" ? "selected" : ""}>${L("setopt.auto", "Auto")}</option>
+                <option value="balanced" ${rule.connection_mode === "balanced" ? "selected" : ""}>${L("setopt.balanced", "Balanced")}</option>
+                <option value="high_performance" ${rule.connection_mode === "high_performance" ? "selected" : ""}>${L("setopt.high_performance", "High performance")}</option>
+                <option value="conservative" ${rule.connection_mode === "conservative" ? "selected" : ""}>${L("setopt.conservative", "Conservative")}</option>
                 <option value="manual" ${rule.connection_mode === "manual" ? "selected" : ""}>${L("setopt.manual", "Manual")}</option>
               </select>
             </div>

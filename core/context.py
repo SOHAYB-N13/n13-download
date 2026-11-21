@@ -35,6 +35,7 @@ class DownloadContext:
     _total_size: int = 0
     _parts: List[DownloadPart] = []
     _num_threads: int = 1
+    _layout: str = "parts"
     _cancelled: bool = False
     _paused: bool = False
     _on_interrupt: Optional[Callable[[], None]] = None
@@ -47,6 +48,7 @@ class DownloadContext:
         total_size: int,
         parts: List[DownloadPart],
         num_threads: int,
+        layout: str = "parts",
     ) -> None:
         with cls._lock:
             pause_requested = cls._paused
@@ -55,6 +57,7 @@ class DownloadContext:
             cls._total_size = total_size
             cls._parts = parts
             cls._num_threads = num_threads
+            cls._layout = layout
             cls._cancelled = False
             cls._cancel_event.clear()
             cls._paused = pause_requested
@@ -70,6 +73,7 @@ class DownloadContext:
             cls._url = ""
             cls._total_size = 0
             cls._parts = []
+            cls._layout = "parts"
             cls._cancelled = False
             cls._cancel_event.clear()
             cls._paused = False
@@ -79,7 +83,10 @@ class DownloadContext:
     def save_now(cls) -> bool:
         with cls._lock:
             if cls._state_mgr and cls._url and cls._parts:
-                cls._state_mgr.save(cls._url, cls._total_size, cls._parts, cls._num_threads)
+                cls._state_mgr.save(
+                    cls._url, cls._total_size, cls._parts, cls._num_threads,
+                    layout=cls._layout,
+                )
                 return True
         return False
 

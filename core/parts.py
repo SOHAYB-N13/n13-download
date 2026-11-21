@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import List
 from uuid import uuid4
 
@@ -15,6 +16,14 @@ class DownloadPart:
     end: int
     path: Path
     done: bool = False
+    # A "shared" part writes into the final file at ``start + written`` instead
+    # of into its own ``.partN`` sidecar.  That removes the merge copy at the
+    # end of a segmented download; ``written`` is the authoritative prefix
+    # length for the range because several ranges share one file and its total
+    # length cannot identify which ranges are complete.
+    shared: bool = False
+    written: int = 0
+    _lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
     @property
     def size(self) -> int:
@@ -22,10 +31,24 @@ class DownloadPart:
 
     @property
     def downloaded_size(self) -> int:
+        if self.shared:
+            with self._lock:
+                return min(max(0, self.written), self.size)
         if not self.path.exists():
             return 0
         size = self.path.stat().st_size
         return min(size, self.size)
+
+    def advance(self, byte_count: int) -> None:
+        """Record bytes written by a shared-file worker."""
+        if byte_count <= 0:
+            return
+        with self._lock:
+            self.written = min(self.size, self.written + byte_count)
+
+    def snapshot(self) -> int:
+        """Thread-safe read of the written prefix."""
+        return self.downloaded_size
 
     @property
     def is_complete(self) -> bool:
@@ -63,6 +86,28 @@ def build_parts(
         end = (start + part_size - 1) if i < effective_threads - 1 else total_size - 1
         part_path = file_path.with_suffix(f"{file_path.suffix}.part{i}")
         parts.append(DownloadPart(index=i, start=start, end=end, path=part_path))
+    return parts
+
+
+def build_direct_parts(
+    total_size: int,
+    num_threads: int,
+    file_path: Path,
+    min_part_size: int,
+) -> List[DownloadPart]:
+    """Build a segmented plan that writes straight into ``file_path``.
+
+    The returned parts still describe the same byte ranges as
+    :func:`build_parts`, but every worker writes at its absolute offset in the
+    destination.  Completion is therefore known before any merge: the final
+    validation gate reads the destination itself.  Resume state records each
+    range's written prefix separately.
+    """
+    parts = build_parts(total_size, num_threads, file_path, min_part_size)
+    for part in parts:
+        part.path = file_path
+        part.shared = True
+        part.written = 0
     return parts
 
 

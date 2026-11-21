@@ -114,17 +114,60 @@ class StateMachineTest(unittest.TestCase):
         t = DownloadTask()
         t.total_size = 1000
         t.started_at = time.time() - 10
-        t.update_speed(200)                       # first sample seeds the window
-        time.sleep(0.25)                          # comfortably above the 0.05 s sample gate
-        t.update_speed(500)                       # now a real speed exists
+        t.update_speed(200)                       # first sample: not a full grid tick yet
+        time.sleep(0.25)                          # past one 0.2 s sampling tick
+        t.update_speed(500)                       # a real rate now exists
         self.assertEqual(t.downloaded_size, 500)
         self.assertGreater(t.current_speed, 0)
         self.assertGreater(t.average_speed, 0)
-        self.assertIsNotNone(t.eta_seconds)
-        self.assertGreater(t.eta_seconds, 0)
+        # An ETA needs a warm-up of real measurements before it is published;
+        # before that the smoothed rate is still settling.
+        for _ in range(12):
+            time.sleep(0.1)
+            t.update_speed(500)
         t.update_speed(1000)
-        self.assertEqual(t.eta_seconds, 0.0)
+        self.assertEqual(t.downloaded_size, 1000)
         self.assertAlmostEqual(t.percent, 100.0)
+        self.assertEqual(t.eta_seconds, 0.0)
+
+    def test_speed_decays_to_zero_when_idle(self):
+        """A stalled transfer must not keep advertising its last speed."""
+        import time
+        t = DownloadTask()
+        t.total_size = 10_000_000
+        t.mark_analyzing()
+        t.mark_starting()
+        t.mark_downloading()
+        t.update_speed(4_000_000)
+        time.sleep(0.3)
+        t.update_speed(8_000_000)
+        self.assertGreater(t.current_speed, 0)
+        # No bytes for longer than the idle grace: reading the value is what
+        # notices, exactly as the UI's snapshot does.
+        time.sleep(1.4)
+        t.refresh_speed()
+        self.assertEqual(t.current_speed, 0.0)
+        self.assertIsNone(t.eta_seconds)
+
+    def test_progress_never_rewinds(self):
+        """A lower reported count is an out-of-order delivery, not a restart."""
+        t = DownloadTask()
+        t.total_size = 1000
+        t.mark_analyzing()
+        t.mark_starting()
+        t.mark_downloading()
+        t.update_speed(800)
+        t.update_speed(600)
+        self.assertEqual(t.downloaded_size, 800)
+
+    def test_eta_absent_for_unknown_length(self):
+        t = DownloadTask()
+        t.total_size = 0
+        t.mark_analyzing()
+        t.mark_starting()
+        t.mark_downloading()
+        t.update_speed(1024)
+        self.assertIsNone(t.eta_seconds)
 
     def test_serialization_roundtrip(self):
         t = DownloadTask(url="https://x/f.zip", directory="C:/dl")

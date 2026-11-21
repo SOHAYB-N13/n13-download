@@ -30,6 +30,7 @@ class ResumeState:
     parts: List[DownloadPart] = field(default_factory=list)
     etag: str = ""
     last_modified: str = ""
+    layout: str = "parts"       # "parts" (.partN sidecars) | "direct" (final file)
 
     def identity_matches(self, etag: str, last_modified: str) -> Optional[bool]:
         """Whether a freshly observed resource is the one this state belongs to.
@@ -58,6 +59,7 @@ class DownloadState:
         num_threads: int,
         etag: str = "",
         last_modified: str = "",
+        layout: str = "parts",
     ) -> None:
         """Persist state atomically.
 
@@ -73,6 +75,7 @@ class DownloadState:
             "num_threads": num_threads,
             "etag": etag or "",
             "last_modified": last_modified or "",
+            "layout": layout or "parts",
             "parts": [
                 {
                     "index": p.index,
@@ -80,6 +83,8 @@ class DownloadState:
                     "end": p.end,
                     "path": str(p.path),
                     "done": p.done or p.is_complete,
+                    "shared": bool(p.shared),
+                    "written": p.snapshot(),
                 }
                 for p in parts
             ],
@@ -110,6 +115,8 @@ class DownloadState:
                     end=p["end"],
                     path=Path(p["path"]),
                     done=p.get("done", False),
+                    shared=bool(p.get("shared", False)),
+                    written=max(0, int(p.get("written", 0) or 0)),
                 )
                 for p in data["parts"]
             ]
@@ -122,6 +129,7 @@ class DownloadState:
                 # Absent in state files written before validators were captured.
                 etag=str(data.get("etag") or ""),
                 last_modified=str(data.get("last_modified") or ""),
+                layout=str(data.get("layout") or "parts"),
             )
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None

@@ -124,6 +124,10 @@ class AppConfig:
     connection_mode: str = "smart"
     smart_max_connections: int = 8               # ceiling for Smart mode
     smart_adaptive: bool = True                  # adaptive ramp in Smart mode
+    # Hard cap on simultaneous transfer connections across every download.
+    # Each connection reserves a 4 MB receive buffer, so this is a memory bound
+    # as much as a network one.  Never allowed below smart_max_connections.
+    max_total_connections: int = 32
 
     # --- Duplicate downloads -------------------------------------------------
     # How to handle a download whose URL / destination already exists:
@@ -158,9 +162,21 @@ class AppConfig:
     # healthy transfer keeps its normal (generous) timeout behaviour.
     probe_connect_timeout: float = 4.0           # probe: connect timeout (s)
     probe_read_timeout: float = 8.0              # probe: read timeout (s)
+    # How long the metadata HEAD may take before the ranged GET takes over.
+    # The GET is authoritative (it proves range support and carries the same
+    # headers), so waiting the full read timeout for a HEAD only delays the
+    # first byte.  0 disables the cap and restores the old behaviour.
+    probe_head_timeout: float = 2.5
     startup_connect_timeout: float = 10.0        # transfer pre-first-byte connect (s)
     startup_read_timeout: float = 15.0           # transfer pre-first-byte read (s)
     startup_max_attempts: int = 6                # pre-first-byte attempt cap
+    # Longest a *running* transfer may go without receiving a single byte
+    # before the connection is abandoned and re-issued from the offset already
+    # on disk.  This is a stall threshold, not a total-inactivity timeout: a
+    # slow link that still delivers something every few seconds never trips it.
+    # Lower values recover faster from a dead connection; too low and a
+    # legitimately slow server gets needlessly reconnected.
+    stall_timeout: float = 20.0
 
     # --- Speed tracking ----------------------------------------------------
     speed_sample_interval: float = 0.2
@@ -331,9 +347,11 @@ class AppConfig:
         instance.retry_max_delay = max(1.0, min(3600.0, float(instance.retry_max_delay or 1)))
         instance.probe_connect_timeout = max(1.0, min(30.0, float(getattr(instance, "probe_connect_timeout", 4) or 4)))
         instance.probe_read_timeout = max(1.0, min(60.0, float(getattr(instance, "probe_read_timeout", 8) or 8)))
+        instance.probe_head_timeout = max(0.0, min(60.0, float(getattr(instance, "probe_head_timeout", 2.5) or 0)))
         instance.startup_connect_timeout = max(1.0, min(30.0, float(getattr(instance, "startup_connect_timeout", 10) or 10)))
         instance.startup_read_timeout = max(1.0, min(120.0, float(getattr(instance, "startup_read_timeout", 15) or 15)))
         instance.startup_max_attempts = max(1, min(15, int(getattr(instance, "startup_max_attempts", 6) or 6)))
+        instance.stall_timeout = max(5.0, min(300.0, float(getattr(instance, "stall_timeout", 20) or 20)))
         instance.max_speed_bps   = max(0, int(instance.max_speed_bps or 0))
         instance.live_server_port = max(1024, min(65535, int(instance.live_server_port or 6868)))
         instance.pool_connections = max(1, min(256, int(instance.pool_connections or 64)))
@@ -341,11 +359,22 @@ class AppConfig:
         instance.socket_buffer_size = max(0, min(16 * 1024 * 1024, int(instance.socket_buffer_size or 0)))
         instance.speed_window_size = max(1, min(100, int(instance.speed_window_size or 20)))
         instance.speed_sample_interval = max(0.05, min(5.0, float(instance.speed_sample_interval or 0.2)))
-        instance.connection_mode = str(instance.connection_mode or "smart")
-        if instance.connection_mode not in ("smart", "manual"):
-            instance.connection_mode = "smart"
+        instance.connection_mode = str(instance.connection_mode or "auto").strip().lower()
+        # Accept the mode names the engine understands plus the legacy "smart"
+        # (now Auto) and "manual" (fixed thread count).  An unknown value falls
+        # back to Auto rather than silently becoming Manual, which would be the
+        # more surprising behaviour.
+        try:
+            from core.optimizer import ADAPTIVE_MODES, MANUAL_MODE, normalise_mode
+
+            if instance.connection_mode not in ADAPTIVE_MODES | {MANUAL_MODE}:
+                instance.connection_mode = normalise_mode(instance.connection_mode)
+        except Exception:  # pragma: no cover - defensive during partial import
+            if instance.connection_mode not in ("smart", "manual"):
+                instance.connection_mode = "auto"
         instance.smart_max_connections = max(1, min(64, int(instance.smart_max_connections or 8)))
         instance.smart_adaptive = bool(getattr(instance, "smart_adaptive", True))
+        instance.max_total_connections = max(1, min(256, int(getattr(instance, "max_total_connections", 32) or 32)))
         instance.duplicate_policy = str(instance.duplicate_policy or "ask")
         if instance.duplicate_policy not in ("ask", "allow", "rename", "replace"):
             instance.duplicate_policy = "ask"

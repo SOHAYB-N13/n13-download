@@ -27,6 +27,7 @@ import socket
 import threading
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -173,6 +174,45 @@ class SessionManager:
         self._session: Optional[requests.Session] = None
         self._probe_session: Optional[requests.Session] = None
         self._fingerprint: Optional[tuple] = None
+        # Hosts that answered 401/403 to a request carrying a Referer.  Kept for
+        # the life of the manager so every later part and probe for that host
+        # skips the doomed attempt.  Per host, not global: a hotlink-gated CDN
+        # in the same queue still gets its Referer.
+        self._no_referer_hosts: set[str] = set()
+        self._no_referer_lock = threading.Lock()
+
+    # -- per-host Referer policy -------------------------------------------
+
+    @staticmethod
+    def _host_of(url: str) -> str:
+        try:
+            return (urlparse(url).hostname or "").lower()
+        except (ValueError, TypeError):
+            return ""
+
+    def should_omit_referer(self, url: str) -> bool:
+        """True when this host has already rejected a Referer-bearing request."""
+        host = self._host_of(url)
+        if not host:
+            return False
+        with self._no_referer_lock:
+            return host in self._no_referer_hosts
+
+    def mark_no_referer(self, url: str) -> bool:
+        """Record that *url*'s host refuses Referer.  True if it was new.
+
+        Called only after a 401/403 on an attempt that actually sent a Referer,
+        so a server that gates on authentication is not mistaken for one that
+        gates on headers.
+        """
+        host = self._host_of(url)
+        if not host:
+            return False
+        with self._no_referer_lock:
+            if host in self._no_referer_hosts:
+                return False
+            self._no_referer_hosts.add(host)
+            return True
 
     @staticmethod
     def _fingerprint_of(config: Optional[AppConfig]) -> tuple:
