@@ -31,7 +31,8 @@ from typing import List, Sequence
 # 1 = tasks / history / queue_order
 # 2 = projects + tasks.project_id
 # 3 = scheduled_downloads (per-task one-shot scheduling)
-SCHEMA_VERSION = 3
+# 4 = per-task daily window + shutdown request
+SCHEMA_VERSION = 4
 
 # --------------------------------------------------------------------------- #
 # Identity of the implicit project
@@ -256,9 +257,32 @@ def _migrate_to_3(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_batch ON scheduled_downloads(batch_id)")
 
 
+def _migrate_to_4(conn: sqlite3.Connection) -> None:
+    """Per-task daily start/end window and a one-shot shutdown request.
+
+    The values are optional and empty by default, so every existing task keeps
+    running exactly as before.  ``shutdown_when_done`` lives on the task rather
+    than in the global preference: it is a statement about this download, and
+    the auto-shutdown controller consumes it as a session-scoped arm.
+    """
+    add_column_if_missing(
+        conn, "tasks", "schedule_start", "schedule_start TEXT NOT NULL DEFAULT ''"
+    )
+    add_column_if_missing(
+        conn, "tasks", "schedule_end", "schedule_end TEXT NOT NULL DEFAULT ''"
+    )
+    add_column_if_missing(
+        conn,
+        "tasks",
+        "shutdown_when_done",
+        "shutdown_when_done INTEGER NOT NULL DEFAULT 0",
+    )
+
+
 # Ordered, append-only.  Each entry is ``(version, description, callable)``.
 MIGRATIONS: Sequence[tuple] = (
     (1, "baseline: tasks, history, queue_order", _migrate_to_1),
     (2, "projects table and tasks.project_id", _migrate_to_2),
     (3, "persisted one-shot scheduled downloads", _migrate_to_3),
+    (4, "per-task schedule window and shutdown request", _migrate_to_4),
 )

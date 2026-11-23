@@ -82,6 +82,9 @@ _TASK_COLUMNS = (
     "speed_limit_bps",
     "segments_json",
     "project_id",
+    "schedule_start",
+    "schedule_end",
+    "shutdown_when_done",
 )
 
 _INSERT_TASK_SQL = "INSERT INTO tasks ({cols}) VALUES ({marks}) ON CONFLICT(id) DO UPDATE SET {sets}".format(
@@ -186,6 +189,12 @@ class TaskStore:
             # normalising here keeps the same invariant the v2 migration applied
             # to existing rows, so the two paths cannot diverge.
             str(task.get("project_id") or "") or DEFAULT_PROJECT_ID,
+            # Per-download schedule + shutdown request.  Empty/0 is the same
+            # value a pre-v4 row receives, so old and new records remain
+            # indistinguishable to every existing consumer.
+            str(task.get("schedule_start") or ""),
+            str(task.get("schedule_end") or ""),
+            1 if task.get("shutdown_when_done") else 0,
         )
 
     # ------------------------------------------------------------------ #

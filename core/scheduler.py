@@ -10,6 +10,10 @@ Runs one lightweight daemon thread that periodically applies three rules:
   global bandwidth limiter is overridden to ``night_speed_limit_bps`` so e.g.
   the connection can run unlimited at 23:00 and drop to 512 KB/s at 07:00.
 
+It also owns the *pure* arithmetic for a task's own optional daily start/end
+window (:func:`task_window_open`).  The queue applies it; this module never
+touches a task or starts a thread for it.
+
 The scheduler never touches download state directly — it only flips a gate on
 the queue manager and adjusts the shared limiter, so nothing here can corrupt a
 running download.
@@ -47,6 +51,74 @@ def _in_window(now: dtime, start: Optional[dtime], end: Optional[dtime]) -> bool
         return start <= now < end
     # Window wraps past midnight (e.g. 23:00 -> 07:00).
     return now >= start or now < end
+
+
+# --------------------------------------------------------------------------- #
+# Per-download windows
+# --------------------------------------------------------------------------- #
+#
+# A task may carry its own optional start/end time.  The arithmetic is the
+# *same* daily wall-clock arithmetic the queue-wide Scheduler and the project
+# schedule layer use; the only difference is that either boundary may stand
+# alone:
+#
+#   only start  ->  [start, 24:00)   — "not before this time"
+#   only end    ->  [00:00, end)     — "not after this time"
+#   both        ->  [start, end), with an overnight wrap when end < start
+#
+# ``00:00`` is the wire sentinel for "not configured" and is normalised to an
+# empty string, so it can never be mistaken for a configured midnight start.
+
+
+def normalize_schedule_time(value: object) -> str:
+    """Canonical ``"HH:MM"``, ``""`` for the ``00:00`` sentinel, or raise.
+
+    Raises ``ValueError`` for an unparseable time so the API can reject it
+    instead of persisting a schedule that will never open.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        raise ValueError("invalid_time")
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.count(":") != 1:
+        raise ValueError("invalid_time")
+    parsed = _parse_hhmm(text)
+    if parsed is None:
+        raise ValueError("invalid_time")
+    if parsed == dtime(0, 0):
+        return ""
+    return "%02d:%02d" % (parsed.hour, parsed.minute)
+
+
+def normalize_task_schedule(start: object, end: object) -> tuple[str, str]:
+    """Validate and canonicalise a per-download start/end pair."""
+    start_text = normalize_schedule_time(start)
+    end_text = normalize_schedule_time(end)
+    if start_text and end_text and start_text == end_text:
+        # A zero-length window would keep the download queued forever.
+        raise ValueError("same_time")
+    return start_text, end_text
+
+
+def task_window_open(
+    start: Optional[str],
+    end: Optional[str],
+    now: Optional[dtime] = None,
+) -> bool:
+    """Whether a task with this optional window may run at *now*."""
+    start_time = _parse_hhmm(start)
+    end_time = _parse_hhmm(end)
+    current = now or _now_time()
+    if start_time is None and end_time is None:
+        return True
+    if start_time is None:
+        return current < end_time
+    if end_time is None:
+        return current >= start_time
+    return _in_window(current, start_time, end_time)
 
 
 # Index matches datetime.weekday() (0 = Monday).

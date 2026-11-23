@@ -82,9 +82,27 @@ const Nav = {
 
   renderPageChrome(app) {
     const meta = app.pages[app.state.page];
-    const title = I18N.t("page." + app.state.page, meta.title);
-    Utils.$id("pageTitle").textContent = title;
-    Utils.$id("pageSub").textContent = I18N.t("page." + app.state.page + ".sub", meta.sub);
+    const key = "page." + app.state.page;
+    const subKey = key + ".sub";
+    const title = I18N.t(key, meta.title);
+    const titleEl = Utils.$id("pageTitle");
+    // Keep the i18n key in step with the open page: `I18N.apply()` runs again
+    // after language/settings load and would otherwise rewrite this dynamic
+    // heading with the static `page.dashboard` key baked into index.html.
+    titleEl.dataset.i18n = key;
+    titleEl.textContent = title;
+
+    // Downloads is a dense workspace, so its header drops the redundant
+    // subtitle and uses tighter spacing.  Every other page keeps the shared
+    // header untouched.
+    const compact = app.state.page === "downloads";
+    const sub = Utils.$id("pageSub");
+    sub.dataset.i18n = subKey;
+    sub.textContent = I18N.t(subKey, meta.sub);
+    sub.hidden = compact;
+    const head = Utils.$q(".page-head");
+    if (head) head.classList.toggle("is-compact", compact);
+
     document.title = `${title} · N13 Download Manager`;
   },
 };

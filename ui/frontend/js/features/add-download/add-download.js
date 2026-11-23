@@ -99,7 +99,28 @@ const AddDownload = {
           </div>
           <label class="switch-row">
             <span class="switch"><input type="checkbox" id="ndAutostart" checked><span class="switch-track"></span></span>
-            <span class="switch-text">${L("dlg.start_immediately", "Start immediately")}<span class="switch-hint">${L("dlg.start_off", "Off — add to the queue without starting")}</span></span>
+            <span class="switch-text">${L("dlg.start_immediately", "Start immediately")}<span class="switch-hint" id="ndStartHint">${L("dlg.start_off", "Off — add to the queue without starting")}</span></span>
+          </label>
+          <div class="nd-sched">
+            <div class="nd-sched-head">
+              <span class="field-label">${L("dlg.schedule", "Schedule")}</span>
+              <span class="field-opt">${L("dlg.time_unset_hint", "00:00 = not set")}</span>
+            </div>
+            <div class="nd-sched-times">
+              <div class="field">
+                <label class="field-label" for="ndStart">${L("dlg.start_time", "Start time")}</label>
+                <input id="ndStart" class="input" type="time" value="00:00" step="60">
+              </div>
+              <div class="field">
+                <label class="field-label" for="ndEnd">${L("dlg.end_time", "End time")}</label>
+                <input id="ndEnd" class="input" type="time" value="00:00" step="60">
+              </div>
+            </div>
+            <p class="nd-error" id="ndSchedError" hidden></p>
+          </div>
+          <label class="switch-row">
+            <span class="switch"><input type="checkbox" id="ndShutdown"><span class="switch-track"></span></span>
+            <span class="switch-text">${L("dlg.shutdown_after", "Shut down computer after downloads finish")}<span class="switch-hint">${L("dlg.shutdown_after_hint", "Only after every download succeeds")}</span></span>
           </label>
         </div>
       </div>`,
@@ -112,6 +133,8 @@ const AddDownload = {
       const el = {
         url: dlg.qs("#ndUrl"), name: dlg.qs("#ndName"), dir: dlg.qs("#ndDir"),
         checksum: dlg.qs("#ndChecksum"), autostart: dlg.qs("#ndAutostart"),
+        start: dlg.qs("#ndStart"), end: dlg.qs("#ndEnd"), shutdown: dlg.qs("#ndShutdown"),
+        schedErr: dlg.qs("#ndSchedError"), startHint: dlg.qs("#ndStartHint"),
         err: dlg.qs("#ndError"), detect: dlg.qs("#ndDetect"), probing: dlg.qs("#ndProbing"),
         detectName: dlg.qs("#ndDetectName"), detectMeta: dlg.qs("#ndDetectMeta"),
         detectIco: dlg.qs("#ndDetectIco"), resume: dlg.qs("#ndResume"),
@@ -134,6 +157,7 @@ const AddDownload = {
         valid: false, normalized: "", nameTouched: false, dirTouched: false,
         category: "General", baseDir, probing: 0, validating: 0,
         projectId: initialProject ? initialProject.id : "",
+        schedule: { ok: true, error: "", start: "", end: "" },
       };
 
       /** The folder a project routes to, falling back to the global setting. */
@@ -142,9 +166,13 @@ const AddDownload = {
         return (p && p.directory) ? p.directory : baseDir;
       };
 
+      const updateGo = () => {
+        el.go.disabled = !(model.valid && model.schedule.ok);
+      };
+
       const setValid = (ok, msg = "") => {
         model.valid = ok;
-        el.go.disabled = !ok;
+        updateGo();
         el.err.hidden = ok || !msg;
         el.err.textContent = msg;
         el.url.classList.toggle("invalid", !ok && !!msg);
@@ -280,33 +308,73 @@ const AddDownload = {
       // The primary button names the action it will actually take.  The
       // "Start immediately" switch is what decides between downloading now and
       // only queueing, so the label follows that switch instead of saying an
-      // ambiguous "Download" for both.  The switch stays where it is; only its
-      // consequence becomes visible on the button.
+      // ambiguous "Download" for both.  A configured start time wins: the
+      // download is queued and cannot start early, so the button says so.
       const syncGoLabel = () => {
-        const now = el.autostart.checked;
+        const scheduled = !!(model.schedule && model.schedule.start);
+        const now = el.autostart.checked && !scheduled;
         const text = L(now ? "dlg.download_now" : "dlg.add_to_queue",
           now ? "Download now" : "Add to queue");
         el.goLabel.textContent = text;
         el.go.setAttribute("data-tip", text);
       };
+
+      // Keep the schedule controls, the Start-immediately switch and the
+      // primary button in one consistent state.  A start time disables the
+      // switch instead of leaving a contradictory "start now" offer on screen.
+      const syncSchedule = () => {
+        const parsed = this.validateSchedule(el.start.value, el.end.value);
+        model.schedule = parsed;
+        el.schedErr.hidden = parsed.ok;
+        el.schedErr.textContent = parsed.ok
+          ? ""
+          : (parsed.error === "same"
+            ? L("dlg.schedule_same", "Start and end times must differ")
+            : L("dlg.schedule_invalid", "Enter a valid time"));
+        const waits = !!parsed.start;
+        el.autostart.disabled = waits;
+        if (waits) el.autostart.checked = false;
+        if (el.startHint) {
+          el.startHint.textContent = waits
+            ? L("dlg.wait_start", "Queued until the start time")
+            : L("dlg.start_off", "Off — add to the queue without starting");
+        }
+        syncGoLabel();
+        updateGo();
+      };
+
       el.autostart.addEventListener("change", syncGoLabel);
-      syncGoLabel();
+      el.start.addEventListener("input", syncSchedule);
+      el.end.addEventListener("input", syncSchedule);
+      syncSchedule();
 
       dlg.qs("#ndCancel").addEventListener("click", () => dlg.close());
       el.go.addEventListener("click", async () => {
         const url = (model.normalized || el.url.value).trim();
         const dir = el.dir.value.trim();
         const name = el.name.value.trim();
+        const schedule = this.validateSchedule(el.start.value, el.end.value);
+        if (!schedule.ok) {
+          model.schedule = schedule;
+          syncSchedule();
+          return;
+        }
         el.go.disabled = true;
         el.go.classList.add("busy");
         try {
           const id = await this.resolveConflict(
             app, url, dir, name, el.checksum.value.trim(), el.autostart.checked,
-            model.category, model.projectId);
+            model.category, model.projectId, schedule, el.shutdown.checked);
           if (id) {
             app.state.highlightId = id;
             dlg.close();
             Components.toast(I18N.t("toast.download_added", "Download added"), name || Utils.fileName({ url }), "success");
+            if (el.shutdown.checked) {
+              Components.toast(
+                I18N.t("queue.shutdown_after_downloads", "Shut down after these downloads"),
+                I18N.t("toast.shutdown_on", "The computer will shut down when all downloads finish"),
+                "info", 4000);
+            }
             if (app.state.page !== "downloads") app.navigate("downloads");
           } else {
             setValid(false, L("dlg.add_error", "Could not add this download"));
@@ -315,7 +383,7 @@ const AddDownload = {
           el.go.classList.remove("busy");
           // Restore the *validated* state, not an unconditional enable: after
           // a failed add the button must stay disabled until the URL changes.
-          el.go.disabled = !model.valid;
+          updateGo();
         }
       });
 
@@ -339,13 +407,46 @@ const AddDownload = {
     }
   },
 
-  async resolveConflict(app, url, directory, name, checksum, autostart, category, projectId) {
+  /**
+   * Canonical "HH:MM" for a native time input, or "" when not configured.
+   *
+   * `00:00` is the dialog's "not set" sentinel — never a midnight schedule.
+   * Returns null only for genuinely malformed text (native inputs normally
+   * cannot produce it, but the value is still validated before submission).
+   */
+  normalizeScheduleTime(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    const match = /^(\d{1,2}):(\d{1,2})$/.exec(raw);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!(hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59)) return null;
+    const canonical = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    return canonical === "00:00" ? "" : canonical;
+  },
+
+  /** Validate and canonicalise the optional start/end pair. */
+  validateSchedule(start, end) {
+    const startTime = this.normalizeScheduleTime(start);
+    const endTime = this.normalizeScheduleTime(end);
+    if (startTime === null || endTime === null) {
+      return { ok: false, error: "invalid", start: "", end: "" };
+    }
+    if (startTime && endTime && startTime === endTime) {
+      return { ok: false, error: "same", start: startTime, end: endTime };
+    }
+    return { ok: true, error: "", start: startTime, end: endTime };
+  },
+
+  async resolveConflict(app, url, directory, name, checksum, autostart, category, projectId, schedule = {}, shutdownWhenDone = false) {
     const policy = (app.state.settings && app.state.settings.duplicate_policy) || "ask";
     // One place that knows the positional shape of `add_download`, so adding a
     // parameter to the bridge never means editing seven call sites again.
     const add = (allowDuplicate = false, conflict = "") =>
       API.addDownload(url, directory, name, checksum, autostart, category,
-        allowDuplicate, conflict, 0, "", projectId || "");
+        allowDuplicate, conflict, 0, "", projectId || "",
+        schedule.start || "", schedule.end || "", !!shutdownWhenDone);
     let conflict = null;
     try { conflict = await API.checkDuplicate(url, directory, name); } catch (e) {}
     const hasConflict = conflict && (conflict.reason || conflict.has_active);

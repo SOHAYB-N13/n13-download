@@ -181,7 +181,7 @@ class Api(ProjectsApiMixin):
             config,
             on_gate=self._apply_scheduler_gate,
             on_speed=self._apply_scheduled_speed,
-            on_tick=self.refresh_project_gates,
+            on_tick=self._scheduler_tick,
             logger=log,
         )
         self._scheduler.start()
@@ -228,6 +228,10 @@ class Api(ProjectsApiMixin):
         # pipeline as a browser download (rules, categories, duplicate policy,
         # queue, autostart) -- nothing is bypassed and nothing is dropped.
         self._auto_shutdown.start()
+        # A per-download shutdown request survives a restart on its task.  If
+        # the work it was waiting for is still unfinished, re-arm the same
+        # controller instead of losing the request (or powering off blindly).
+        self._rearm_download_shutdown()
         self._drain_startup_urls()
 
     def _sync_clipboard_monitor(self) -> None:
@@ -281,6 +285,31 @@ class Api(ProjectsApiMixin):
             sync_limiter_from_config(self._config)
         except Exception:
             pass
+
+    def _scheduler_tick(self) -> None:
+        """Existing scheduler tick hook: project gates + per-download windows.
+
+        Reusing this hook (rather than starting a second timer) means a window
+        opening on the wall clock is noticed even when no download event occurs,
+        and an end boundary can pause a running transfer promptly.
+        """
+        self.refresh_project_gates()
+        try:
+            self._manager.enforce_schedule_windows()
+        except Exception:
+            log.warning("Per-download schedule tick failed", exc_info=True)
+
+    def _rearm_download_shutdown(self) -> None:
+        """Restore a per-download shutdown request after a restart."""
+        controller = getattr(self, "_auto_shutdown", None)
+        if controller is None:
+            return
+        try:
+            pending = self._manager.pending_shutdown_requests()
+            if pending:
+                controller.arm_for_download_completion(pending[0])
+        except Exception:
+            log.warning("Could not re-arm the download shutdown request", exc_info=True)
 
     def set_window(self, window) -> None:
         self._window = window
@@ -478,6 +507,14 @@ class Api(ProjectsApiMixin):
         runtime situation from the ``shutdown_when_done`` preference flag.
         """
         self._event_queue.put_nowait({"type": "auto_shutdown_state", "status": payload})
+        # A request that has been handed to Windows is consumed: clearing the
+        # task flags stops a restart from resurrecting the same one-shot
+        # request.  Silent on purpose — the queue is already finished.
+        if payload.get("state") == "Executed":
+            try:
+                self._manager.clear_shutdown_requests()
+            except Exception:
+                pass
 
     def get_auto_shutdown_status(self) -> Dict[str, Any]:
         """Runtime auto-shutdown state (state machine, reason, countdown)."""
@@ -485,7 +522,15 @@ class Api(ProjectsApiMixin):
 
     def set_auto_shutdown(self, enabled: bool) -> Dict[str, Any]:
         """Arm/disarm auto shutdown; disarming cancels a pending countdown."""
-        return self._auto_shutdown.set_enabled(bool(enabled))
+        status = self._auto_shutdown.set_enabled(bool(enabled))
+        if not enabled:
+            # "Off" is the master switch: it also forgets the per-download
+            # requests, so none of them can re-arm on the next event.
+            try:
+                self._manager.clear_shutdown_requests()
+            except Exception:
+                pass
+        return status
 
     def cancel_auto_shutdown(self) -> Dict[str, Any]:
         """User-initiated cancellation of a pending shutdown.
@@ -493,7 +538,12 @@ class Api(ProjectsApiMixin):
         Cancels the Windows shutdown, disarms the preference (so it cannot
         immediately re-arm and loop) and reports the resulting state.
         """
-        return self._auto_shutdown.cancel()
+        status = self._auto_shutdown.cancel()
+        try:
+            self._manager.clear_shutdown_requests()
+        except Exception:
+            pass
+        return status
 
     # ── Event polling ─────────────────────────────────────────────
 
@@ -597,7 +647,22 @@ class Api(ProjectsApiMixin):
                      checksum: str = "", autostart: bool = True,
                      category: str = "", allow_duplicate: bool = False,
                      resolve_conflict: str = "", size: int = 0,
-                     content_type: str = "", project_id: str = "") -> str:
+                     content_type: str = "", project_id: str = "",
+                     schedule_start: str = "", schedule_end: str = "",
+                     shutdown_when_done: bool = False) -> str:
+        from core.scheduler import normalize_task_schedule
+
+        # Validate the window before any side effect (a "replace" policy would
+        # otherwise delete the destination file for a request we then reject).
+        # ``00:00`` normalises to "unset"; equal boundaries are refused because
+        # they describe a window that can never open.
+        try:
+            schedule_start, schedule_end = normalize_task_schedule(
+                schedule_start, schedule_end)
+        except ValueError:
+            self._log("Rejected a download with an invalid schedule")
+            return ""
+        shutdown_requested = bool(shutdown_when_done)
         project_id = self._valid_project_id(project_id)
         # Both "allow" and "rename" mean the user wants another task; rename
         # additionally gives it a unique destination name (below).
@@ -643,8 +708,20 @@ class Api(ProjectsApiMixin):
             url=url, directory=resolved, checksum=checksum, label=final_label, category=cat,
             priority=priority, connection_mode=conn, num_threads=nthreads,
             probe_analysis=probe_analysis, project_id=project_id or "",
+            schedule_start=schedule_start, schedule_end=schedule_end,
+            shutdown_when_done=shutdown_requested,
         )
-        return self._manager.add(request, autostart=autostart, allow_duplicate=allow_duplicate)
+        task_id = self._manager.add(
+            request, autostart=autostart, allow_duplicate=allow_duplicate)
+        controller = getattr(self, "_auto_shutdown", None)
+        if shutdown_requested and task_id and controller is not None:
+            # Reuse the existing controller: it arms, but the ordinary policy
+            # still waits for the *whole* queue to finish successfully.
+            try:
+                controller.arm_for_download_completion(task_id)
+            except Exception:
+                log.warning("Could not arm the download shutdown request", exc_info=True)
+        return task_id
 
     @staticmethod
     def _delete_destination_file(directory: str, filename: str) -> None:
@@ -1304,6 +1381,11 @@ class Api(ProjectsApiMixin):
                 controller.set_enabled(
                     bool(getattr(self._config, "shutdown_when_done", False))
                 )
+                if not bool(getattr(self._config, "shutdown_when_done", False)):
+                    try:
+                        self._manager.clear_shutdown_requests()
+                    except Exception:
+                        pass
             else:
                 controller.notify("config_changed")
         return True

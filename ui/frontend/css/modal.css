@@ -169,6 +169,23 @@
 .nd-adv { display: flex; flex-direction: column; gap: 13px; animation: fadeIn var(--dur-2); }
 .nd-adv[hidden] { display: none; }
 
+/* Schedule block: two native time inputs on one compact row.  It reuses the
+   .field/.input styles so it matches the rest of the dialog; only the grouping
+   is new.  The column collapses on a narrow dialog rather than squeezing the
+   native time picker. */
+.nd-sched { display: flex; flex-direction: column; gap: 8px; }
+.nd-sched-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.nd-sched-times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.nd-sched-times .field { min-width: 0; }
+.nd-sched .nd-error { margin: 0; }
+@media (max-width: 560px) {
+  .nd-sched-times { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ── 22. Context menu ──────────────────────────────────────────────────── */
 
 #contextMenu {

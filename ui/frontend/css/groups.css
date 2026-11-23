@@ -26,6 +26,14 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* No groups yet: the strip is only the "+" affordance, so there is no tab row
+   for a divider to belong to. */
+.grp-strip.is-bare {
+  margin-bottom: 4px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .grp-tabs {
   display: flex;
   align-items: center;

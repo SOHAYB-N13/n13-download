@@ -32,6 +32,27 @@ const DownloadsView = {
   taskArray(app) { return Object.values(app.state.downloads); },
 
   /**
+   * Hide chrome that only operates on list rows while the app-wide list is
+   * genuinely empty.
+   *
+   * This is deliberately based on the *whole* download set, never on the open
+   * group or the active filter/search.  A filter that hides every row while
+   * downloads still exist must keep its own controls visible, otherwise the
+   * user cannot undo the filter.  The stats strip is part of the same rule:
+   * with no downloads there is nothing for it to count, but its settings stay
+   * reachable from Settings.
+   */
+  syncEmptyChrome(app) {
+    const empty = this.taskArray(app).length === 0;
+    const page = Utils.$id("page-downloads");
+    if (page) page.classList.toggle("is-empty", empty);
+    const toolbar = Utils.$q("#page-downloads .dl-toolbar");
+    if (toolbar) toolbar.hidden = empty;
+    const strip = Utils.$id("queueStrip");
+    if (strip) strip.hidden = empty;
+  },
+
+  /**
    * The tasks in the open group, before any filter or search is applied.
    *
    * This is the base list for everything that *describes* what the user is
@@ -126,6 +147,7 @@ const DownloadsView = {
 
   renderDownloads(app, structureChanged = false) {
     if (app.state.page !== "downloads" && !structureChanged) return;
+    this.syncEmptyChrome(app);
     const listEl = Utils.$id("downloadList");
     const headEl = Utils.$id("downloadHead");
     const emptyEl = Utils.$id("downloadsEmpty");
@@ -157,30 +179,26 @@ const DownloadsView = {
       headEl.hidden = true;
       listEl.innerHTML = "";
       app._clearSelection();
-      // Nothing anywhere yet: offer the things a first-run user wants, and the
-      // group affordance alongside them so groups are discoverable before the
-      // first download rather than after it.
+      // Nothing anywhere yet.  The command bar already offers New download,
+      // Paste URL and Add batch, and the group strip has the group "+", so the
+      // centered empty state is not allowed to repeat them.  Import Downloads
+      // is the one path that exists only here.
       //
       // `(key, vars, fallback)` is the same translator shape `I18N.fmt` has;
       // the group view layer is guarded because this module also loads in unit
       // tests that do not pull the group feature in.
       const t = (key, vars, fallback) => I18N.fmt(key, vars, fallback);
+      const importBatch = () => app.navigate("batch");
       const opts = (typeof GroupsView !== "undefined")
-        ? GroupsView.emptyAllOptions(t, {
-            add: () => app.openNewDownload(null, { paste: true }),
-            newGroup: () => Groups.create(),
-            setupExtension: () => app._setupExtension(),
-            importBatch: () => app.navigate("batch"),
-          })
+        ? GroupsView.emptyAllOptions(t, { importBatch })
         : {
             icon: "download",
             title: I18N.t("empty.no_downloads", "No downloads yet"),
             desc: I18N.t("empty.no_downloads_desc", "Paste a link or drop it anywhere to start your first download."),
             actions: [{
-              label: I18N.t("cmd.paste_url", "Paste URL"),
-              icon: "paste",
-              primary: true,
-              onClick: () => app.pasteFromClipboard(),
+              label: I18N.t("empty.import", "Import Downloads"),
+              icon: "batch",
+              onClick: importBatch,
             }],
           };
       emptyEl.replaceChildren(Components.emptyState(opts));
@@ -611,6 +629,9 @@ const DownloadsView = {
   // ── Queue strip ──────────────────────────────────────────────────────
 
   renderQueueStrip(app) {
+    // The strip counts rows, so it has nothing to say while the whole list is
+    // empty.  The same rule also hides the filter/sort/bulk toolbar.
+    this.syncEmptyChrome(app);
     const all = this.taskArray(app);
     const ACTIVE = ["Downloading", "Analyzing", "Starting", "Merging", "Verifying"];
     const active = all.filter((t) => ACTIVE.includes(t.state));
@@ -649,9 +670,14 @@ const DownloadsView = {
       shutBtn.classList.toggle("good", state === "Armed" || state === "Waiting");
       const reason = as ? (as.cancel_reason || as.reason) : "";
       const reasonTxt = Events.autoShutdownReasonLabel(reason);
-      shutBtn.setAttribute("data-tip", reasonTxt
-        ? `${I18N.t("queue.auto_shutdown", "Auto shutdown")} · ${reasonTxt}`
-        : I18N.t("queue.auto_shutdown_tip", "Shut down the computer when all downloads finish"));
+      const sourceTxt = (as && as.armed_by_task)
+        ? I18N.t("queue.shutdown_after_downloads", "Shut down after these downloads")
+        : "";
+      shutBtn.setAttribute("data-tip", sourceTxt
+        ? `${I18N.t("queue.auto_shutdown", "Auto shutdown")} · ${sourceTxt}`
+        : reasonTxt
+          ? `${I18N.t("queue.auto_shutdown", "Auto shutdown")} · ${reasonTxt}`
+          : I18N.t("queue.auto_shutdown_tip", "Shut down the computer when all downloads finish"));
     }
     // The countdown banner is driven entirely by the runtime state.
     Events.syncShutdownCountdown(app);
@@ -742,9 +768,16 @@ const DownloadsView = {
    */
   async toggleShutdown(app) {
     const as = app.state.autoShutdown;
-    const on = as ? !as.enabled : !(app.state.settings || {}).shutdown_when_done;
+    // The controller's arm can come from the global preference, a project
+    // completion action, or a per-download request.  Clicking the strip button
+    // cancels whichever one is live; it only arms the global preference when
+    // nothing at all is armed.
+    const live = !!as && (!!as.enabled || !!as.session_arm || !!as.pending);
+    const on = !live;
     try {
-      const status = await API.setAutoShutdown(on);
+      const status = live
+        ? await API.cancelAutoShutdown()
+        : await API.setAutoShutdown(true);
       if (status) Events.applyAutoShutdown(app, status);
       else app._renderQueueStrip();
       Components.toast(

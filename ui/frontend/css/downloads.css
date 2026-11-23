@@ -489,3 +489,20 @@
 .sched-ops { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; padding-inline-start: 8px; }
 .sched-edit { display: flex; flex-direction: column; gap: 10px; }
 .sched-edit-err { color: var(--danger); font-size: 12px; }
+
+/* ── Empty Downloads workspace ─────────────────────────────────────────── */
+/* When the whole list is empty the toolbar and queue strip are hidden, so the
+   empty state can take the freed space and center itself instead of leaving a
+   tall band of nothing above it.  Filter/search empty states are not scoped by
+   `.is-empty` and keep their normal, lighter presentation. */
+#page-downloads.is-empty #downloadsEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: clamp(240px, calc(100vh - 260px), 700px);
+}
+#page-downloads.is-empty #downloadsEmpty .empty {
+  padding: 28px 24px;
+  gap: 4px;
+}
+#page-downloads.is-empty #downloadsEmpty .empty-actions { margin-top: 12px; }

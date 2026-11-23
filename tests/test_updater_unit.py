@@ -301,9 +301,7 @@ def test_updater_script_contains_mandatory_stages(tmp_path):
     for token in (
         "UPDATER_START",
         "N13_EXIT",
-        "UNINSTALL",
-        "UNINSTALL_VERIFY",
-        "USER_DATA_DELETE",
+        "USER_DATA_PRESERVE",
         "INSTALL",
         "INSTALL_VERIFY",
         "RESTART",
@@ -313,7 +311,6 @@ def test_updater_script_contains_mandatory_stages(tmp_path):
         "/NORESTART",
         "/NOCANCEL",
         "/DIR=",
-        "unins000",
         "System.Security.Cryptography.SHA256",
         "LocalApplicationData",
         "$N13Pid",
@@ -322,6 +319,26 @@ def test_updater_script_contains_mandatory_stages(tmp_path):
     # The updater must be explicitly parameterised, never hard-coded paths.
     assert "InstallDir" in text
     assert "ExpectedVersion" in text
+
+
+def test_updater_never_deletes_user_data():
+    """Regression: updates must preserve %LOCALAPPDATA%\\N13.
+
+    An older updater ran the uninstaller and then removed the whole user-data
+    directory.  That silently destroyed configuration, databases, logs and
+    saved links.  The script must contain no such operation.
+    """
+    text = updater.POWERSHELL_UPDATER
+    assert "USER_DATA_DELETE" not in text
+    assert "unins000" not in text
+    assert "Uninstaller" not in text
+    # No recursive delete of the user-data directory (or its parent).
+    lowered = text.lower()
+    assert "remove-item -literalpath $userdatadir" not in lowered
+    assert "remove-item -literalpath $localappdata" not in lowered
+    assert "remove-item -literalpath $installDir".lower() not in lowered
+    # The installer is run as an in-place upgrade into the captured directory.
+    assert '"/DIR=`"$InstallDir`""' in text or '/DIR=' in text
 
 
 def test_launch_updater_requires_install_dir(tmp_path):
@@ -337,10 +354,9 @@ def test_launch_updater_requires_install_dir(tmp_path):
     assert err == UpdateError.DEV_MODE
 
 
-def test_launch_updater_requires_existing_uninstaller(tmp_path, monkeypatch):
+def test_launch_updater_requires_installed_exe(tmp_path):
     fake_dir = tmp_path / "install"
     fake_dir.mkdir()
-    monkeypatch.setenv("N13_UPDATE_INSTALL_DIR", str(fake_dir))
     ok, err = launch_powershell_updater(
         staging=tmp_path,
         installer_path=tmp_path / "setup.exe",
@@ -350,6 +366,43 @@ def test_launch_updater_requires_existing_uninstaller(tmp_path, monkeypatch):
     )
     assert not ok
     assert err == UpdateError.UPDATER_FAILED
+
+
+def test_launch_updater_does_not_require_uninstaller(tmp_path, monkeypatch):
+    """In-place upgrades need the installed EXE, not unins000.exe."""
+    fake_dir = tmp_path / "install"
+    fake_dir.mkdir()
+    (fake_dir / "N13.exe").write_bytes(b"x")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x")
+
+    captured = {}
+
+    class _FakeProc:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        # The updater acknowledges by creating update.started in staging.
+        (tmp_path / updater.UPDATER_START_MARKER).write_text("ok", encoding="ascii")
+        return _FakeProc()
+
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+    ok, err = launch_powershell_updater(
+        staging=tmp_path,
+        installer_path=installer,
+        expected_checksum="a" * 64,
+        expected_version="1.0.4",
+        app_install_dir=fake_dir,
+    )
+    assert ok and err is None
+    assert "-Uninstaller" not in captured["args"]
+    assert "-InstallDir" in captured["args"]
+    assert str(fake_dir) in captured["args"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell")
@@ -364,7 +417,6 @@ def test_updater_script_standalone_guard(tmp_path):
             "-N13Pid", "0",
             "-ExePath", str(tmp_path / "missing" / "N13.exe"),
             "-InstallDir", str(tmp_path / "missing"),
-            "-Uninstaller", str(tmp_path / "missing" / "unins000.exe"),
             "-Installer", str(tmp_path / "setup.exe"),
             "-ExpectedVersion", "1.0.4",
         ],
@@ -375,7 +427,7 @@ def test_updater_script_standalone_guard(tmp_path):
     assert r.returncode == 11
     log_file = tmp_path / "update.log"
     assert log_file.is_file()
-    assert "UNINSTALL" in log_file.read_text(encoding="utf-8")
+    assert "PREPARE" in log_file.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #

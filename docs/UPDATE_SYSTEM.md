@@ -83,21 +83,23 @@ N13
   -> Launch powershell.exe (detached, -ExecutionPolicy Bypass) with all params
   -> N13 performs the EXISTING safe shutdown and exits
   -> PowerShell waits for N13 to exit (polls the exact PID, never kills it)
-  -> PowerShell runs the real uninstaller: <InstallDir>\unins000.exe
-        /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-  -> PowerShell waits for the uninstaller to finish
-  -> PowerShell verifies the old installation is really gone
-  -> PowerShell removes any remaining old files in the exact captured InstallDir
-  -> PowerShell deletes %LOCALAPPDATA%\N13  (intentional for this flow)
-  -> PowerShell runs the NEW installer from TEMP:
+  -> PowerShell runs the NEW installer from TEMP as an in-place upgrade:
         /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /DIR="<ORIGINAL_INSTALL_DIR>"
   -> PowerShell waits for the installer and records its exit code
   -> PowerShell verifies <InstallDir>\N13.exe exists
   -> PowerShell reads the new N13.exe file version and compares it with the
      expected release version
+  -> PowerShell verifies %LOCALAPPDATA%\N13 still exists (if it existed before)
   -> PowerShell launches the NEW installed N13.exe
   -> PowerShell cleans %TEMP%\N13-Updater\<id>\ (best effort) and exits
 ```
+
+The update does **not** run the uninstaller and does **not** delete or recreate
+the user-data directory. Running the installer over the existing installation
+is the normal Inno Setup upgrade path: it replaces application files, keeps
+the chosen install directory, and leaves configuration, databases, logs, saved
+links and downloads untouched. If the update is interrupted, the installer can
+simply be run again.
 
 Both the manual button flow and the automatic flow use this exact same path,
 and the headless `N13.exe --update-now` flow runs the same implementation.
@@ -108,15 +110,20 @@ The install directory is never hard-coded. N13 resolves the real path at
 runtime:
 
 - `install_dir()` — parent of the running `sys.executable` when frozen.
-- `uninstaller_path(install_dir)` — `<InstallDir>\unins000.exe`, verified to
-  exist before any update starts. If it is missing the update stops.
+- `installed_exe_path()` — the running `N13.exe`; the updater verifies it
+  exists before starting.
+- The captured `InstallDir` is passed to the new installer with `/DIR=`, so a
+  custom installation path is preserved exactly and the default path is never
+  assumed.
+- `unins000.exe` is not required for an update; an in-place upgrade only needs
+  the installed application and the new installer.
 
 ### PowerShell updater
 
 - Script: `%TEMP%\N13-Updater\<id>\update.ps1`
 - It is embedded in `core/updater.py` (module constant `POWERSHELL_UPDATER`).
-- It is the ONLY component that touches the installer or uninstaller after
-  N13 shuts down. It runs entirely from TEMP and does not depend on Python,
+- It is the ONLY component that runs the installer after N13 shuts down. It
+  runs entirely from TEMP and does not depend on Python,
   WebView, N13 threads, child processes, or the N13 working directory.
 - Every stage is logged to `update.log` in the same TEMP directory.
 
@@ -124,18 +131,20 @@ Required stages logged:
 
 ```
 UPDATER_START
+USER_DATA_PRESERVE
 N13_EXIT
-UNINSTALL
-UNINSTALL_VERIFY
-USER_DATA_DELETE
 INSTALL
 INSTALL_VERIFY
+USER_DATA_PRESERVE
 RESTART
 CLEANUP
 ```
 
 Any failure aborts immediately with the exact stage and exit code; the updater
 never reports success unless the new N13.exe version matches the release.
+`USER_DATA_PRESERVE` records the user-data directory before and after the
+install and fails if it disappeared. The script contains no command that
+removes `%LOCALAPPDATA%\N13`.
 
 ### Checksum policy
 
@@ -147,21 +156,27 @@ one — it reports the verification data as unavailable and refuses to install
 
 ### User data
 
-For this update flow, `%LOCALAPPDATA%\N13` is intentionally removed during the
-update. Nothing else (Desktop, Documents, Downloads, selected download
-directories, or unrelated AppData directories) is touched. The data directory
-is recreated on the next launch.
+`%LOCALAPPDATA%\N13` is never deleted or recreated by the update flow. Inno
+Setup writes only installation files, so configuration, databases, logs, saved
+links and downloaded files survive every update. Nothing outside the captured
+installation directory is modified.
+
+A regression test (`tests/test_updater_unit.py::test_updater_never_deletes_user_data`)
+fails if the embedded updater ever regains a user-data deletion step.
 
 ## Safety guarantees
 
 - No file inside the installation directory is modified directly by N13.
-- The running `N13.exe` is never replaced in-place; the old build is removed by
-  its own uninstaller before the new installer runs.
+- The new installer is the only component that replaces application files; it
+  runs as a normal Inno Setup upgrade into the captured `InstallDir`.
 - The updater script and installer live outside the installation directory.
 - Checksum verification is mandatory; a mismatched installer is discarded.
+- User data is never deleted; an explicit before/after check runs.
 - Active downloads are paused and persisted before shutdown so they remain
   resumable after the update.
 - Failed checks/downloads time out and leave the current installation intact.
+- An interrupted update can be retried by running the installer again; the
+  user-data directory is untouched either way.
 
 ## Files involved
 

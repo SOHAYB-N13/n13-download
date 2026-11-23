@@ -43,6 +43,14 @@ Design rules
 5. **Testability.**  Windows is behind :class:`PowerController`; time is behind
    a timer factory.  Unit tests inject :class:`FakePowerController` and
    :class:`ManualTimerFactory`, so no test can ever shut a machine down.
+6. **Precedence between the global preference and a one-shot request.**
+   ``AppConfig.shutdown_when_done`` is the standing preference;
+   ``arm_for_download_completion`` and ``arm_for_project_completion`` add a
+   session-scoped request.  The controller is armed when **either** is true, and
+   both feed the same policy, timer and countdown.  Turning the preference off
+   (or cancelling) clears the session request too — "off" and "cancel" always
+   mean *do not shut down* — so the two sources can never race into two
+   ``shutdown /s`` calls.
 
 Eligibility ("done") is *not* "no active downloads" — see
 :class:`AutoShutdownPolicy`.  Cancelled, failed, paused, queued, retrying and
@@ -828,6 +836,8 @@ class AutoShutdownController:
         # launch.  See ``arm_for_project_completion``.
         self._session_arm = False
         self._session_arm_project = ""
+        # A per-download request is the third source of the same session arm.
+        self._session_arm_task = ""
 
     # ------------------------------------------------------------------
     # Observation API
@@ -894,6 +904,7 @@ class AutoShutdownController:
                 self._log.info("AutoShutdown: disabled by user")
                 self._session_arm = False
                 self._session_arm_project = ""
+                self._session_arm_task = ""
                 ok = self._disarm_locked(
                     ShutdownReason.USER_DISABLED, cancel_pending=True
                 )
@@ -934,6 +945,7 @@ class AutoShutdownController:
         with self._lock:
             self._session_arm = True
             self._session_arm_project = str(project_id or "")
+            self._session_arm_task = ""
             self._session.cancel_reason = None
             self._session.blocked_reason = None
             self._session.last_error = ""
@@ -942,6 +954,40 @@ class AutoShutdownController:
             self._log.info(
                 "AutoShutdown: armed by project completion (%s)",
                 self._session_arm_project or "unknown",
+            )
+            self._evaluate_locked()
+            payload = self._status_locked()
+        self._emit(payload)
+        return payload
+
+    def arm_for_download_completion(self, task_id: str) -> Dict[str, Any]:
+        """Arm a one-shot shutdown because a download asked for one.
+
+        This deliberately reuses the *existing* state machine instead of
+        adding a second shutdown path:
+
+        * **Session-scoped, never persisted.**  The request belongs to the
+          downloads the user just configured, not to every future evening.
+        * **It arms; it does not fire.**  The ordinary policy still decides, so
+          the machine only goes down when the whole applicable queue is idle and
+          successful — one finished task can never power off while another is
+          active, queued or paused, and a failure blocks the shutdown.
+        * **One countdown.**  If the global preference or a project arm is
+          already live, this is an idempotent re-arm; the COUNTDOWN guard keeps
+          duplicate requests from scheduling two Windows shutdowns.
+        """
+        with self._lock:
+            self._session_arm = True
+            self._session_arm_project = ""
+            self._session_arm_task = str(task_id or "")
+            self._session.cancel_reason = None
+            self._session.blocked_reason = None
+            self._session.last_error = ""
+            self._schedule_failed_at = None
+            self._session.armed_at = self._clock()
+            self._log.info(
+                "AutoShutdown: armed by download request (%s)",
+                self._session_arm_task or "unknown",
             )
             self._evaluate_locked()
             payload = self._status_locked()
@@ -970,6 +1016,7 @@ class AutoShutdownController:
                 # the very next evaluation would raise it again.
                 self._session_arm = False
                 self._session_arm_project = ""
+                self._session_arm_task = ""
                 self._persist_locked()
                 self._session.state = ShutdownState.DISABLED
                 self._log.info("AutoShutdown: cancelled by user — disarmed")
@@ -1097,6 +1144,7 @@ class AutoShutdownController:
             # "always" from "just for this project".
             "session_arm": bool(self._session_arm),
             "armed_by_project": self._session_arm_project,
+            "armed_by_task": self._session_arm_task,
             "countdown_seconds": session.countdown_seconds,
             "seconds_remaining": remaining,
             "deadline": session.countdown_deadline,
@@ -1446,6 +1494,7 @@ class AutoShutdownController:
         """One-shot completion: the user preference is consumed by firing."""
         self._session_arm = False
         self._session_arm_project = ""
+        self._session_arm_task = ""
         if hasattr(self._config, "shutdown_when_done"):
             try:
                 setattr(self._config, "shutdown_when_done", False)

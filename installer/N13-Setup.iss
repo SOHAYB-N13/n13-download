@@ -2,7 +2,7 @@
 ; Produces: release/N13-Download-Manager-Setup.exe
 
 #define MyAppName      "N13 Download Manager"
-#define MyAppVersion   GetFileVersion('..\dist\N13\N13.exe')
+#define MyAppVersion   GetVersionNumbersString('..\dist\N13\N13.exe')
 #define MyAppPublisher "N13"
 #define MyAppURL       "https://github.com/SOHAYB-N13/n13-download"
 #define MyAppExeName   "N13.exe"
@@ -20,17 +20,29 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
+UsePreviousAppDir=yes
+UsePreviousTasks=yes
 DisableDirPage=no
 DisableProgramGroupPage=no
 OutputDir=..\release
 OutputBaseFilename=N13-Download-Manager-Setup
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayName={#MyAppName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Per-user by default (no UAC): {autopf} resolves to %LOCALAPPDATA%\Programs.
+; The override dialog lets an administrator choose an all-users install, which
+; uses the normal Windows UAC elevation flow and %ProgramFiles%.  Neither mode
+; hardcodes a drive letter or user profile.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; The running application holds this mutex (core/single_instance.py).  Inno
+; can therefore ask the user to close N13 before replacing files.
+AppMutex=Local\N13DownloadManager
+ChangesAssociations=yes
+SetupLogging=yes
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 VersionInfoCompany={#MyAppPublisher}
@@ -56,22 +68,24 @@ Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; overwrites the files it ships but never removes ones a newer PyInstaller
 ; bundle dropped, and a stale extension module or DLL next to the new bundle
 ; fails at import time — the app then refuses to start after a successful
-; install.  `_internal` is application payload only; user data lives in
-; %LOCALAPPDATA%\N13 and is never touched here.
+; install.  `_internal` and `chrome_extension` are application payload only;
+; user data lives in %LOCALAPPDATA%\N13 and is never touched here.
 Type: filesandordirs; Name: "{app}\_internal"
+; Older builds kept a regenerable extension copy beside the bundle.
+Type: filesandordirs; Name: "{app}\chrome_extension"
 
 [UninstallDelete]
-; The application keeps a writable copy of the browser extension beside the
-; bundle (browser\extension_locator.py syncs it into {app}\_internal\
-; chrome_extension at startup).  Inno only removes what it installed, so
-; without this the uninstaller left that folder behind.  It contains nothing
-; but the extension copy the app wrote there.
+; Remove only application-owned payload that the application may have created
+; beside the installed bundle.  Inno already removes everything it installed.
+; Never add %LOCALAPPDATA%\N13 or any other user-data path here.
 Type: filesandordirs; Name: "{app}\_internal\chrome_extension"
+Type: filesandordirs; Name: "{app}\chrome_extension"
 Type: dirifempty; Name: "{app}\_internal"
 Type: dirifempty; Name: "{app}"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"
+Name: "{autoprograms}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Registry]
@@ -342,8 +356,10 @@ begin
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
   begin
     MsgBox(
-      'Application files have been removed.' + #13#10 +
-      'Your downloads, settings, history, and database in %LOCALAPPDATA%\N13 have been preserved.',
+      'Application files have been removed.' + #13#10 + #13#10 +
+      'Your downloads, settings, history, and database were preserved in:' + #13#10 +
+      ExpandConstant('{localappdata}\N13') + #13#10 + #13#10 +
+      'They were not deleted by the uninstaller. Remove that folder manually only if you want to erase your N13 data.',
       mbInformation, MB_OK);
   end;
 end;

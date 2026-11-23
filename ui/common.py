@@ -219,6 +219,13 @@ class DownloadRequest:
     # re-validates URL match, freshness and SSRF before using it, and falls
     # back to its own probe otherwise.
     probe_analysis: Any = None
+    # Optional per-download daily window ("HH:MM"; "" = unset) and a one-shot
+    # request to shut down after the whole applicable queue is done.  These are
+    # carried on the request so every add path (dialog, batch, extension) can
+    # set them without a positional call-site rewrite.
+    schedule_start: str = ""
+    schedule_end: str = ""
+    shutdown_when_done: bool = False
 
     @property
     def name(self) -> str:
@@ -265,6 +272,12 @@ class TaskSnapshot:
     # The owning project.  Resolved (never empty) so a renderer can group by it
     # without having to know about the Default fallback.
     project_id: str = DEFAULT_PROJECT_ID
+    # Optional per-download daily window and shutdown request.  Exposed so the
+    # Downloads list can explain why a task is waiting and so the UI can show a
+    # scheduled-shutdown indication without a second status call.
+    schedule_start: str = ""
+    schedule_end: str = ""
+    shutdown_when_done: bool = False
     # True when the transfer control is paused while the task is still in a
     # pre-DOWNLOADING state (ANALYZING/STARTING/MERGING/VERIFYING). Only
     # DOWNLOADING may legally transition to PAUSED, so this flag is the only
@@ -314,6 +327,9 @@ class TaskSnapshot:
             "queue_index": self.queue_index,
             "queue_position": self.queue_position,
             "control_paused": bool(self.control_paused),
+            "schedule_start": self.schedule_start,
+            "schedule_end": self.schedule_end,
+            "shutdown_when_done": bool(self.shutdown_when_done),
         }
 
 
@@ -468,6 +484,10 @@ class TaskManager(ProjectAdmissionMixin):
         self._closed = False
         self._global_pause = False
         self._scheduler_gate = False
+        # Tasks this manager paused because their own end boundary arrived.
+        # Kept in memory so a user's manual pause is never auto-resumed; the
+        # pause itself is persisted on the task and survives a restart.
+        self._schedule_paused: set[str] = set()
 
         self.history: List[Dict[str, Any]] = self._load_history()
         self._restore_queue()
@@ -522,6 +542,9 @@ class TaskManager(ProjectAdmissionMixin):
             connection_mode=task.connection_mode,
             num_threads=task.num_threads,
             project_id=task.project_id or DEFAULT_PROJECT_ID,
+            schedule_start=task.schedule_start,
+            schedule_end=task.schedule_end,
+            shutdown_when_done=task.shutdown_when_done,
         )
 
     def _queue_index(self, task_id: str) -> int:
@@ -639,6 +662,9 @@ class TaskManager(ProjectAdmissionMixin):
             queue_index=self._queue_index(t.id),
             queue_position=self._queue_position_locked(rec),
             project_id=t.project_id or DEFAULT_PROJECT_ID,
+            schedule_start=t.schedule_start,
+            schedule_end=t.schedule_end,
+            shutdown_when_done=bool(t.shutdown_when_done),
             control_paused=bool(rec.control.paused and t.status != TaskStatus.PAUSED),
         )
 
@@ -714,6 +740,9 @@ class TaskManager(ProjectAdmissionMixin):
                 connection_mode=request.connection_mode,
                 num_threads=request.num_threads,
                 project_id=request.project_id or DEFAULT_PROJECT_ID,
+                schedule_start=request.schedule_start,
+                schedule_end=request.schedule_end,
+                shutdown_when_done=request.shutdown_when_done,
             )
             task_id = task.id
             rec = _TaskRecord(task=task, probe_analysis=request.probe_analysis)
@@ -878,7 +907,9 @@ class TaskManager(ProjectAdmissionMixin):
                 pass
             self._order.insert(0, task_id)
             self._save_order_locked()
-            if not (self._closed or self._scheduler_gate):
+            # Explicit "Start" moves the task to the front but must not bypass
+            # a schedule the user configured for it.
+            if self._task_window_open(rec) and not (self._closed or self._scheduler_gate):
                 if not self._project_blocks_locked(rec):
                     self._global_pause = False
                     if self._start_rec_locked(rec):
@@ -1301,6 +1332,10 @@ class TaskManager(ProjectAdmissionMixin):
 
         Returns True when the record changed.
         """
+        # A window the user configured is a constraint, not a hint: Resume must
+        # not release a task whose own allowed window is still closed.
+        if not self._task_window_open(rec):
+            return False
         rec.control.resume()
         if self._has_live_worker(rec):
             try:
@@ -1345,8 +1380,12 @@ class TaskManager(ProjectAdmissionMixin):
                     continue
                 if rec.task.status == TaskStatus.PAUSED:
                     if self._resume_paused_locked(rec):
+                        self._schedule_paused.discard(rec.id)
                         events.append(("updated", self._snap(rec)))
-                elif rec.task.status in ACTIVE_STATES and self._resume_active_control_locked(rec):
+                elif (rec.task.status in ACTIVE_STATES
+                      and self._task_window_open(rec)
+                      and self._resume_active_control_locked(rec)):
+                    self._schedule_paused.discard(rec.id)
                     events.append(("updated", self._snap(rec)))
         for ev, sn in events:
             self._emit(ev, sn)
@@ -1366,10 +1405,14 @@ class TaskManager(ProjectAdmissionMixin):
             rec = self._tasks.get(task_id)
             if rec:
                 if rec.task.status == TaskStatus.PAUSED and self._resume_paused_locked(rec):
+                    self._schedule_paused.discard(rec.id)
                     event = ("updated", self._snap(rec))
-                elif rec.task.status in ACTIVE_STATES and self._resume_active_control_locked(rec):
+                elif (rec.task.status in ACTIVE_STATES
+                      and self._task_window_open(rec)
+                      and self._resume_active_control_locked(rec)):
                     # Paused while in a pre/post-transfer state: releasing the
                     # control is the whole operation (see helper above).
+                    self._schedule_paused.discard(rec.id)
                     event = ("updated", self._snap(rec))
         if event:
             self._emit(*event)
@@ -1390,6 +1433,7 @@ class TaskManager(ProjectAdmissionMixin):
             elif rec.task.status in ACTIVE_STATES:
                 live_worker = self._has_live_worker(rec)
                 rec.control.cancel()
+                self._schedule_paused.discard(task_id)
                 rec.task.force_status(TaskStatus.CANCELLED, error="Cancelled")
                 if not live_worker:
                     # No worker will finalize this task, so complete the
@@ -1422,6 +1466,7 @@ class TaskManager(ProjectAdmissionMixin):
                 rec.task.requeue(reason="")
                 rec.task.reset_speed()
                 rec.control = TaskControl()
+                self._schedule_paused.discard(task_id)
                 self._save_task_locked(rec)
                 event = ("updated", self._snap(rec))
         if event:
@@ -1605,6 +1650,28 @@ class TaskManager(ProjectAdmissionMixin):
                 best, best_key = rec, key
         return best
 
+    def _task_window_open(self, rec: _TaskRecord, now=None) -> bool:
+        """Whether this task's own optional daily window is open.
+
+        A task with no window is always open, which is why every existing
+        download keeps its current behaviour.  Both boundaries use the same
+        wall-clock arithmetic as the global Scheduler (see
+        :func:`core.scheduler.task_window_open`).  Callers must hold the lock
+        only for consistency; the helper itself touches no shared state.
+        """
+        if not (rec.task.schedule_start or rec.task.schedule_end):
+            # Fast path: the overwhelming majority of tasks have no window.
+            return True
+        try:
+            from core.scheduler import task_window_open
+
+            return task_window_open(
+                rec.task.schedule_start, rec.task.schedule_end, now=now
+            )
+        except Exception:
+            # A broken window must never brick the queue: fail open.
+            return True
+
     def _start_blocked(self) -> bool:
         """Whether new downloads are currently forbidden from starting.
 
@@ -1663,6 +1730,14 @@ class TaskManager(ProjectAdmissionMixin):
                 if not self._admission_locked(rec).allowed:
                     attempted.add(rec.id)
                     continue
+                # A per-download window is a user constraint, not a hint: an
+                # autostart or an explicit Start must both leave the task
+                # queued until the window opens.  The attribute check first
+                # keeps the no-schedule path as cheap as it was before.
+                if ((rec.task.schedule_start or rec.task.schedule_end)
+                        and not self._task_window_open(rec)):
+                    attempted.add(rec.id)
+                    continue
                 if not self._start_rec_locked(rec):
                     attempted.add(rec.id)
                     continue
@@ -1670,6 +1745,99 @@ class TaskManager(ProjectAdmissionMixin):
 
         for ev, sn in events:
             self._emit(ev, sn)
+
+    def enforce_schedule_windows(self, now=None) -> int:
+        """Apply every task's own daily window.
+
+        Called from the existing Scheduler's tick hook — there is no second
+        timer.  Two directions matter:
+
+        * a running task whose **end** boundary arrives is paused through the
+          ordinary control barrier, so the resume state and the part files are
+          preserved (never cancelled or discarded);
+        * a task this manager paused at its boundary is resumed when the window
+          opens again.  A user's own pause is never touched, because only ids in
+          ``_schedule_paused`` are eligible.
+
+        Returns the number of tasks whose state changed.
+        """
+        events: List[tuple[str, TaskSnapshot]] = []
+        should_start = False
+        with self._lock:
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if rec is None:
+                    continue
+                t = rec.task
+                if not (t.schedule_start or t.schedule_end):
+                    continue
+                open_now = self._task_window_open(rec, now=now)
+                if open_now:
+                    if t.status == TaskStatus.QUEUED:
+                        # The window just opened; let the normal start path
+                        # decide whether a slot is free.
+                        should_start = True
+                    if tid not in self._schedule_paused:
+                        continue
+                    changed = (
+                        self._resume_paused_locked(rec)
+                        if t.status == TaskStatus.PAUSED
+                        else self._resume_active_control_locked(rec)
+                    )
+                    if changed:
+                        self._schedule_paused.discard(tid)
+                        events.append(("updated", self._snap(rec)))
+                    continue
+                # Outside the window.  Only an explicit end boundary interrupts
+                # work: a start-only schedule keeps its promise by gating new
+                # starts, not by cutting a transfer already under way.
+                if not t.schedule_end or t.status not in ACTIVE_STATES:
+                    continue
+                rec.control.pause()
+                if t.status == TaskStatus.DOWNLOADING:
+                    try:
+                        t.transition(TaskStatus.PAUSED)
+                    except TransitionError:
+                        pass
+                self._schedule_paused.add(tid)
+                self._save_task_locked(rec)
+                events.append(("updated", self._snap(rec)))
+
+        for ev, sn in events:
+            self._emit(ev, sn)
+        if events or should_start:
+            # A window that has just opened may allow a queued task to start.
+            self._start_next()
+        return len(events)
+
+    def pending_shutdown_requests(self) -> List[str]:
+        """Ids of unfinished tasks that asked to shut down when work is done."""
+        with self._lock:
+            return [
+                tid
+                for tid in self._order
+                if (rec := self._tasks.get(tid)) is not None
+                and rec.task.shutdown_when_done
+                and not is_terminal(rec.task.status)
+            ]
+
+    def clear_shutdown_requests(self) -> int:
+        """Forget every per-download shutdown request.
+
+        Used when the user cancels the shutdown or turns the feature off.  The
+        download itself is untouched; only the request to power off is cleared,
+        so a restart or a later notify cannot resurrect it.
+        """
+        cleared = 0
+        with self._lock:
+            for tid in self._order:
+                rec = self._tasks.get(tid)
+                if rec is None or not rec.task.shutdown_when_done:
+                    continue
+                rec.task.shutdown_when_done = False
+                self._save_task_locked(rec)
+                cleared += 1
+        return cleared
 
     def _worker(self, task_id: str) -> None:
         with self._lock:
@@ -2147,6 +2315,7 @@ class TaskManager(ProjectAdmissionMixin):
         per removal would be quadratic when clearing many tasks.
         """
         self._tasks.pop(task_id, None)
+        self._schedule_paused.discard(task_id)
         try:
             self._order.remove(task_id)
         except ValueError:

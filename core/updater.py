@@ -10,10 +10,8 @@ installation directory.  The full flow is:
     -> launch powershell.exe (detached) with every required parameter
     -> N13 performs its normal safe shutdown and exits completely
     -> PowerShell waits for N13 to exit
-    -> PowerShell runs the real uninstaller (<InstallDir>\\unins000.exe)
-    -> PowerShell verifies the old installation is gone (and cleans leftovers)
-    -> PowerShell deletes %LOCALAPPDATA%\\N13
     -> PowerShell runs the NEW installer into the EXACT same InstallDir
+       (a normal Inno Setup in-place upgrade, not an uninstall/reinstall)
     -> PowerShell verifies the new N13.exe exists and its version
     -> PowerShell launches the NEW installed N13.exe
     -> PowerShell cleans its temporary files and exits
@@ -21,11 +19,11 @@ installation directory.  The full flow is:
 The PowerShell updater (``update.ps1``, embedded in this module) is the ONLY
 component that touches the installer after shutdown.  It is fully independent
 of N13: no Python runtime, no WebView, no UI event loop, no N13 threads, and it
-executes entirely from %TEMP% so the uninstaller is free to remove the install
-directory.
+executes entirely from %TEMP%.
 
-User data under ``%LOCALAPPDATA%\\N13`` is intentionally removed by this update
-flow (it is regenerated on the next launch).
+User data under ``%LOCALAPPDATA%\\N13`` is NEVER deleted or recreated by the
+update flow.  Inno Setup writes only installation files; configuration,
+databases, logs, saved links and downloaded files are left untouched.
 """
 
 from __future__ import annotations
@@ -438,11 +436,6 @@ def install_dir() -> Optional[Path]:
     return None
 
 
-def uninstaller_path(install_dir: Path) -> Path:
-    """The Inno Setup uninstaller inside the installation directory."""
-    return Path(install_dir) / "unins000.exe"
-
-
 # --------------------------------------------------------------------------- #
 # The independent PowerShell updater (the ONLY post-shutdown updater)
 # --------------------------------------------------------------------------- #
@@ -451,11 +444,15 @@ POWERSHELL_UPDATER = r"""# N13 deterministic Windows updater.
 #
 # Runs fully independently of the N13 process: no Python runtime, no WebView,
 # no UI event loop, no N13 threads.  Executes entirely from %TEMP% so the
-# uninstaller is free to remove the installation directory.
+# installer can replace files in the installation directory.
 #
-# Flow: wait for N13 exit -> run the real uninstaller -> verify old install is
-# gone -> delete %LOCALAPPDATA%\N13 -> run the NEW installer into the SAME
-# directory -> verify the new N13.exe version -> relaunch -> clean up.
+# Flow: wait for N13 exit -> verify installer checksum -> run the NEW installer
+# into the SAME directory (a normal Inno Setup in-place upgrade) -> verify the
+# new N13.exe version -> relaunch -> clean up.
+#
+# User data under %LOCALAPPDATA%\N13 is NEVER deleted or recreated.  This script
+# deliberately contains no removal of that directory: upgrades must preserve
+# configuration, databases, logs, saved links and downloads.
 #
 # Every stage is logged to update.log next to this script.  Any failure aborts
 # immediately with a stage name and exit code; nothing is ever faked.
@@ -464,7 +461,6 @@ param(
     [int]$N13Pid = 0,
     [string]$ExePath = "",
     [string]$InstallDir = "",
-    [string]$Uninstaller = "",
     [string]$Installer = "",
     [string]$ExpectedVersion = "",
     [string]$ExpectedSha256 = ""
@@ -477,7 +473,6 @@ $AppExe = "N13.exe"
 $LocalAppData = [Environment]::GetFolderPath("LocalApplicationData")
 $UserDataDir = Join-Path $LocalAppData "N13"
 $N13ExitTimeout = 300
-$UninstallTimeout = 600
 $InstallTimeout = 900
 
 function Write-Log([string]$Msg) {
@@ -569,11 +564,12 @@ function Get-ProductVersion([string]$Path) {
 }
 
 # --- argument sanity -----------------------------------------------------
-if (-not $InstallDir) { Exit-Fail 10 "UNINSTALL" "InstallDir not provided" }
-if (-not (Test-Path -LiteralPath $InstallDir)) { Exit-Fail 11 "UNINSTALL" "InstallDir does not exist: $InstallDir" }
+if (-not $InstallDir) { Exit-Fail 10 "PREPARE" "InstallDir not provided" }
+if (-not (Test-Path -LiteralPath $InstallDir)) { Exit-Fail 11 "PREPARE" "InstallDir does not exist: $InstallDir" }
 $AppExePath = Join-Path $InstallDir $AppExe
-if (-not (Test-Path -LiteralPath $Uninstaller)) { Exit-Fail 12 "UNINSTALL" "Uninstaller not found: $Uninstaller" }
+if (-not (Test-Path -LiteralPath $AppExePath)) { Exit-Fail 12 "PREPARE" "Installed application not found: $AppExePath" }
 if (-not (Test-Path -LiteralPath $Installer)) { Exit-Fail 13 "VERIFY" "Installer not found: $Installer" }
+$UserDataExistedBefore = Test-Path -LiteralPath $UserDataDir
 
 # --- startup marker so N13 knows the updater is alive and will take over ----
 try { Set-Content -LiteralPath (Join-Path $WorkDir "update.started") -Value "ok" -Encoding ASCII } catch {}
@@ -582,9 +578,9 @@ Write-Log "UPDATER_START workdir=$WorkDir"
 Write-Log "UPDATER_START pid=$N13Pid"
 Write-Log "UPDATER_START exe=$ExePath"
 Write-Log "UPDATER_START installDir=$InstallDir"
-Write-Log "UPDATER_START uninstaller=$Uninstaller"
 Write-Log "UPDATER_START installer=$Installer"
 Write-Log "UPDATER_START expectedVersion=$ExpectedVersion"
+Write-Log "USER_DATA_PRESERVE path=$UserDataDir exists_before=$UserDataExistedBefore"
 
 # --- verify installer checksum (mandatory; never run unverified) ----------
 if ($ExpectedSha256) {
@@ -608,72 +604,12 @@ if (-not (Wait-ForFileUnlocked $AppExePath 120)) {
     Exit-Fail 21 "N13_EXIT" "N13.exe remained locked after process exit"
 }
 
-# --- run the real uninstaller ----------------------------------------------
-Write-Log "UNINSTALL launching $Uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
-try {
-    $null = Start-Process -FilePath $Uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru
-} catch {
-    Exit-Fail 22 "UNINSTALL" "Could not start uninstaller: $($_.Exception.Message)"
-}
-# Inno Setup uninstallers relaunch from a temp copy, so the started stub's
-# exit code is meaningless.  Completion is detected by the unins000 process
-# disappearing AND the old application files being gone.
-$unDone = $false
-$unDeadline = (Get-Date).AddSeconds($UninstallTimeout)
-while ((Get-Date) -lt $unDeadline) {
-    $still = Get-Process -Name "unins000" -ErrorAction SilentlyContinue
-    $appGone = (-not (Test-Path -LiteralPath $AppExePath)) -and (-not (Test-Path -LiteralPath $Uninstaller))
-    if ((-not $still) -and $appGone) { $unDone = $true; break }
-    Start-Sleep -Milliseconds 500
-}
-if (-not $unDone) {
-    Exit-Fail 23 "UNINSTALL" "Uninstaller did not complete within ${UninstallTimeout}s"
-}
-Write-Log "UNINSTALL ok"
-
-# --- verify the old installation is really gone ----------------------------
-$residual = @()
-if (Test-Path -LiteralPath $InstallDir) {
-    $residual = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue)
-}
-if ($residual.Count -gt 0) {
-    Write-Log "UNINSTALL_VERIFY residual items: $($residual.Count) - cleaning the exact captured InstallDir"
-    $cleaned = $false
-    $cleanDeadline = (Get-Date).AddSeconds(120)
-    while ((Get-Date) -lt $cleanDeadline) {
-        try {
-            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction Stop
-            $cleaned = $true
-            break
-        } catch {
-            Start-Sleep -Milliseconds 500
-        }
-    }
-    if (-not $cleaned) {
-        Exit-Fail 24 "UNINSTALL_VERIFY" "Could not remove residual old application files in $InstallDir"
-    }
-    Write-Log "UNINSTALL_VERIFY residual old files removed"
-}
-if (Test-Path -LiteralPath $AppExePath) {
-    Exit-Fail 25 "UNINSTALL_VERIFY" "Old N13.exe still exists: $AppExePath"
-}
-Write-Log "UNINSTALL_VERIFY ok (old installation removed)"
-
-# --- delete user data (intentional for this update flow) --------------------
-Write-Log "USER_DATA_DELETE removing $UserDataDir"
-if (Test-Path -LiteralPath $UserDataDir) {
-    try {
-        Remove-Item -LiteralPath $UserDataDir -Recurse -Force -ErrorAction Stop
-    } catch {
-        Exit-Fail 30 "USER_DATA_DELETE" "Could not remove $UserDataDir : $($_.Exception.Message)"
-    }
-}
-if (Test-Path -LiteralPath $UserDataDir) {
-    Exit-Fail 31 "USER_DATA_DELETE" "$UserDataDir still exists after removal attempt"
-}
-Write-Log "USER_DATA_DELETE ok"
-
 # --- run the NEW installer into the SAME installation directory -------------
+# This is a normal Inno Setup in-place upgrade.  It replaces application files
+# and leaves every file under %LOCALAPPDATA%\N13 untouched.  Running the
+# installer over the existing installation (instead of uninstalling first) also
+# means an interrupted update can simply be retried, and the user's data is
+# never put at risk by a "clean" uninstall step.
 Write-Log "INSTALL launching $Installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /DIR=`"$InstallDir`""
 $iproc = $null
 try {
@@ -696,6 +632,15 @@ if ($ExpectedVersion -and (Compare-VersionLt $installed $ExpectedVersion)) {
     Exit-Fail 43 "INSTALL_VERIFY" "Installed version $installed is older than expected $ExpectedVersion"
 }
 Write-Log "INSTALL_VERIFY ok (version $installed >= $ExpectedVersion)"
+
+# --- verify user data was not removed ---------------------------------------
+# An update must never erase configuration, databases, logs, saved links or
+# downloads.  If the data directory existed before the update it must still
+# exist afterwards; nothing in this script creates or deletes it.
+if ($UserDataExistedBefore -and -not (Test-Path -LiteralPath $UserDataDir)) {
+    Exit-Fail 44 "USER_DATA_PRESERVE" "User data directory disappeared during update: $UserDataDir"
+}
+Write-Log "USER_DATA_PRESERVE ok path=$UserDataDir exists_after=$(Test-Path -LiteralPath $UserDataDir)"
 
 # --- launch the NEW installed N13 --------------------------------------------
 try {
@@ -760,9 +705,8 @@ def launch_powershell_updater(
         target_dir = Path(os.path.normpath(target_dir))
 
         exe_path = installed_exe_path() or (target_dir / "N13.exe")
-        uninstaller = uninstaller_path(target_dir)
-        if not uninstaller.is_file():
-            log.error("UPDATE: uninstaller not found: %s", uninstaller)
+        if not exe_path.is_file():
+            log.error("UPDATE: installed executable not found: %s", exe_path)
             return False, UpdateError.UPDATER_FAILED
 
         # The updater executes entirely from TEMP — never from InstallDir.
@@ -781,7 +725,6 @@ def launch_powershell_updater(
             "-N13Pid", str(pid or os.getpid()),
             "-ExePath", str(exe_path),
             "-InstallDir", str(target_dir),
-            "-Uninstaller", str(uninstaller),
             "-Installer", str(installer_path),
             "-ExpectedVersion", expected_version,
             "-ExpectedSha256", expected_checksum or "",
@@ -1023,8 +966,8 @@ class UpdateController:
         """Write + launch the independent PowerShell updater and confirm start.
 
         On success the caller MUST proceed with the normal safe shutdown — the
-        PowerShell updater waits for this process to exit before it uninstalls
-        and installs.
+        PowerShell updater waits for this process to exit before it runs the new
+        installer in place over the existing installation.
         """
         with self._lock:
             if self._state != UpdateState.READY_TO_INSTALL or not self._installer_path:

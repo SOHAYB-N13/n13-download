@@ -176,24 +176,17 @@ const GroupsView = {
   /**
    * `Components.emptyState` options for a Downloads page with nothing in it.
    *
-   * `handlers` is `{ add, newGroup, setupExtension, importBatch }` — the four
-   * things a first-run user actually wants, in the order they are most likely
-   * to want them.  Keeping them as one options object is what stops this from
-   * becoming four positional arguments nobody can read at the call site.
+   * The command bar already owns "New download", "Paste URL" and "Add batch",
+   * and the group strip owns group creation.  Repeating those here put three
+   * competing primary actions in the middle of an otherwise empty page, so the
+   * empty state keeps only the one path that is not available elsewhere:
+   * importing an existing download list.
+   *
+   * `handlers` is `{ importBatch }`.
    */
   emptyAllOptions(t, handlers) {
     const h = handlers || {};
-    const actions = [
-      { label: t("title.new_download", null, "New download"), icon: "plus", primary: true, onClick: h.add },
-      { label: t("groups.new", null, "New group"), icon: "folder", onClick: h.newGroup },
-    ];
-    if (h.setupExtension) {
-      actions.push({
-        label: t("empty.install_extension", null, "Install Browser Extension"),
-        icon: "browser",
-        onClick: h.setupExtension,
-      });
-    }
+    const actions = [];
     if (h.importBatch) {
       actions.push({
         label: t("empty.import", null, "Import Downloads"),

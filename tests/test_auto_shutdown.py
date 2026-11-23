@@ -1598,8 +1598,13 @@ class EndToEndTest(unittest.TestCase):
 
     def test_real_queue_drain_schedules_exactly_one_shutdown(self):
         self.cfg.shutdown_when_done = True
-        self.add("a.zip")
-        self.add("b.zip")
+        # Queue both first, then open the gate.  Starting each task on its own
+        # add would let the (deliberately instantaneous) test runner finish the
+        # first download before the second exists, which is a different
+        # scenario: "a download was added during the countdown".
+        self.add("a.zip", autostart=False)
+        self.add("b.zip", autostart=False)
+        self.manager.start_all()
         self.assertTrue(wait_until(lambda: self.controller.state
                                    == ShutdownState.COUNTDOWN))
         self.assertEqual(self.power.schedule_count, 1)
@@ -1624,8 +1629,9 @@ class EndToEndTest(unittest.TestCase):
 
     def test_removing_a_real_task_from_a_live_countdown_keeps_it_armed(self):
         self.cfg.shutdown_when_done = True
-        self.add("a.zip")
-        self.add("b.zip")
+        self.add("a.zip", autostart=False)
+        self.add("b.zip", autostart=False)
+        self.manager.start_all()
         self.assertTrue(wait_until(lambda: self.controller.state
                                    == ShutdownState.COUNTDOWN))
         ids = [s.id for s in self.manager.snapshots()]

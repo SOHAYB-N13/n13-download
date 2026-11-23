@@ -192,6 +192,13 @@ class DownloadTask:
     last_modified: str = ""
     category: str = "General"
     autostart: bool = True
+    # Optional per-download daily window ("HH:MM"; "" = unset) and a one-shot
+    # request to shut down after this download's workload.  Both are persisted
+    # so they survive a restart; the window is enforced by TaskManager using
+    # the same daily wall-clock arithmetic as the global Scheduler.
+    schedule_start: str = ""
+    schedule_end: str = ""
+    shutdown_when_done: bool = False
     speed_limit_bps: int = 0
     # Per-task connection override set by download rules ("" = inherit config).
     connection_mode: str = ""
@@ -221,6 +228,33 @@ class DownloadTask:
         # ``object.__setattr__`` keeps this working even if a caller froze the
         # instance later on.
         object.__setattr__(self, "_rate", RateEstimator())
+        # Normalise the optional window defensively: a value restored from an
+        # older/hand-edited row must never keep a download queued forever.  A
+        # malformed boundary is treated as unset (fail open), and two equal
+        # boundaries collapse to no window rather than a permanently closed one.
+        # The common no-schedule path does no import and no work, so task
+        # creation keeps its original cost.
+        if self.schedule_start or self.schedule_end:
+            try:
+                from core.scheduler import normalize_schedule_time
+
+                try:
+                    self.schedule_start = normalize_schedule_time(self.schedule_start)
+                except ValueError:
+                    self.schedule_start = ""
+                try:
+                    self.schedule_end = normalize_schedule_time(self.schedule_end)
+                except ValueError:
+                    self.schedule_end = ""
+                if self.schedule_start and self.schedule_start == self.schedule_end:
+                    self.schedule_end = ""
+            except Exception:
+                self.schedule_start = self.schedule_start or ""
+                self.schedule_end = self.schedule_end or ""
+        else:
+            self.schedule_start = ""
+            self.schedule_end = ""
+        self.shutdown_when_done = bool(self.shutdown_when_done)
 
     # ------------------------------------------------------------------ #
     # State machine

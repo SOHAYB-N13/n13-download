@@ -182,9 +182,12 @@ const Groups = {
     const projects = app.state.projects || [];
     const activeId = app.state.activeProject;
 
-    // The strip only earns its space once there is a group to switch to.  The
-    // "+" stays reachable through the empty state until then.
-    strip.hidden = !projects.length;
+    // The strip is the only group-creation entry point now that the centered
+    // empty state does not repeat it.  Keep the "+" reachable even before the
+    // first group exists; the tab row fills in once there are groups.  With no
+    // groups the strip is just the button, so it drops the tab-row divider.
+    strip.hidden = false;
+    strip.classList.toggle("is-bare", !projects.length);
 
     const t = (k, v, f) => this.t(k, v, f);
     if (projects.length) {
